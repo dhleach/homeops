@@ -1,0 +1,13 @@
+# never commit runtime state
+/srv/
+/data/
+/state/
+
+# env/secrets
+.env
+*.key
+*.pem
+
+# python
+__pycache__/
+.venv/
