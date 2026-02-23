@@ -15,7 +15,8 @@ homeops/
 │   │   ├── observer.py
 │   │   └── requirements.txt
 │   └── consumer/
-│       └── consumer.py
+│       ├── consumer.py
+│       └── requirements.txt
 ├── state/
 │   ├── observer/events.jsonl   # local runtime output, gitignored
 │   └── consumer/events.jsonl   # derived event output, gitignored
@@ -88,8 +89,12 @@ cd ../services/observer
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
+pip install -r ../consumer/requirements.txt
 pip install ruff
 ```
+
+For local development, this uses one shared virtualenv for both services.
+Runtime dependencies are still split across service-level `requirements.txt` files for clearer ownership/deployment.
 
 3. Create `secrets/ha.env` (already gitignored):
 
