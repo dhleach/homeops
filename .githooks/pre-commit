@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+cd "$REPO_ROOT"
+
+RUFF_BIN="services/observer/.venv/bin/ruff"
+if [[ ! -x "$RUFF_BIN" ]]; then
+  echo "pre-commit: ruff not found at $RUFF_BIN"
+  echo "Run: services/observer/.venv/bin/pip install ruff"
+  exit 1
+fi
+
+mapfile -t PY_FILES < <(git diff --cached --name-only --diff-filter=ACMR | grep -E '\.py$' || true)
+
+if [[ ${#PY_FILES[@]} -eq 0 ]]; then
+  exit 0
+fi
+
+echo "pre-commit: formatting staged Python files with ruff..."
+"$RUFF_BIN" format --check --diff "${PY_FILES[@]}" || {
+  echo
+  echo "pre-commit: formatting changes required."
+  echo "Run: $RUFF_BIN format ${PY_FILES[*]}"
+  exit 1
+}
+
+echo "pre-commit: checking lint (with fix preview)..."
+"$RUFF_BIN" check --fix --diff "${PY_FILES[@]}" || {
+  echo
+  echo "pre-commit: lint fixes required."
+  echo "Preview (already shown) and then apply with:"
+  echo "  $RUFF_BIN check --fix ${PY_FILES[*]}"
+  exit 1
+}

@@ -3,14 +3,15 @@ import asyncio
 import json
 import os
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
+from pathlib import Path
 
 import websockets
 from dotenv import load_dotenv
 
 
 def utc_ts():
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def eprint(*args, **kwargs):
@@ -18,13 +19,16 @@ def eprint(*args, **kwargs):
 
 
 async def main():
-    # Load env vars from secrets file (relative to repo root)
+    """Stream Home Assistant state changes to stdout (and optional JSONL file)."""
+    # Load dotenv values first so explicit process env vars can still override them.
+    # Note: default path is relative to the current working directory.
     env_path = os.environ.get("HA_ENV_FILE", "secrets/ha.env")
     load_dotenv(env_path)
 
     ws_url = os.environ.get("HA_WS_URL")
     token = os.environ.get("HA_TOKEN")
     watch_raw = os.environ.get("WATCH_ENTITIES", "")
+    event_log = os.environ.get("OBSERVER_EVENT_LOG")
 
     if not ws_url or not token:
         eprint(f"[{utc_ts()}] Missing HA_WS_URL or HA_TOKEN in {env_path}")
@@ -35,6 +39,7 @@ async def main():
     backoff_s = 1
     max_backoff_s = 30
 
+    # Keep the process alive forever; any disconnect/error falls back to reconnect.
     while True:
         try:
             eprint(f"[{utc_ts()}] Connecting to {ws_url}")
@@ -58,7 +63,11 @@ async def main():
                 sub_id = 1
                 await ws.send(
                     json.dumps(
-                        {"id": sub_id, "type": "subscribe_events", "event_type": "state_changed"}
+                        {
+                            "id": sub_id,
+                            "type": "subscribe_events",
+                            "event_type": "state_changed",
+                        }
                     )
                 )
                 sub_resp = json.loads(await ws.recv())
@@ -73,6 +82,7 @@ async def main():
                 # 4) Print matching state changes
                 while True:
                     msg = json.loads(await ws.recv())
+                    # The HA websocket sends other message types (pong/result/etc).
                     if msg.get("type") != "event":
                         continue
 
@@ -82,6 +92,7 @@ async def main():
 
                     if not entity_id:
                         continue
+                    # Optional allowlist filter; empty WATCH_ENTITIES means "all entities".
                     if watch and entity_id not in watch:
                         continue
 
@@ -89,12 +100,27 @@ async def main():
                     old_state = data.get("old_state") or {}
 
                     out = {
+                        # Stable envelope for downstream consumers.
+                        "schema": "homeops.observer.state_changed.v1",
+                        "source": "ha.websocket",
                         "ts": utc_ts(),
-                        "entity_id": entity_id,
-                        "old_state": old_state.get("state"),
-                        "new_state": new_state.get("state"),
+                        "data": {
+                            "entity_id": entity_id,
+                            "old_state": old_state.get("state"),
+                            "new_state": new_state.get("state"),
+                        },
                     }
-                    print(json.dumps(out), flush=True)
+                    line = json.dumps(out)
+                    # Stdout is the primary event stream for pipes/consumers.
+                    print(line, flush=True)
+                    if event_log:
+                        try:
+                            # Best-effort local append copy; failures should not stop streaming.
+                            Path(event_log).parent.mkdir(parents=True, exist_ok=True)
+                            with open(event_log, "a", encoding="utf-8") as f:
+                                f.write(line + "\n")
+                        except OSError as e:
+                            eprint(f"[{utc_ts()}] WARN: failed to append to {event_log}: {e}")
 
         except (websockets.exceptions.ConnectionClosed, OSError) as e:
             eprint(f"[{utc_ts()}] Disconnected: {e.__class__.__name__}: {e}")
