@@ -81,6 +81,9 @@ def main():
     print(f"[{utc_ts()}] Derived log: {derived_log}", flush=True)
     print(f"[{utc_ts()}] Consumer following: {path}", flush=True)
 
+    floor_2_long_call_threshold_s = int(os.environ.get("FLOOR_2_LONG_CALL_THRESHOLD_S", "3600"))
+    print(f"[{utc_ts()}] Floor-2 long-call threshold: {floor_2_long_call_threshold_s}s", flush=True)
+
     # Track session state across events so "ended" records can include durations.
     furnace_on_since = last_furnace_on_since(path)
     if furnace_on_since:
@@ -165,6 +168,49 @@ def main():
                 }
                 print(json.dumps(derived), flush=True)
                 append_jsonl(derived_log, derived)
+
+                # Floor-2 long-call detection
+                if (
+                    floor_key == "floor_2"
+                    and duration_s is not None
+                    and duration_s >= floor_2_long_call_threshold_s
+                ):
+                    long_call_event = {
+                        "schema": "homeops.consumer.floor_2_long_call_detected.v1",
+                        "source": "consumer.v1",
+                        "ts": utc_ts(),
+                        "data": {
+                            "floor": floor_key,
+                            "duration_s": duration_s,
+                            "threshold_s": floor_2_long_call_threshold_s,
+                            "ended_at": ts_str,
+                            "entity_id": entity_id,
+                        },
+                    }
+                    print(json.dumps(long_call_event), flush=True)
+                    append_jsonl(derived_log, long_call_event)
+                    # Send Telegram alert
+                    import subprocess as _sp
+
+                    _sp.Popen(
+                        [
+                            "openclaw",
+                            "message",
+                            "send",
+                            "--channel",
+                            "telegram",
+                            "--target",
+                            "8637877095",
+                            "--message",
+                            (
+                                f"⚠️ Floor 2 long call detected!\n"
+                                f"Duration: {duration_s // 60}m {duration_s % 60}s "
+                                f"(threshold: {floor_2_long_call_threshold_s // 60}min)\n"
+                                f"Ended: {ts_str}\n"
+                                f"Check furnace for overheating (Code 4/7 risk)."
+                            ),
+                        ]
+                    )
 
         # Whole-home heating sessions are derived from furnace on/off transitions.
         if entity_id == "binary_sensor.furnace_heating":
