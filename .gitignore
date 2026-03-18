@@ -5,7 +5,7 @@
 
 # env/secrets
 secrets/*
-!secrets/ha.env.example
+!secrets/*.example
 .env
 *.key
 *.pem

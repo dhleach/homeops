@@ -110,8 +110,6 @@ def main():
         if line is None:
             # Timeout — no new events. Just run the in-flight check below.
             pass
-        elif not line.strip():
-            continue
         else:
             try:
                 evt = json.loads(line)
