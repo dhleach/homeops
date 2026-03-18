@@ -4,7 +4,8 @@
 /state/
 
 # env/secrets
-secrets/
+secrets/*
+!secrets/*.example
 .env
 *.key
 *.pem
