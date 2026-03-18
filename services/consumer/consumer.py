@@ -81,6 +81,9 @@ def main():
     print(f"[{utc_ts()}] Derived log: {derived_log}", flush=True)
     print(f"[{utc_ts()}] Consumer following: {path}", flush=True)
 
+    short_cycle_threshold_s = int(os.environ.get("SHORT_CYCLE_THRESHOLD_S", "300"))
+    print(f"[{utc_ts()}] Short-cycle threshold: {short_cycle_threshold_s}s", flush=True)
+
     # Track session state across events so "ended" records can include durations.
     furnace_on_since = last_furnace_on_since(path)
     if furnace_on_since:
@@ -200,6 +203,42 @@ def main():
                 }
                 print(json.dumps(derived), flush=True)
                 append_jsonl(derived_log, derived)
+
+                # Short-cycle detection
+                if duration_s is not None and duration_s < short_cycle_threshold_s:
+                    short_cycle_event = {
+                        "schema": "homeops.consumer.short_cycle_detected.v1",
+                        "source": "consumer.v1",
+                        "ts": utc_ts(),
+                        "data": {
+                            "duration_s": duration_s,
+                            "threshold_s": short_cycle_threshold_s,
+                            "entity_id": entity_id,
+                            "ended_at": ts_str,
+                        },
+                    }
+                    print(json.dumps(short_cycle_event), flush=True)
+                    append_jsonl(derived_log, short_cycle_event)
+                    # Send Telegram alert
+                    import subprocess as _sp
+
+                    _sp.Popen(
+                        [
+                            "openclaw",
+                            "message",
+                            "send",
+                            "--channel",
+                            "telegram",
+                            "--target",
+                            "8637877095",
+                            "--message",
+                            (
+                                f"🚨 Furnace short-cycle detected!\n"
+                                f"Duration: {duration_s}s (threshold: {short_cycle_threshold_s}s)\n"
+                                f"Time: {ts_str}"
+                            ),
+                        ]
+                    )
 
 
 if __name__ == "__main__":
