@@ -81,6 +81,9 @@ def main():
     print(f"[{utc_ts()}] Derived log: {derived_log}", flush=True)
     print(f"[{utc_ts()}] Consumer following: {path}", flush=True)
 
+    floor_2_warn_threshold_s = int(os.environ.get("FLOOR_2_WARN_THRESHOLD_S", "2700"))  # 45 min
+    print(f"[{utc_ts()}] Floor-2 warning threshold: {floor_2_warn_threshold_s}s", flush=True)
+
     # Track session state across events so "ended" records can include durations.
     furnace_on_since = last_furnace_on_since(path)
     if furnace_on_since:
@@ -95,6 +98,7 @@ def main():
         "binary_sensor.floor_3_heating_call": "floor_3",
     }
     floor_on_since = {key: None for key in floor_entities.keys()}
+    floor_2_warn_sent = False  # reset each time floor 2 starts a new call
 
     # Main stream loop: consume observer events and emit higher-level derived events.
     for line in follow(path):
@@ -144,6 +148,8 @@ def main():
                 }
                 print(json.dumps(derived), flush=True)
                 append_jsonl(derived_log, derived)
+                if floor_key == "floor_2":
+                    floor_2_warn_sent = False
 
             if old_state == "on" and new_state == "off":
                 duration_s = None
@@ -200,6 +206,48 @@ def main():
                 }
                 print(json.dumps(derived), flush=True)
                 append_jsonl(derived_log, derived)
+
+        # In-flight floor-2 long-call check
+        if not floor_2_warn_sent:
+            f2_entity = "binary_sensor.floor_2_heating_call"
+            f2_started = floor_on_since.get(f2_entity)
+            if f2_started is not None:
+                now_ts = datetime.now(UTC)
+                elapsed_s = int((now_ts - f2_started).total_seconds())
+                if elapsed_s >= floor_2_warn_threshold_s:
+                    warn_event = {
+                        "schema": "homeops.consumer.floor_2_long_call_warning.v1",
+                        "source": "consumer.v1",
+                        "ts": utc_ts(),
+                        "data": {
+                            "floor": "floor_2",
+                            "elapsed_s": elapsed_s,
+                            "threshold_s": floor_2_warn_threshold_s,
+                            "entity_id": f2_entity,
+                        },
+                    }
+                    print(json.dumps(warn_event), flush=True)
+                    append_jsonl(derived_log, warn_event)
+                    import subprocess as _sp
+
+                    _sp.Popen(
+                        [
+                            "openclaw",
+                            "message",
+                            "send",
+                            "--channel",
+                            "telegram",
+                            "--target",
+                            "8637877095",
+                            "--message",
+                            (
+                                f"⚠️ Floor 2 has been calling for {elapsed_s // 60} min!\n"
+                                f"Risk of furnace overheating (Code 4/7 limit trip).\n"
+                                f"Consider lowering floor 2 thermostat manually."
+                            ),
+                        ]
+                    )
+                    floor_2_warn_sent = True
 
 
 if __name__ == "__main__":
