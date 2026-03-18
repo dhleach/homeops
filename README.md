@@ -198,3 +198,18 @@ git config core.hooksPath .githooks
 - Observer event data is newline-delimited JSON on stdout, suitable for piping into log processors or other services.
 - If `OBSERVER_EVENT_LOG` is set, each emitted line is also appended to that file.
 - Consumer prints incoming observer transitions and writes derived session events to `DERIVED_EVENT_LOG`.
+
+
+## Continuous Integration (Ruff Lint)
+
+A GitHub Actions workflow `Ruff Lint` was added to run Ruff (Python linter/formatter) on PRs and pushes to master. It checks formatting and lint rules for the observer and consumer services so style issues are caught by CI.
+
+If you run locally, recommended steps to reproduce the CI checks:
+
+1. Create a venv: `python3 -m venv .venv`
+2. Activate: `source .venv/bin/activate`
+3. Install ruff: `pip install ruff`
+4. Run checks: `ruff format --check --diff services/observer/observer.py services/consumer/consumer.py`
+   and `ruff check services/observer/observer.py services/consumer/consumer.py`
+
+If the CI flags formatting issues, either apply fixes locally with `ruff format` and push, or let CI report the check failures for review.
