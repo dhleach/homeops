@@ -179,6 +179,36 @@ def main():
                     print(json.dumps(derived), flush=True)
                     append_jsonl(derived_log, derived)
 
+            # Outdoor temperature readings are passed through as-is from the sensor.
+            if entity_id == "sensor.outdoor_temperature":
+                if new_state in (None, "unavailable", "unknown", ""):
+                    print(
+                        f"[{utc_ts()}] WARN: outdoor_temperature state unavailable, skipping",
+                        flush=True,
+                    )
+                else:
+                    try:
+                        temp_f = float(new_state)
+                    except (ValueError, TypeError):
+                        print(
+                            f"[{utc_ts()}] WARN: outdoor_temperature non-numeric value"
+                            f" {new_state!r}, skipping",
+                            flush=True,
+                        )
+                    else:
+                        derived = {
+                            "schema": "homeops.consumer.outdoor_temp_updated.v1",
+                            "source": "consumer.v1",
+                            "ts": utc_ts(),
+                            "data": {
+                                "entity_id": entity_id,
+                                "temperature_f": temp_f,
+                                "timestamp": ts_str,
+                            },
+                        }
+                        print(json.dumps(derived), flush=True)
+                        append_jsonl(derived_log, derived)
+
             # Whole-home heating sessions are derived from furnace on/off transitions.
             if entity_id == "binary_sensor.furnace_heating":
                 if old_state == "off" and new_state == "on":

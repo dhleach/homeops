@@ -53,6 +53,7 @@ The consumer filters for `schema == "homeops.observer.state_changed.v1"` and ign
 | `binary_sensor.floor_2_heating_call` | `floor_call_started.v1`, `floor_call_ended.v1` |
 | `binary_sensor.floor_3_heating_call` | `floor_call_started.v1`, `floor_call_ended.v1` |
 | `binary_sensor.furnace_heating` | `heating_session_started.v1`, `heating_session_ended.v1` |
+| `sensor.outdoor_temperature` | `outdoor_temp_updated.v1` |
 
 ### Derived event emission
 
@@ -65,7 +66,7 @@ Every derived event is:
 
 ## Event Schema
 
-The consumer emits five derived event types. All share a common envelope.
+The consumer emits six derived event types. All share a common envelope.
 
 ### Common envelope
 
@@ -209,6 +210,33 @@ Emitted once per floor-2 call when the elapsed call duration exceeds `FLOOR_2_WA
     "elapsed_s": 2703,
     "threshold_s": 2700,
     "entity_id": "binary_sensor.floor_2_heating_call"
+  }
+}
+```
+
+---
+
+### `homeops.consumer.outdoor_temp_updated.v1`
+
+Emitted on every state change from `sensor.outdoor_temperature`. Events with an `unavailable`, `unknown`, or non-numeric state are logged as warnings and skipped.
+
+| Field | Type | Description |
+|---|---|---|
+| `data.entity_id` | string | Always `"sensor.outdoor_temperature"` |
+| `data.temperature_f` | float | Current outdoor temperature in °F |
+| `data.timestamp` | string (ISO 8601 UTC) | Timestamp from the original observer event |
+
+**Example:**
+
+```json
+{
+  "schema": "homeops.consumer.outdoor_temp_updated.v1",
+  "source": "consumer.v1",
+  "ts": "2026-03-19T14:00:00.123456+00:00",
+  "data": {
+    "entity_id": "sensor.outdoor_temperature",
+    "temperature_f": 38.6,
+    "timestamp": "2026-03-19T14:00:00.000000+00:00"
   }
 }
 ```
