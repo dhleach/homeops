@@ -77,6 +77,171 @@ def last_furnace_on_since(path: str):
     return None
 
 
+_FLOOR_ENTITIES = {
+    "binary_sensor.floor_1_heating_call": "floor_1",
+    "binary_sensor.floor_2_heating_call": "floor_2",
+    "binary_sensor.floor_3_heating_call": "floor_3",
+}
+
+
+def process_floor_event(
+    entity_id, old_state, new_state, ts, ts_str, floor_on_since, floor_2_warn_sent
+):
+    """
+    Process a floor heating-call state change.
+
+    Returns (events, updated_floor_on_since, updated_floor_2_warn_sent).
+    events is a list of derived event dicts (0 or 1 items).
+    """
+    floor_key = _FLOOR_ENTITIES.get(entity_id)
+    if floor_key is None:
+        return [], floor_on_since, floor_2_warn_sent
+
+    events = []
+    floor_on_since = dict(floor_on_since)  # avoid mutating caller's dict
+
+    if old_state == "off" and new_state == "on":
+        floor_on_since[entity_id] = ts
+        events.append(
+            {
+                "schema": "homeops.consumer.floor_call_started.v1",
+                "source": "consumer.v1",
+                "ts": utc_ts(),
+                "data": {
+                    "floor": floor_key,
+                    "started_at": ts_str,
+                    "entity_id": entity_id,
+                },
+            }
+        )
+        if floor_key == "floor_2":
+            floor_2_warn_sent = False
+
+    if old_state == "on" and new_state == "off":
+        duration_s = None
+        started = floor_on_since.get(entity_id)
+        if started and ts:
+            duration_s = int((ts - started).total_seconds())
+        floor_on_since[entity_id] = None
+        events.append(
+            {
+                "schema": "homeops.consumer.floor_call_ended.v1",
+                "source": "consumer.v1",
+                "ts": utc_ts(),
+                "data": {
+                    "floor": floor_key,
+                    "ended_at": ts_str,
+                    "entity_id": entity_id,
+                    "duration_s": duration_s,
+                },
+            }
+        )
+
+    return events, floor_on_since, floor_2_warn_sent
+
+
+def process_furnace_event(entity_id, old_state, new_state, ts, ts_str, furnace_on_since):
+    """
+    Process a furnace heating state change.
+
+    Returns (events, updated_furnace_on_since).
+    events is a list of derived event dicts (0 or 1 items).
+    """
+    events = []
+
+    if old_state == "off" and new_state == "on":
+        furnace_on_since = ts
+        events.append(
+            {
+                "schema": "homeops.consumer.heating_session_started.v1",
+                "source": "consumer.v1",
+                "ts": utc_ts(),
+                "data": {
+                    "started_at": ts_str,
+                    "entity_id": entity_id,
+                },
+            }
+        )
+
+    if old_state == "on" and new_state == "off":
+        duration_s = None
+        if furnace_on_since and ts:
+            duration_s = int((ts - furnace_on_since).total_seconds())
+        furnace_on_since = None
+        events.append(
+            {
+                "schema": "homeops.consumer.heating_session_ended.v1",
+                "source": "consumer.v1",
+                "ts": utc_ts(),
+                "data": {
+                    "ended_at": ts_str,
+                    "entity_id": entity_id,
+                    "duration_s": duration_s,
+                },
+            }
+        )
+
+    return events, furnace_on_since
+
+
+def process_outdoor_temp_event(entity_id, new_state, ts_str):
+    """
+    Process an outdoor temperature state change.
+
+    Returns a list of derived event dicts (empty if the state is not a valid float).
+    """
+    if new_state in (None, "unavailable", "unknown", ""):
+        return []
+    try:
+        temp_f = float(new_state)
+    except (ValueError, TypeError):
+        return []
+    return [
+        {
+            "schema": "homeops.consumer.outdoor_temp_updated.v1",
+            "source": "consumer.v1",
+            "ts": utc_ts(),
+            "data": {
+                "entity_id": entity_id,
+                "temperature_f": temp_f,
+                "timestamp": ts_str,
+            },
+        }
+    ]
+
+
+def check_floor_2_warning(floor_on_since, floor_2_warn_sent, floor_2_warn_threshold_s, now_ts):
+    """
+    Check whether the floor-2 long-call warning should fire.
+
+    Returns (warning_event_or_None, updated_floor_2_warn_sent).
+    """
+    if floor_2_warn_sent:
+        return None, floor_2_warn_sent
+
+    f2_entity = "binary_sensor.floor_2_heating_call"
+    f2_started = floor_on_since.get(f2_entity)
+    if f2_started is None:
+        return None, floor_2_warn_sent
+
+    elapsed_s = int((now_ts - f2_started).total_seconds())
+    if elapsed_s < floor_2_warn_threshold_s:
+        return None, floor_2_warn_sent
+
+    warn_event = {
+        "schema": "homeops.consumer.floor_2_long_call_warning.v1",
+        "source": "consumer.v1",
+        "ts": utc_ts(),
+        "data": {
+            "floor": "floor_2",
+            "elapsed_s": elapsed_s,
+            "threshold_s": floor_2_warn_threshold_s,
+            "entity_id": f2_entity,
+        },
+    }
+    return warn_event, True
+
+
 def main():
     """Tail observer events and emit derived floor/furnace session events."""
     path = os.environ.get("EVENT_LOG", "state/observer/events.jsonl")
@@ -97,11 +262,7 @@ def main():
             flush=True,
         )
 
-    floor_entities = {
-        "binary_sensor.floor_1_heating_call": "floor_1",
-        "binary_sensor.floor_2_heating_call": "floor_2",
-        "binary_sensor.floor_3_heating_call": "floor_3",
-    }
+    floor_entities = _FLOOR_ENTITIES
     floor_on_since = {key: None for key in floor_entities.keys()}
     floor_2_warn_sent = False  # reset each time floor 2 starts a new call
 
@@ -139,48 +300,18 @@ def main():
 
             # Per-floor call sessions are derived from floor_* heating_call sensors.
             if entity_id in floor_entities:
-                floor_key = floor_entities[entity_id]
-
-                if old_state == "off" and new_state == "on":
-                    floor_on_since[entity_id] = ts
-                    derived = {
-                        "schema": "homeops.consumer.floor_call_started.v1",
-                        "source": "consumer.v1",
-                        "ts": utc_ts(),
-                        "data": {
-                            "floor": floor_key,
-                            "started_at": ts_str,
-                            "entity_id": entity_id,
-                        },
-                    }
-                    print(json.dumps(derived), flush=True)
-                    append_jsonl(derived_log, derived)
-                    if floor_key == "floor_2":
-                        floor_2_warn_sent = False
-
-                if old_state == "on" and new_state == "off":
-                    duration_s = None
-                    started = floor_on_since.get(entity_id)
-                    if started and ts:
-                        duration_s = int((ts - started).total_seconds())
-                    floor_on_since[entity_id] = None
-
-                    derived = {
-                        "schema": "homeops.consumer.floor_call_ended.v1",
-                        "source": "consumer.v1",
-                        "ts": utc_ts(),
-                        "data": {
-                            "floor": floor_key,
-                            "ended_at": ts_str,
-                            "entity_id": entity_id,
-                            "duration_s": duration_s,
-                        },
-                    }
+                derived_events, floor_on_since, floor_2_warn_sent = process_floor_event(
+                    entity_id, old_state, new_state, ts, ts_str, floor_on_since, floor_2_warn_sent
+                )
+                for derived in derived_events:
                     print(json.dumps(derived), flush=True)
                     append_jsonl(derived_log, derived)
 
             # Outdoor temperature readings are passed through as-is from the sensor.
             if entity_id == "sensor.outdoor_temperature":
+                for derived in process_outdoor_temp_event(entity_id, new_state, ts_str):
+                    print(json.dumps(derived), flush=True)
+                    append_jsonl(derived_log, derived)
                 if new_state in (None, "unavailable", "unknown", ""):
                     print(
                         f"[{utc_ts()}] WARN: outdoor_temperature state unavailable, skipping",
@@ -188,105 +319,52 @@ def main():
                     )
                 else:
                     try:
-                        temp_f = float(new_state)
+                        float(new_state)
                     except (ValueError, TypeError):
                         print(
                             f"[{utc_ts()}] WARN: outdoor_temperature non-numeric value"
                             f" {new_state!r}, skipping",
                             flush=True,
                         )
-                    else:
-                        derived = {
-                            "schema": "homeops.consumer.outdoor_temp_updated.v1",
-                            "source": "consumer.v1",
-                            "ts": utc_ts(),
-                            "data": {
-                                "entity_id": entity_id,
-                                "temperature_f": temp_f,
-                                "timestamp": ts_str,
-                            },
-                        }
-                        print(json.dumps(derived), flush=True)
-                        append_jsonl(derived_log, derived)
 
             # Whole-home heating sessions are derived from furnace on/off transitions.
             if entity_id == "binary_sensor.furnace_heating":
-                if old_state == "off" and new_state == "on":
-                    furnace_on_since = ts
-                    derived = {
-                        "schema": "homeops.consumer.heating_session_started.v1",
-                        "source": "consumer.v1",
-                        "ts": utc_ts(),
-                        "data": {
-                            "started_at": ts_str,
-                            "entity_id": entity_id,
-                        },
-                    }
-                    print(json.dumps(derived), flush=True)
-                    append_jsonl(derived_log, derived)
-
-                if old_state == "on" and new_state == "off":
-                    duration_s = None
-                    if furnace_on_since and ts:
-                        duration_s = int((ts - furnace_on_since).total_seconds())
-                    furnace_on_since = None
-
-                    derived = {
-                        "schema": "homeops.consumer.heating_session_ended.v1",
-                        "source": "consumer.v1",
-                        "ts": utc_ts(),
-                        "data": {
-                            "ended_at": ts_str,
-                            "entity_id": entity_id,
-                            "duration_s": duration_s,
-                        },
-                    }
+                derived_events, furnace_on_since = process_furnace_event(
+                    entity_id, old_state, new_state, ts, ts_str, furnace_on_since
+                )
+                for derived in derived_events:
                     print(json.dumps(derived), flush=True)
                     append_jsonl(derived_log, derived)
 
         # In-flight floor-2 long-call check (runs on every event and on timeouts)
-        if not floor_2_warn_sent:
-            f2_entity = "binary_sensor.floor_2_heating_call"
-            f2_started = floor_on_since.get(f2_entity)
-            if f2_started is not None:
-                now_ts = datetime.now(UTC)
-                elapsed_s = int((now_ts - f2_started).total_seconds())
-                if elapsed_s >= floor_2_warn_threshold_s:
-                    warn_event = {
-                        "schema": "homeops.consumer.floor_2_long_call_warning.v1",
-                        "source": "consumer.v1",
-                        "ts": utc_ts(),
-                        "data": {
-                            "floor": "floor_2",
-                            "elapsed_s": elapsed_s,
-                            "threshold_s": floor_2_warn_threshold_s,
-                            "entity_id": f2_entity,
-                        },
-                    }
-                    print(json.dumps(warn_event), flush=True)
-                    append_jsonl(derived_log, warn_event)
-                    if telegram_bot_token and telegram_chat_id:
-                        import urllib.parse as _parse
-                        import urllib.request as _urllib
+        warn_event, floor_2_warn_sent = check_floor_2_warning(
+            floor_on_since, floor_2_warn_sent, floor_2_warn_threshold_s, datetime.now(UTC)
+        )
+        if warn_event:
+            print(json.dumps(warn_event), flush=True)
+            append_jsonl(derived_log, warn_event)
+            if telegram_bot_token and telegram_chat_id:
+                import urllib.parse as _parse
+                import urllib.request as _urllib
 
-                        msg = (
-                            f"⚠️ Floor 2 has been calling for {elapsed_s // 60} min!\n"
-                            f"Risk of furnace overheating (Code 4/7 limit trip).\n"
-                            f"Consider lowering floor 2 thermostat manually."
-                        )
-                        url = f"https://api.telegram.org/bot{telegram_bot_token}/sendMessage"
-                        data = _parse.urlencode({"chat_id": telegram_chat_id, "text": msg}).encode()
-                        try:
-                            _urllib.urlopen(url, data=data, timeout=10)
-                        except Exception as e:
-                            print(f"[{utc_ts()}] WARN: Telegram alert failed: {e}", flush=True)
-                    else:
-                        print(
-                            f"[{utc_ts()}] WARN: TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID"
-                            " not set, skipping alert",
-                            flush=True,
-                        )
-                    floor_2_warn_sent = True
+                elapsed_s = warn_event["data"]["elapsed_s"]
+                msg = (
+                    f"⚠️ Floor 2 has been calling for {elapsed_s // 60} min!\n"
+                    f"Risk of furnace overheating (Code 4/7 limit trip).\n"
+                    f"Consider lowering floor 2 thermostat manually."
+                )
+                url = f"https://api.telegram.org/bot{telegram_bot_token}/sendMessage"
+                data = _parse.urlencode({"chat_id": telegram_chat_id, "text": msg}).encode()
+                try:
+                    _urllib.urlopen(url, data=data, timeout=10)
+                except Exception as e:
+                    print(f"[{utc_ts()}] WARN: Telegram alert failed: {e}", flush=True)
+            else:
+                print(
+                    f"[{utc_ts()}] WARN: TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID"
+                    " not set, skipping alert",
+                    flush=True,
+                )
 
 
 if __name__ == "__main__":
