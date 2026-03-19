@@ -213,3 +213,16 @@ If you run locally, recommended steps to reproduce the CI checks:
    and `ruff check services/observer/observer.py services/consumer/consumer.py`
 
 If the CI flags formatting issues, either apply fixes locally with `ruff format` and push, or let CI report the check failures for review.
+
+## Branching Strategy
+
+- `master` — stable, production-ready branch. All PRs merge here.
+- `feature/<short-description>` — new features (e.g. `feature/floor2-inflight-detection`)
+- `fix/<short-description>` — bug fixes
+
+All commits must pass Ruff lint/format checks (enforced by `.githooks/pre-commit` and GitHub Actions CI).
+
+To enable the pre-commit hook locally:
+```bash
+git config core.hooksPath .githooks
+```
