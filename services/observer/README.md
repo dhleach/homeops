@@ -12,6 +12,7 @@ The observer is a lightweight Python daemon that connects to the Home Assistant 
 - [Entity Reference](#entity-reference)
 - [Configuration Reference](#configuration-reference)
 - [Quickstart](#quickstart)
+- [Schema Validation](#schema-validation)
 
 ---
 
@@ -188,3 +189,41 @@ HA_ENV_FILE=secrets/observer.env python observer.py | python services/consumer/c
 ```
 
 Or let each service manage its own log file and use `OBSERVER_EVENT_LOG` / `EVENT_LOG` to decouple them.
+
+---
+
+## Schema Validation
+
+`validate_schema.py` is a standalone script that validates JSONL output from the observer against the `homeops.observer.state_changed.v1` schema.
+
+### Usage
+
+```bash
+# Validate a file
+python3 validate_schema.py state/observer/events.jsonl
+
+# Validate from stdin (pipe directly from the observer)
+HA_ENV_FILE=secrets/observer.env python observer.py | python3 validate_schema.py
+```
+
+### What it checks
+
+| Check | Behaviour on failure |
+|---|---|
+| Each line is valid JSON | Error — line marked invalid |
+| Required top-level fields present (`schema`, `source`, `ts`, `data`) | Error |
+| `schema` equals `"homeops.observer.state_changed.v1"` | Error |
+| `source` equals `"ha.websocket"` | Error |
+| `ts` is a non-empty string | Error |
+| `data` contains `entity_id`, `old_state`, `new_state` | Error |
+| `data.new_state` is non-null and non-empty | Error |
+| `entity_id` is one of the 5 known entities | Warning only (printed to stderr) |
+| Binary sensor `new_state` is `"on"`, `"off"`, or `"unavailable"` | Error |
+| `sensor.outdoor_temperature` state is a float or `"unavailable"`/`"unknown"` | Error |
+
+### Exit codes
+
+| Code | Meaning |
+|---|---|
+| `0` | All lines valid |
+| `1` | One or more invalid lines (or file could not be opened) |
