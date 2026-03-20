@@ -1,4 +1,4 @@
-name: Ruff Lint
+name: CI
 
 on:
   push:
@@ -20,7 +20,24 @@ jobs:
           pip install ruff
       - name: Run ruff format check
         run: |
-          ruff format --check --diff services/observer/observer.py services/consumer/consumer.py || true
+          ruff format --check --diff services/observer/observer.py services/consumer/consumer.py
       - name: Run ruff checks
         run: |
           ruff check services/observer/observer.py services/consumer/consumer.py
+
+  pytest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest
+          pip install -r services/consumer/requirements.txt
+      - name: Run tests
+        run: |
+          PYTHONPATH=services/consumer pytest services/consumer/tests/ -v
