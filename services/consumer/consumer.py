@@ -210,6 +210,39 @@ def process_outdoor_temp_event(entity_id, new_state, ts_str):
     ]
 
 
+def emit_daily_summary(daily_state: dict, date_str: str) -> dict:
+    """
+    Build a furnace_daily_summary.v1 event from accumulated daily state.
+    daily_state keys:
+      - furnace_runtime_s: int (total furnace on-time for the day)
+      - session_count: int
+      - floor_runtime_s: dict {entity_id: int seconds}
+      - outdoor_temps: list of float
+    Returns the event dict.
+    """
+    outdoor_temps = daily_state.get("outdoor_temps") or []
+    outdoor_temp_min_f = min(outdoor_temps) if outdoor_temps else None
+    outdoor_temp_max_f = max(outdoor_temps) if outdoor_temps else None
+
+    per_floor_runtime_s = {}
+    for entity_id, floor_name in _FLOOR_ENTITIES.items():
+        per_floor_runtime_s[floor_name] = daily_state.get("floor_runtime_s", {}).get(entity_id, 0)
+
+    return {
+        "schema": "homeops.consumer.furnace_daily_summary.v1",
+        "source": "consumer.v1",
+        "ts": utc_ts(),
+        "data": {
+            "date": date_str,
+            "total_furnace_runtime_s": daily_state.get("furnace_runtime_s", 0),
+            "session_count": daily_state.get("session_count", 0),
+            "per_floor_runtime_s": per_floor_runtime_s,
+            "outdoor_temp_min_f": outdoor_temp_min_f,
+            "outdoor_temp_max_f": outdoor_temp_max_f,
+        },
+    }
+
+
 def check_floor_2_warning(floor_on_since, floor_2_warn_sent, floor_2_warn_threshold_s, now_ts):
     """
     Check whether the floor-2 long-call warning should fire.
@@ -266,6 +299,18 @@ def main():
     floor_on_since = {key: None for key in floor_entities.keys()}
     floor_2_warn_sent = False  # reset each time floor 2 starts a new call
 
+    # Daily accumulation state for furnace_daily_summary.v1
+    def _empty_daily_state():
+        return {
+            "furnace_runtime_s": 0,
+            "session_count": 0,
+            "floor_runtime_s": {},
+            "outdoor_temps": [],
+        }
+
+    daily_state = _empty_daily_state()
+    current_date = datetime.now(UTC).strftime("%Y-%m-%d")
+
     # Main stream loop: consume observer events and emit higher-level derived events.
     for line in follow(path):
         if line is None:
@@ -298,6 +343,18 @@ def main():
                 # Preserve processing even if one event has a malformed timestamp.
                 ts = None
 
+            # Date rollover: emit daily summary when the event date changes.
+            if ts is not None:
+                evt_date = ts.strftime("%Y-%m-%d")
+                if current_date is None:
+                    current_date = evt_date
+                elif evt_date != current_date:
+                    summary = emit_daily_summary(daily_state, current_date)
+                    print(json.dumps(summary), flush=True)
+                    append_jsonl(derived_log, summary)
+                    daily_state = _empty_daily_state()
+                    current_date = evt_date
+
             # Per-floor call sessions are derived from floor_* heating_call sensors.
             if entity_id in floor_entities:
                 derived_events, floor_on_since, floor_2_warn_sent = process_floor_event(
@@ -306,12 +363,20 @@ def main():
                 for derived in derived_events:
                     print(json.dumps(derived), flush=True)
                     append_jsonl(derived_log, derived)
+                    if derived["schema"] == "homeops.consumer.floor_call_ended.v1":
+                        d = derived["data"]
+                        if d.get("duration_s") is not None:
+                            eid = d["entity_id"]
+                            daily_state["floor_runtime_s"][eid] = (
+                                daily_state["floor_runtime_s"].get(eid, 0) + d["duration_s"]
+                            )
 
             # Outdoor temperature readings are passed through as-is from the sensor.
             if entity_id == "sensor.outdoor_temperature":
                 for derived in process_outdoor_temp_event(entity_id, new_state, ts_str):
                     print(json.dumps(derived), flush=True)
                     append_jsonl(derived_log, derived)
+                    daily_state["outdoor_temps"].append(derived["data"]["temperature_f"])
                 if new_state in (None, "unavailable", "unknown", ""):
                     print(
                         f"[{utc_ts()}] WARN: outdoor_temperature state unavailable, skipping",
@@ -335,6 +400,11 @@ def main():
                 for derived in derived_events:
                     print(json.dumps(derived), flush=True)
                     append_jsonl(derived_log, derived)
+                    if derived["schema"] == "homeops.consumer.heating_session_ended.v1":
+                        d = derived["data"]
+                        if d.get("duration_s") is not None:
+                            daily_state["furnace_runtime_s"] += d["duration_s"]
+                        daily_state["session_count"] += 1
 
         # In-flight floor-2 long-call check (runs on every event and on timeouts)
         warn_event, floor_2_warn_sent = check_floor_2_warning(
