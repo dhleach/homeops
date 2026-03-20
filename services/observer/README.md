@@ -192,6 +192,14 @@ Or let each service manage its own log file and use `OBSERVER_EVENT_LOG` / `EVEN
 
 ---
 
+## Log Rotation
+
+The observer's JSONL event log (`state/observer/events.jsonl`) will grow unbounded without rotation. A logrotate config is provided in `deploy/logrotate/` to handle this automatically.
+
+See [`deploy/logrotate/README.md`](../../deploy/logrotate/README.md) for install and test instructions.
+
+---
+
 ## Schema Validation
 
 `validate_schema.py` is a standalone script that validates JSONL output from the observer against the `homeops.observer.state_changed.v1` schema.
