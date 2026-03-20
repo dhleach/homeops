@@ -1,0 +1,30 @@
+/home/leachd/repos/homeops/state/observer/events.jsonl
+/home/leachd/repos/homeops/state/consumer/events.jsonl {
+    # Rotate once per day
+    daily
+
+    # Keep 30 days of history
+    rotate 30
+
+    # Gzip rotated files to save space
+    compress
+
+    # Skip compressing the most recently rotated file so running services can still read it
+    delaycompress
+
+    # Don't error if the file doesn't exist yet (e.g. service hasn't started)
+    missingok
+
+    # Skip rotation if the file is empty
+    notifempty
+
+    # Copy then truncate in place so running observer/consumer services aren't
+    # interrupted by a renamed file handle
+    copytruncate
+
+    # Append a date suffix to rotated filenames instead of a number
+    dateext
+
+    # Date format: YYYY-MM-DD (e.g. events.jsonl-20260320.gz)
+    dateformat -%Y%m%d
+}

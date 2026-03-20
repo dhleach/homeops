@@ -289,6 +289,14 @@ All configuration is via environment variables.
 
 ---
 
+## Log Rotation
+
+The consumer's JSONL derived event log (`state/consumer/events.jsonl`) will grow unbounded without rotation. A logrotate config is provided in `deploy/logrotate/` to handle this automatically.
+
+See [`deploy/logrotate/README.md`](../../deploy/logrotate/README.md) for install and test instructions.
+
+---
+
 ## Quickstart
 
 **Prerequisites:** Python 3.11+, `python-dateutil` (`pip install -r requirements.txt`), observer service running and writing to `state/observer/events.jsonl`.
