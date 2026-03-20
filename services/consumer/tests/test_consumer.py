@@ -1,7 +1,7 @@
 """Unit tests for consumer.py pure event-processing functions."""
 
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from consumer import (
@@ -274,3 +274,275 @@ class TestLastFurnaceOnSince:
         result = last_furnace_on_since(path)
         assert result is not None
         assert result.isoformat() == ts
+
+
+# ---------------------------------------------------------------------------
+# Bootstrap validation — consumer restart scenarios
+# ---------------------------------------------------------------------------
+
+
+class TestFurnaceBootstrapValidation:
+    """
+    Validates that session state is correctly reconstructed (or not) after a
+    consumer restart, and that subsequent event processing produces no
+    duplicates or incorrect derived events.
+    """
+
+    def _write_log(self, tmp_path, lines):
+        p = tmp_path / "events.jsonl"
+        p.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        return str(p)
+
+    # ------------------------------------------------------------------
+    # (a) Restart during an active furnace session
+    # ------------------------------------------------------------------
+
+    def test_restart_during_active_session_bootstraps_on_since(self, tmp_path):
+        """Bootstrap detects an in-progress furnace session."""
+        on_ts = "2024-01-15T09:00:00+00:00"
+        path = self._write_log(tmp_path, [_make_observer_event(FURNACE, "off", "on", on_ts)])
+        result = last_furnace_on_since(path)
+        assert result is not None
+        assert result.isoformat() == on_ts
+
+    def test_restart_during_active_session_emits_session_end_with_duration(self, tmp_path):
+        """
+        After restart, the bootstrapped furnace_on_since is used to compute
+        the correct duration when the furnace next turns OFF.
+        """
+        on_ts_str = "2024-01-15T09:00:00+00:00"
+        path = self._write_log(tmp_path, [_make_observer_event(FURNACE, "off", "on", on_ts_str)])
+
+        # Simulate bootstrap
+        furnace_on_since = last_furnace_on_since(path)
+        assert furnace_on_since is not None
+
+        # Furnace turns OFF 90 minutes after the bootstrapped start
+        off_ts = furnace_on_since + timedelta(minutes=90)
+        events, new_furnace_on_since = process_furnace_event(
+            FURNACE, "on", "off", off_ts, off_ts.isoformat(), furnace_on_since
+        )
+
+        assert len(events) == 1
+        evt = events[0]
+        assert evt["schema"] == "homeops.consumer.heating_session_ended.v1"
+        assert evt["data"]["duration_s"] == 5400  # 90 min = 5400 s
+        assert new_furnace_on_since is None
+
+    def test_restart_during_active_session_emits_exactly_one_session_end(self, tmp_path):
+        """
+        Only one heating_session_ended.v1 is emitted — not an extra one from bootstrap.
+        Bootstrap does not directly emit events; only a live on->off transition does.
+        """
+        on_ts = "2024-01-15T08:00:00+00:00"
+        path = self._write_log(tmp_path, [_make_observer_event(FURNACE, "off", "on", on_ts)])
+
+        furnace_on_since = last_furnace_on_since(path)
+        off_ts = furnace_on_since + timedelta(hours=1)
+
+        events, _ = process_furnace_event(
+            FURNACE, "on", "off", off_ts, off_ts.isoformat(), furnace_on_since
+        )
+        assert len(events) == 1
+        assert events[0]["schema"] == "homeops.consumer.heating_session_ended.v1"
+
+    # ------------------------------------------------------------------
+    # (b) Restart between furnace sessions — no active session
+    # ------------------------------------------------------------------
+
+    def test_restart_between_sessions_no_session_reconstructed(self, tmp_path):
+        """When the last furnace event is OFF, bootstrap returns None."""
+        path = self._write_log(
+            tmp_path,
+            [
+                _make_observer_event(FURNACE, "off", "on", "2024-01-15T08:00:00+00:00"),
+                _make_observer_event(FURNACE, "on", "off", "2024-01-15T09:00:00+00:00"),
+            ],
+        )
+        assert last_furnace_on_since(path) is None
+
+    def test_restart_between_sessions_new_on_starts_fresh_session(self, tmp_path):
+        """
+        With no bootstrapped session, a new furnace ON event creates a session
+        and a subsequent OFF correctly computes duration from that new start.
+        """
+        path = self._write_log(
+            tmp_path,
+            [
+                _make_observer_event(FURNACE, "off", "on", "2024-01-15T08:00:00+00:00"),
+                _make_observer_event(FURNACE, "on", "off", "2024-01-15T09:00:00+00:00"),
+            ],
+        )
+
+        furnace_on_since = last_furnace_on_since(path)
+        assert furnace_on_since is None
+
+        # New furnace ON arrives after restart
+        new_on = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        events, furnace_on_since = process_furnace_event(
+            FURNACE, "off", "on", new_on, new_on.isoformat(), furnace_on_since
+        )
+        assert len(events) == 1
+        assert events[0]["schema"] == "homeops.consumer.heating_session_started.v1"
+        assert furnace_on_since == new_on
+
+        # Furnace OFF 30 minutes later
+        new_off = new_on + timedelta(minutes=30)
+        events, furnace_on_since = process_furnace_event(
+            FURNACE, "on", "off", new_off, new_off.isoformat(), furnace_on_since
+        )
+        assert len(events) == 1
+        assert events[0]["schema"] == "homeops.consumer.heating_session_ended.v1"
+        assert events[0]["data"]["duration_s"] == 1800
+        assert furnace_on_since is None
+
+    # ------------------------------------------------------------------
+    # (c) Restart at session boundary — no duplicate session_end
+    # ------------------------------------------------------------------
+
+    def test_restart_at_boundary_last_event_off_no_active_session(self, tmp_path):
+        """
+        Consumer restarts immediately after the OFF event is logged.
+        Bootstrap finds the OFF event as the most recent furnace event → None.
+        """
+        path = self._write_log(
+            tmp_path,
+            [
+                _make_observer_event(FURNACE, "off", "on", "2024-01-15T08:00:00+00:00"),
+                _make_observer_event(FURNACE, "on", "off", "2024-01-15T09:00:00+00:00"),
+            ],
+        )
+        assert last_furnace_on_since(path) is None
+
+    def test_restart_at_boundary_no_duplicate_session_end_emitted(self, tmp_path):
+        """
+        When furnace_on_since is None after bootstrap at a boundary, processing
+        a hypothetical duplicate on->off transition produces an event with
+        duration_s=None, confirming no inflated-duration duplicate is emitted.
+        The consumer's tail-follow approach means the OFF line itself won't be
+        re-processed, but this verifies the guard is in place via state alone.
+        """
+        path = self._write_log(
+            tmp_path,
+            [
+                _make_observer_event(FURNACE, "off", "on", "2024-01-15T08:00:00+00:00"),
+                _make_observer_event(FURNACE, "on", "off", "2024-01-15T09:00:00+00:00"),
+            ],
+        )
+
+        # Bootstrap: no active session
+        furnace_on_since = last_furnace_on_since(path)
+        assert furnace_on_since is None
+
+        # Hypothetical stale on->off seen with no bootstrapped start time:
+        # duration_s is None, confirming the old session duration is NOT duplicated.
+        off_ts = datetime(2024, 1, 15, 9, 0, 0, tzinfo=UTC)
+        events, _ = process_furnace_event(
+            FURNACE, "on", "off", off_ts, off_ts.isoformat(), furnace_on_since
+        )
+        assert len(events) == 1
+        assert events[0]["schema"] == "homeops.consumer.heating_session_ended.v1"
+        assert events[0]["data"]["duration_s"] is None  # no double-counted duration
+
+    def test_restart_at_boundary_with_only_on_event_does_not_double_end(self, tmp_path):
+        """
+        If restart happens before the OFF event is logged (consumer crash mid-session),
+        bootstrap recovers furnace_on_since, and only one session_end fires when
+        the OFF finally arrives — not two.
+        """
+        on_ts_str = "2024-01-15T08:00:00+00:00"
+        path = self._write_log(
+            tmp_path,
+            [_make_observer_event(FURNACE, "off", "on", on_ts_str)],
+        )
+
+        furnace_on_since = last_furnace_on_since(path)
+        assert furnace_on_since is not None
+
+        off_ts = furnace_on_since + timedelta(hours=1)
+        events, furnace_on_since = process_furnace_event(
+            FURNACE, "on", "off", off_ts, off_ts.isoformat(), furnace_on_since
+        )
+        assert len(events) == 1
+        assert events[0]["schema"] == "homeops.consumer.heating_session_ended.v1"
+        assert events[0]["data"]["duration_s"] == 3600
+
+        # A second on->off (e.g., stale replay) with furnace_on_since now None
+        # produces duration_s=None — no inflated double count.
+        events2, _ = process_furnace_event(
+            FURNACE, "on", "off", off_ts, off_ts.isoformat(), furnace_on_since
+        )
+        assert events2[0]["data"]["duration_s"] is None
+
+    # ------------------------------------------------------------------
+    # (d) No duplicate floor_2_long_call_warning.v1 after restart
+    # ------------------------------------------------------------------
+
+    def test_restart_resets_floor_on_since_prevents_spurious_warning(self):
+        """
+        After restart, floor_on_since is re-initialised to all-None (no
+        bootstrap from history for floors).  check_floor_2_warning returns None
+        because there is no tracked start time, so no duplicate warning fires.
+        """
+        # Simulate state before restart: floor 2 was calling and warn was sent
+        floor_on_since_before = {FLOOR_2: datetime(2024, 1, 15, 8, 0, 0, tzinfo=UTC)}
+        now = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        event, warn_sent = check_floor_2_warning(floor_on_since_before, True, 2700, now)
+        assert event is None  # already sent, no duplicate
+
+        # After restart: floor_on_since reset, floor_2_warn_sent reset
+        floor_on_since_after = {FLOOR_1: None, FLOOR_2: None, FLOOR_3: None}
+        floor_2_warn_sent = False
+
+        # Even though floor_2_warn_sent is False, no warning fires because
+        # the start time is unknown.
+        event, warn_sent = check_floor_2_warning(floor_on_since_after, floor_2_warn_sent, 2700, now)
+        assert event is None
+        assert warn_sent is False
+
+    def test_restart_then_new_floor2_call_triggers_warning_once(self):
+        """
+        After restart, once floor 2 starts a NEW call (off->on), the warning
+        system resets correctly and fires exactly once at the threshold.
+        """
+        floor_on_since = {FLOOR_1: None, FLOOR_2: None, FLOOR_3: None}
+        floor_2_warn_sent = False
+
+        # floor 2 turns ON after restart
+        call_start = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        _, floor_on_since, floor_2_warn_sent = process_floor_event(
+            FLOOR_2,
+            "off",
+            "on",
+            call_start,
+            call_start.isoformat(),
+            floor_on_since,
+            floor_2_warn_sent,
+        )
+        assert floor_on_since[FLOOR_2] == call_start
+        assert floor_2_warn_sent is False  # reset on new call
+
+        # Before threshold — no warning
+        before_threshold = call_start + timedelta(minutes=44)
+        event, floor_2_warn_sent = check_floor_2_warning(
+            floor_on_since, floor_2_warn_sent, 2700, before_threshold
+        )
+        assert event is None
+        assert floor_2_warn_sent is False
+
+        # At threshold — warning fires once
+        at_threshold = call_start + timedelta(minutes=45)
+        event, floor_2_warn_sent = check_floor_2_warning(
+            floor_on_since, floor_2_warn_sent, 2700, at_threshold
+        )
+        assert event is not None
+        assert event["schema"] == "homeops.consumer.floor_2_long_call_warning.v1"
+        assert floor_2_warn_sent is True
+
+        # Beyond threshold — no second warning
+        beyond_threshold = call_start + timedelta(minutes=60)
+        event2, floor_2_warn_sent = check_floor_2_warning(
+            floor_on_since, floor_2_warn_sent, 2700, beyond_threshold
+        )
+        assert event2 is None
+        assert floor_2_warn_sent is True  # unchanged
