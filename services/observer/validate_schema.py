@@ -15,7 +15,18 @@ KNOWN_ENTITIES = {
     "binary_sensor.floor_2_heating_call",
     "binary_sensor.floor_3_heating_call",
     "sensor.outdoor_temperature",
+    "climate.floor_1_thermostat",
+    "climate.floor_2_thermostat",
+    "climate.floor_3_thermostat",
 }
+
+CLIMATE_ENTITIES = {
+    "climate.floor_1_thermostat",
+    "climate.floor_2_thermostat",
+    "climate.floor_3_thermostat",
+}
+
+CLIMATE_HVAC_MODES = {"heat", "off", "cool"}
 
 BINARY_SENSOR_STATES = {"on", "off", "unavailable"}
 OUTDOOR_TEMP_EXEMPT_STATES = {"unavailable", "unknown"}
@@ -103,6 +114,22 @@ def validate_line(line: str) -> list[str]:
                         f"outdoor_temperature state {new_state!r} is not a float or exempt value"
                         f" {sorted(OUTDOOR_TEMP_EXEMPT_STATES)}"
                     )
+        elif entity_id in CLIMATE_ENTITIES:
+            if new_state not in CLIMATE_HVAC_MODES:
+                errors.append(
+                    f"Climate entity state {new_state!r} is not one of {sorted(CLIMATE_HVAC_MODES)}"
+                )
+            attributes = data.get("attributes") or {}
+            if not isinstance(attributes.get("temperature"), (int, float)):
+                errors.append(
+                    f"Climate attributes missing numeric 'temperature',"
+                    f" got: {attributes.get('temperature')!r}"
+                )
+            if not isinstance(attributes.get("current_temperature"), (int, float)):
+                errors.append(
+                    f"Climate attributes missing numeric 'current_temperature',"
+                    f" got: {attributes.get('current_temperature')!r}"
+                )
 
     return errors
 

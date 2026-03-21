@@ -83,6 +83,12 @@ _FLOOR_ENTITIES = {
     "binary_sensor.floor_3_heating_call": "floor_3",
 }
 
+CLIMATE_ENTITIES = {
+    "climate.floor_1_thermostat": "floor_1",
+    "climate.floor_2_thermostat": "floor_2",
+    "climate.floor_3_thermostat": "floor_3",
+}
+
 
 def process_floor_event(
     entity_id, old_state, new_state, ts, ts_str, floor_on_since, floor_2_warn_sent
@@ -182,6 +188,83 @@ def process_furnace_event(entity_id, old_state, new_state, ts, ts_str, furnace_o
         )
 
     return events, furnace_on_since
+
+
+def process_climate_event(entity_id, attributes, ts_str, climate_state):
+    """
+    Process a climate entity state_changed event.
+
+    Emits up to 3 events when setpoint, current_temp, or hvac mode/action changes.
+    climate_state is a dict keyed by entity_id with previous known values.
+
+    Returns (events, updated_climate_state).
+    """
+    zone = CLIMATE_ENTITIES.get(entity_id)
+    if zone is None:
+        return [], climate_state
+
+    if not attributes:
+        return [], climate_state
+
+    setpoint = attributes.get("temperature")
+    current_temp = attributes.get("current_temperature")
+    hvac_mode = attributes.get("hvac_mode")
+    hvac_action = attributes.get("hvac_action")
+
+    prev = climate_state.get(entity_id) or {}
+    events = []
+
+    common = {
+        "entity_id": entity_id,
+        "zone": zone,
+        "ts": ts_str,
+        "hvac_mode": hvac_mode,
+        "hvac_action": hvac_action,
+        "setpoint": setpoint,
+        "current_temp": current_temp,
+    }
+
+    if setpoint is not None and setpoint != prev.get("setpoint"):
+        events.append(
+            {
+                "schema": "homeops.consumer.thermostat_setpoint_changed.v1",
+                "source": "consumer.v1",
+                "ts": utc_ts(),
+                "data": common,
+            }
+        )
+
+    if current_temp is not None and current_temp != prev.get("current_temp"):
+        events.append(
+            {
+                "schema": "homeops.consumer.thermostat_current_temp_updated.v1",
+                "source": "consumer.v1",
+                "ts": utc_ts(),
+                "data": common,
+            }
+        )
+
+    if (hvac_mode is not None and hvac_mode != prev.get("hvac_mode")) or (
+        hvac_action is not None and hvac_action != prev.get("hvac_action")
+    ):
+        events.append(
+            {
+                "schema": "homeops.consumer.thermostat_mode_changed.v1",
+                "source": "consumer.v1",
+                "ts": utc_ts(),
+                "data": common,
+            }
+        )
+
+    updated_state = dict(climate_state)
+    updated_state[entity_id] = {
+        "setpoint": setpoint,
+        "current_temp": current_temp,
+        "hvac_mode": hvac_mode,
+        "hvac_action": hvac_action,
+    }
+
+    return events, updated_state
 
 
 def process_outdoor_temp_event(entity_id, new_state, ts_str):
@@ -299,6 +382,9 @@ def main():
     floor_on_since = {key: None for key in floor_entities.keys()}
     floor_2_warn_sent = False  # reset each time floor 2 starts a new call
 
+    # Track previous climate state per entity to detect changes.
+    climate_state: dict = {}
+
     # Daily accumulation state for furnace_daily_summary.v1
     def _empty_daily_state():
         return {
@@ -333,6 +419,7 @@ def main():
             entity_id = data.get("entity_id")
             old_state = data.get("old_state")
             new_state = data.get("new_state")
+            attributes = data.get("attributes") or {}
 
             # Always keep the simple print
             print(f"{ts_str} {schema} {entity_id}: {old_state} -> {new_state}", flush=True)
@@ -391,6 +478,15 @@ def main():
                             f" {new_state!r}, skipping",
                             flush=True,
                         )
+
+            # Thermostat climate entities: setpoint, current temp, and mode changes.
+            if entity_id in CLIMATE_ENTITIES:
+                derived_events, climate_state = process_climate_event(
+                    entity_id, attributes, ts_str, climate_state
+                )
+                for derived in derived_events:
+                    print(json.dumps(derived), flush=True)
+                    append_jsonl(derived_log, derived)
 
             # Whole-home heating sessions are derived from furnace on/off transitions.
             if entity_id == "binary_sensor.furnace_heating":

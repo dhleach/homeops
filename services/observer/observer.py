@@ -99,16 +99,21 @@ async def main():
                     new_state = data.get("new_state") or {}
                     old_state = data.get("old_state") or {}
 
+                    event_data = {
+                        "entity_id": entity_id,
+                        "old_state": old_state.get("state"),
+                        "new_state": new_state.get("state"),
+                    }
+                    attributes = new_state.get("attributes") or {}
+                    if attributes:
+                        event_data["attributes"] = attributes
+
                     out = {
                         # Stable envelope for downstream consumers.
                         "schema": "homeops.observer.state_changed.v1",
                         "source": "ha.websocket",
                         "ts": utc_ts(),
-                        "data": {
-                            "entity_id": entity_id,
-                            "old_state": old_state.get("state"),
-                            "new_state": new_state.get("state"),
-                        },
+                        "data": event_data,
                     }
                     line = json.dumps(out)
                     # Stdout is the primary event stream for pipes/consumers.
