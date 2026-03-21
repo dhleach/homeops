@@ -190,12 +190,13 @@ def process_furnace_event(entity_id, old_state, new_state, ts, ts_str, furnace_o
     return events, furnace_on_since
 
 
-def process_climate_event(entity_id, attributes, ts_str, climate_state):
+def process_climate_event(entity_id, attributes, ts_str, climate_state, new_state=None):
     """
     Process a climate entity state_changed event.
 
     Emits up to 3 events when setpoint, current_temp, or hvac mode/action changes.
     climate_state is a dict keyed by entity_id with previous known values.
+    new_state is the top-level HA state (e.g. "heat", "off", "cool") used as hvac_mode.
 
     Returns (events, updated_climate_state).
     """
@@ -208,7 +209,7 @@ def process_climate_event(entity_id, attributes, ts_str, climate_state):
 
     setpoint = attributes.get("temperature")
     current_temp = attributes.get("current_temperature")
-    hvac_mode = attributes.get("hvac_mode")
+    hvac_mode = new_state
     hvac_action = attributes.get("hvac_action")
 
     prev = climate_state.get(entity_id) or {}
@@ -482,7 +483,7 @@ def main():
             # Thermostat climate entities: setpoint, current temp, and mode changes.
             if entity_id in CLIMATE_ENTITIES:
                 derived_events, climate_state = process_climate_event(
-                    entity_id, attributes, ts_str, climate_state
+                    entity_id, attributes, ts_str, climate_state, new_state
                 )
                 for derived in derived_events:
                     print(json.dumps(derived), flush=True)

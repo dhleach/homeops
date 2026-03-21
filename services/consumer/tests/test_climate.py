@@ -12,15 +12,20 @@ TS_STR = "2024-01-15T10:00:00+00:00"
 BASE_ATTRS = {
     "temperature": 68.0,
     "current_temperature": 70.0,
-    "hvac_mode": "heat",
     "hvac_action": "idle",
 }
+
+BASE_NEW_STATE = "heat"
 
 
 def make_attrs(**overrides):
     attrs = dict(BASE_ATTRS)
     attrs.update(overrides)
     return attrs
+
+
+def make_call(entity_id, attrs, ts_str, prev, new_state=BASE_NEW_STATE):
+    return process_climate_event(entity_id, attrs, ts_str, prev, new_state)
 
 
 def make_prev(entity_id, setpoint=68.0, current_temp=70.0, hvac_mode="heat", hvac_action="idle"):
@@ -43,14 +48,14 @@ class TestSetpointChange:
     def test_setpoint_change_emits_event(self):
         prev = make_prev(FLOOR_1_CLIMATE, setpoint=66.0)
         attrs = make_attrs(temperature=68.0)
-        events, _ = process_climate_event(FLOOR_1_CLIMATE, attrs, TS_STR, prev)
+        events, _ = make_call(FLOOR_1_CLIMATE, attrs, TS_STR, prev)
         schemas = [e["schema"] for e in events]
         assert SCHEMA_SETPOINT in schemas
 
     def test_setpoint_change_event_data(self):
         prev = make_prev(FLOOR_1_CLIMATE, setpoint=66.0)
         attrs = make_attrs(temperature=68.0)
-        events, _ = process_climate_event(FLOOR_1_CLIMATE, attrs, TS_STR, prev)
+        events, _ = make_call(FLOOR_1_CLIMATE, attrs, TS_STR, prev, new_state="heat")
         evt = next(e for e in events if e["schema"] == SCHEMA_SETPOINT)
         d = evt["data"]
         assert d["entity_id"] == FLOOR_1_CLIMATE
@@ -64,7 +69,7 @@ class TestSetpointChange:
     def test_no_setpoint_event_when_unchanged(self):
         prev = make_prev(FLOOR_1_CLIMATE, setpoint=68.0)
         attrs = make_attrs(temperature=68.0)
-        events, _ = process_climate_event(FLOOR_1_CLIMATE, attrs, TS_STR, prev)
+        events, _ = make_call(FLOOR_1_CLIMATE, attrs, TS_STR, prev)
         schemas = [e["schema"] for e in events]
         assert SCHEMA_SETPOINT not in schemas
 
@@ -73,14 +78,14 @@ class TestCurrentTempChange:
     def test_current_temp_change_emits_event(self):
         prev = make_prev(FLOOR_2_CLIMATE, current_temp=70.0)
         attrs = make_attrs(current_temperature=71.0)
-        events, _ = process_climate_event(FLOOR_2_CLIMATE, attrs, TS_STR, prev)
+        events, _ = make_call(FLOOR_2_CLIMATE, attrs, TS_STR, prev)
         schemas = [e["schema"] for e in events]
         assert SCHEMA_CURRENT_TEMP in schemas
 
     def test_current_temp_event_data(self):
         prev = make_prev(FLOOR_2_CLIMATE, current_temp=70.0)
         attrs = make_attrs(current_temperature=71.0)
-        events, _ = process_climate_event(FLOOR_2_CLIMATE, attrs, TS_STR, prev)
+        events, _ = make_call(FLOOR_2_CLIMATE, attrs, TS_STR, prev)
         evt = next(e for e in events if e["schema"] == SCHEMA_CURRENT_TEMP)
         d = evt["data"]
         assert d["entity_id"] == FLOOR_2_CLIMATE
@@ -90,7 +95,7 @@ class TestCurrentTempChange:
     def test_no_current_temp_event_when_unchanged(self):
         prev = make_prev(FLOOR_2_CLIMATE, current_temp=70.0)
         attrs = make_attrs(current_temperature=70.0)
-        events, _ = process_climate_event(FLOOR_2_CLIMATE, attrs, TS_STR, prev)
+        events, _ = make_call(FLOOR_2_CLIMATE, attrs, TS_STR, prev)
         schemas = [e["schema"] for e in events]
         assert SCHEMA_CURRENT_TEMP not in schemas
 
@@ -98,25 +103,33 @@ class TestCurrentTempChange:
 class TestHvacModeChange:
     def test_hvac_mode_change_emits_event(self):
         prev = make_prev(FLOOR_3_CLIMATE, hvac_mode="heat")
-        attrs = make_attrs(hvac_mode="off")
-        events, _ = process_climate_event(FLOOR_3_CLIMATE, attrs, TS_STR, prev)
+        attrs = make_attrs()
+        events, _ = make_call(FLOOR_3_CLIMATE, attrs, TS_STR, prev, new_state="off")
         schemas = [e["schema"] for e in events]
         assert SCHEMA_MODE in schemas
 
     def test_hvac_mode_event_data(self):
         prev = make_prev(FLOOR_3_CLIMATE, hvac_mode="heat")
-        attrs = make_attrs(hvac_mode="off")
-        events, _ = process_climate_event(FLOOR_3_CLIMATE, attrs, TS_STR, prev)
+        attrs = make_attrs()
+        events, _ = make_call(FLOOR_3_CLIMATE, attrs, TS_STR, prev, new_state="off")
         evt = next(e for e in events if e["schema"] == SCHEMA_MODE)
         d = evt["data"]
         assert d["entity_id"] == FLOOR_3_CLIMATE
         assert d["zone"] == "floor_3"
         assert d["hvac_mode"] == "off"
 
-    def test_no_mode_event_when_unchanged(self):
-        prev = make_prev(FLOOR_3_CLIMATE)
+    def test_hvac_mode_from_new_state_not_attributes(self):
+        """hvac_mode in thermostat_mode_changed.v1 must come from new_state, not attributes."""
+        prev = make_prev(FLOOR_1_CLIMATE, hvac_mode="heat")
         attrs = make_attrs()
-        events, _ = process_climate_event(FLOOR_3_CLIMATE, attrs, TS_STR, prev)
+        events, _ = make_call(FLOOR_1_CLIMATE, attrs, TS_STR, prev, new_state="cool")
+        evt = next(e for e in events if e["schema"] == SCHEMA_MODE)
+        assert evt["data"]["hvac_mode"] == "cool"
+
+    def test_no_mode_event_when_unchanged(self):
+        prev = make_prev(FLOOR_3_CLIMATE, hvac_mode="heat")
+        attrs = make_attrs()
+        events, _ = make_call(FLOOR_3_CLIMATE, attrs, TS_STR, prev, new_state="heat")
         schemas = [e["schema"] for e in events]
         assert SCHEMA_MODE not in schemas
 
@@ -125,14 +138,14 @@ class TestHvacActionChange:
     def test_hvac_action_heating_to_idle_emits_mode_event(self):
         prev = make_prev(FLOOR_1_CLIMATE, hvac_action="heating")
         attrs = make_attrs(hvac_action="idle")
-        events, _ = process_climate_event(FLOOR_1_CLIMATE, attrs, TS_STR, prev)
+        events, _ = make_call(FLOOR_1_CLIMATE, attrs, TS_STR, prev)
         schemas = [e["schema"] for e in events]
         assert SCHEMA_MODE in schemas
 
     def test_hvac_action_idle_to_heating_emits_mode_event(self):
         prev = make_prev(FLOOR_1_CLIMATE, hvac_action="idle")
         attrs = make_attrs(hvac_action="heating")
-        events, _ = process_climate_event(FLOOR_1_CLIMATE, attrs, TS_STR, prev)
+        events, _ = make_call(FLOOR_1_CLIMATE, attrs, TS_STR, prev)
         schemas = [e["schema"] for e in events]
         assert SCHEMA_MODE in schemas
 
@@ -141,13 +154,13 @@ class TestIdempotent:
     def test_no_events_when_nothing_changes(self):
         prev = make_prev(FLOOR_1_CLIMATE)
         attrs = make_attrs()
-        events, _ = process_climate_event(FLOOR_1_CLIMATE, attrs, TS_STR, prev)
+        events, _ = make_call(FLOOR_1_CLIMATE, attrs, TS_STR, prev)
         assert events == []
 
     def test_state_updated_after_processing(self):
         prev = make_prev(FLOOR_1_CLIMATE, setpoint=66.0)
         attrs = make_attrs(temperature=68.0)
-        _, updated = process_climate_event(FLOOR_1_CLIMATE, attrs, TS_STR, prev)
+        _, updated = make_call(FLOOR_1_CLIMATE, attrs, TS_STR, prev)
         assert updated[FLOOR_1_CLIMATE]["setpoint"] == 68.0
 
 
@@ -171,7 +184,7 @@ class TestUnknownEntity:
 class TestFirstSeen:
     def test_first_event_emits_all_three_events(self):
         """On first sight (no prior state), all fields are considered changed."""
-        events, updated = process_climate_event(FLOOR_1_CLIMATE, BASE_ATTRS, TS_STR, {})
+        events, updated = make_call(FLOOR_1_CLIMATE, BASE_ATTRS, TS_STR, {})
         schemas = [e["schema"] for e in events]
         assert SCHEMA_SETPOINT in schemas
         assert SCHEMA_CURRENT_TEMP in schemas
