@@ -396,7 +396,6 @@ to existing `climate_state`):
 | `session_start_ts[entity_id]` | datetime \| null | Timestamp when `hvac_action` last became `"heating"`. |
 | `setpoint_reached_ts[entity_id]` | datetime \| null | Timestamp of first `current_temp >= setpoint` event during active session. |
 | `session_peak_temp[entity_id]` | float \| null | Running max `current_temp` since `hvac_action = "heating"`. Used for `peak_temp` and `closest_temp`. |
-| `session_furnace_active[entity_id]` | bool | Snapshot of `binary_sensor.furnace_active` state at session start (HA helper: true when ≥1 zone calling). |
 | `session_other_zones[entity_id]` | list[string] | Snapshot of other calling zones at session start. |
 
 All keys are reset to `null`/`[]` when `hvac_action` leaves `"heating"`.
@@ -405,9 +404,8 @@ All keys are reset to `null`/`[]` when `hvac_action` leaves `"heating"`.
 
 - **Physical furnace sensor** — `binary_sensor.furnace_active` is a HA helper (true when ≥1
   zone is calling), not a real burner-on signal. A temperature sensor on the furnace heat
-  exchanger or supply plenum would give us actual firing state, enable "limit timeout imminent"
-  detection, and make the `furnace_active` field meaningful for lockout analysis. This is a
-  planned hardware addition.
+  exchanger or supply plenum would give us actual firing state and enable "limit timeout
+  imminent" detection. This is a planned hardware addition.
 - **`furnace_lockout_count`** — once a physical furnace sensor exists, tracking Code 4/7 limit
   trips per session would let analysis distinguish "miss because of lockout" from "miss because
   of cold load." Targeted for v2 post-sensor.
@@ -442,12 +440,12 @@ under what outdoor conditions, and with how many competing zones?
 | `degrees_per_min` | float | `degrees_gained / (duration_s / 60)` | Normalised rise rate; primary metric for comparing efficiency across outdoor conditions and zone contention. |
 | `outdoor_temp_f` | float \| null | `daily_state["last_outdoor_temp_f"]` | Last known outdoor reading at emission time. `null` if no reading received yet that day. Key covariate: cold days drive lower values. |
 | `other_zones_calling` | list[string] | `floor_on_since` keys where value is not `None`, excluding this zone's entity | Zones simultaneously calling at session start. Shared furnace means fewer concurrent zones → more airflow per zone → faster rise. |
-| `furnace_active` | bool | `binary_sensor.furnace_active` HA helper at session start | This is a HA helper entity (true when ≥1 zone is calling), **not** a physical furnace sensor — it does not detect limit-switch lockout (Code 4/7). If `false`, no zone was calling at session start, which is anomalous and worth flagging; but a `true` value only guarantees at least one zone was calling, not that the burner was physically firing. A future physical furnace temperature sensor will enable real burner-state detection. |
 
 **Excluded fields:**
 
 - `time_of_day` — derivable from `ts`; not stored to avoid redundancy.
 - `day_of_week` — derivable from `ts`.
+- `furnace_active` — redundant with `other_zones_calling`; it is simply `OR(zone_1, zone_2, zone_3)` and adds no information not already present in the list.
 - `furnace_lockout_count` — tracking the number of lockout events per session requires additional state plumbing; deferred to v2.
 
 ### JSON Example
@@ -468,8 +466,7 @@ under what outdoor conditions, and with how many competing zones?
     "degrees_gained": 3.6,
     "degrees_per_min": 0.189,
     "outdoor_temp_f": 28.4,
-    "other_zones_calling": ["binary_sensor.floor_3_heating_call"],
-    "furnace_active": true
+    "other_zones_calling": ["binary_sensor.floor_3_heating_call"]
   }
 }
 ```
@@ -503,11 +500,11 @@ damper closed because other zones were still calling.
 | `peak_temp` | float \| null | Highest `current_temp` observed between setpoint-reached and session-end | Best available approximation of peak overshoot. `null` if only one `current_temperature` reading was received in that window (sensor resolution too coarse to determine true peak vs. end_temp). |
 | `outdoor_temp_f` | float \| null | `daily_state["last_outdoor_temp_f"]` | Environmental covariate. |
 | `other_zones_calling` | list[string] | `floor_on_since` at session start | Other active zones; relevant because a zone sharing the furnace with others may keep receiving warm air after its own damper closes. |
-| `furnace_active` | bool | `binary_sensor.furnace_active` HA helper at session start | Same semantics as `zone_time_to_temp.v1`: true when ≥1 zone is calling per the HA helper, not a physical burner-on signal. |
 
 **Excluded fields:**
 
 - `time_of_day`, `day_of_week` — derivable from `ts`.
+- `furnace_active` — redundant with `other_zones_calling`; simply `OR(zone_1, zone_2, zone_3)`.
 - `furnace_lockout_count` — deferred to v2.
 - `duration_s` (total session length) — the full cycle duration is already captured in `zone_time_to_temp.v1` for the same session; avoid duplicating it here. Analysts can join on `entity_id` + session start time if needed.
 
@@ -528,8 +525,7 @@ damper closed because other zones were still calling.
     "overshoot_s": 210,
     "peak_temp": 69.5,
     "outdoor_temp_f": 31.0,
-    "other_zones_calling": [],
-    "furnace_active": true
+    "other_zones_calling": []
   }
 }
 ```
@@ -562,12 +558,12 @@ extreme cold that triggered an early shutoff.
 | `delta` | float | `setpoint - closest_temp` | Pre-computed shortfall in degrees. Positive means the zone fell short; zero would indicate setpoint was just barely touched (this event should not fire in that case). |
 | `outdoor_temp_f` | float \| null | `daily_state["last_outdoor_temp_f"]` | Critical covariate for misses: extreme cold is an expected driver; mild-weather misses are the real alert signal. |
 | `other_zones_calling` | list[string] | `floor_on_since` at session start | Competing zones reduce per-zone airflow and can contribute to a miss, especially on floor_3 (top floor, longest duct run). |
-| `furnace_active` | bool | `binary_sensor.furnace_active` HA helper at session start | Same semantics as `zone_time_to_temp.v1`: true when ≥1 zone is calling. A miss with `furnace_active: false` is anomalous (no zones calling yet session started), but this field cannot confirm lockout — that requires a future physical furnace sensor. |
 
 **Excluded fields:**
 
 - `time_of_day`, `day_of_week` — derivable from `ts`.
-- `furnace_lockout_count` — deferred to v2; a single `furnace_active: false` flag is sufficient for v1 filtering.
+- `furnace_active` — redundant with `other_zones_calling`; simply `OR(zone_1, zone_2, zone_3)`.
+- `furnace_lockout_count` — deferred to v2.
 - `end_temp` — equivalent to `closest_temp` in a miss scenario if no cooling occurred during the session; using `closest_temp` is clearer about intent.
 
 ### JSON Example
@@ -587,8 +583,7 @@ extreme cold that triggered an early shutoff.
     "closest_temp": 66.5,
     "delta": 1.5,
     "outdoor_temp_f": 14.2,
-    "other_zones_calling": ["binary_sensor.floor_1_heating_call", "binary_sensor.floor_2_heating_call"],
-    "furnace_active": true
+    "other_zones_calling": ["binary_sensor.floor_1_heating_call", "binary_sensor.floor_2_heating_call"]
   }
 }
 ```
