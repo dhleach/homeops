@@ -1,6 +1,6 @@
 # Consumer Service
 
-The consumer is a Python daemon that tails the observer's JSONL event stream in real time and emits higher-level **derived events** — floor heating-call sessions, whole-home heating sessions, and in-flight overheating warnings. It is the second stage in the homeops data pipeline.
+The consumer is a Python daemon that tails the observer's JSONL event stream in real time and emits higher-level **derived events** — floor heating-call sessions, whole-home heating sessions, thermostat/climate state changes, per-zone heating performance metrics, and in-flight overheating warnings. It is the second stage in the homeops data pipeline.
 
 ---
 
@@ -28,7 +28,7 @@ observer
                ──►  Telegram alert  (floor-2 long-call only)
 ```
 
-The consumer reads the observer's raw `state_changed` events and produces semantically richer records: when a floor starts or ends a heating call, when the furnace starts or ends a heating session, and when floor 2 has been calling for longer than the configured threshold (a sign that the furnace may overheat).
+The consumer reads the observer's raw `state_changed` events and produces semantically richer records: when a floor starts or ends a heating call, when the furnace starts or ends a heating session, when a thermostat's setpoint, current temperature, or HVAC mode changes, when a zone reaches its setpoint (along with how long it took), when a zone overshoots or undershoots its setpoint after heating ends, when floor 2 has been calling for longer than the configured threshold (a sign that the furnace may overheat), and a daily summary of furnace runtime and outdoor temperatures.
 
 ---
 
@@ -54,6 +54,11 @@ The consumer filters for `schema == "homeops.observer.state_changed.v1"` and ign
 | `binary_sensor.floor_3_heating_call` | `floor_call_started.v1`, `floor_call_ended.v1` |
 | `binary_sensor.furnace_heating` | `heating_session_started.v1`, `heating_session_ended.v1` |
 | `sensor.outdoor_temperature` | `outdoor_temp_updated.v1` |
+| `climate.floor_1_thermostat` | `thermostat_setpoint_changed.v1`, `thermostat_current_temp_updated.v1`, `thermostat_mode_changed.v1`, `thermostat_setpoint_reached.v1`, `zone_time_to_temp.v1`, `zone_overshoot.v1`, `zone_undershoot.v1` |
+| `climate.floor_2_thermostat` | `thermostat_setpoint_changed.v1`, `thermostat_current_temp_updated.v1`, `thermostat_mode_changed.v1`, `thermostat_setpoint_reached.v1`, `zone_time_to_temp.v1`, `zone_overshoot.v1`, `zone_undershoot.v1` |
+| `climate.floor_3_thermostat` | `thermostat_setpoint_changed.v1`, `thermostat_current_temp_updated.v1`, `thermostat_mode_changed.v1`, `thermostat_setpoint_reached.v1`, `zone_time_to_temp.v1`, `zone_overshoot.v1`, `zone_undershoot.v1` |
+
+Additionally, `furnace_daily_summary.v1` is emitted once per UTC calendar day at the first event after midnight.
 
 ### Derived event emission
 
@@ -66,7 +71,11 @@ Every derived event is:
 
 ## Event Schema
 
-The consumer emits six derived event types. All share a common envelope.
+> **Full authoritative schema reference:** [`docs/event-schemas/consumer-events.md`](../../docs/event-schemas/consumer-events.md)
+>
+> That document contains complete field tables with source/rationale columns, design notes, and planned (not-yet-implemented) events. The sections below are the working reference for the 14 currently implemented event types.
+
+The consumer emits fourteen derived event types. All share a common envelope.
 
 ### Common envelope
 
@@ -237,6 +246,310 @@ Emitted on every state change from `sensor.outdoor_temperature`. Events with an 
     "entity_id": "sensor.outdoor_temperature",
     "temperature_f": 38.6,
     "timestamp": "2026-03-19T14:00:00.000000+00:00"
+  }
+}
+```
+
+---
+
+### `homeops.consumer.thermostat_setpoint_changed.v1`
+
+Emitted when a climate entity's `temperature` attribute (the heating setpoint) changes from its previously observed value.
+
+The three thermostat change events (`thermostat_setpoint_changed.v1`, `thermostat_current_temp_updated.v1`, `thermostat_mode_changed.v1`) share the same `data` payload.
+
+| Field | Type | Description |
+|---|---|---|
+| `data.entity_id` | string | Climate entity ID (e.g. `"climate.floor_2_thermostat"`) |
+| `data.zone` | string | Zone identifier: `"floor_1"`, `"floor_2"`, or `"floor_3"` |
+| `data.ts` | string (ISO 8601 UTC) | Timestamp from the original observer event (distinct from top-level `ts`) |
+| `data.hvac_mode` | string \| null | Top-level HA climate mode (e.g. `"heat"`, `"off"`) |
+| `data.hvac_action` | string \| null | Current HVAC action (e.g. `"heating"`, `"idle"`) |
+| `data.setpoint` | float \| null | The new setpoint value that triggered this event |
+| `data.current_temp` | float \| null | Measured temperature at the time of the change |
+
+**Example:**
+
+```json
+{
+  "schema": "homeops.consumer.thermostat_setpoint_changed.v1",
+  "source": "consumer.v1",
+  "ts": "2026-03-19T06:30:00.221400+00:00",
+  "data": {
+    "entity_id": "climate.floor_2_thermostat",
+    "zone": "floor_2",
+    "ts": "2026-03-19T06:30:00.000000+00:00",
+    "hvac_mode": "heat",
+    "hvac_action": "heating",
+    "setpoint": 69.0,
+    "current_temp": 65.5
+  }
+}
+```
+
+---
+
+### `homeops.consumer.thermostat_current_temp_updated.v1`
+
+Emitted when a climate entity's `current_temperature` attribute changes from its previously observed value. Uses the same `data` payload as `thermostat_setpoint_changed.v1`.
+
+| Field | Type | Description |
+|---|---|---|
+| `data.entity_id` | string | Climate entity ID |
+| `data.zone` | string | Zone identifier |
+| `data.ts` | string (ISO 8601 UTC) | Timestamp from the original observer event |
+| `data.hvac_mode` | string \| null | Top-level HA climate mode |
+| `data.hvac_action` | string \| null | Current HVAC action |
+| `data.setpoint` | float \| null | Current setpoint at time of update |
+| `data.current_temp` | float \| null | The new temperature value that triggered this event |
+
+**Example:**
+
+```json
+{
+  "schema": "homeops.consumer.thermostat_current_temp_updated.v1",
+  "source": "consumer.v1",
+  "ts": "2026-03-19T06:45:22.774900+00:00",
+  "data": {
+    "entity_id": "climate.floor_1_thermostat",
+    "zone": "floor_1",
+    "ts": "2026-03-19T06:45:22.500000+00:00",
+    "hvac_mode": "heat",
+    "hvac_action": "heating",
+    "setpoint": 68.0,
+    "current_temp": 66.0
+  }
+}
+```
+
+---
+
+### `homeops.consumer.thermostat_mode_changed.v1`
+
+Emitted when a climate entity's `hvac_mode` (top-level HA state) or `hvac_action` attribute changes from its previously observed values. Uses the same `data` payload as the other thermostat events.
+
+| Field | Type | Description |
+|---|---|---|
+| `data.entity_id` | string | Climate entity ID |
+| `data.zone` | string | Zone identifier |
+| `data.ts` | string (ISO 8601 UTC) | Timestamp from the original observer event |
+| `data.hvac_mode` | string \| null | The (possibly changed) top-level HA climate mode |
+| `data.hvac_action` | string \| null | The (possibly changed) current HVAC action |
+| `data.setpoint` | float \| null | Current setpoint at time of mode change |
+| `data.current_temp` | float \| null | Current measured temperature at time of mode change |
+
+**Example:**
+
+```json
+{
+  "schema": "homeops.consumer.thermostat_mode_changed.v1",
+  "source": "consumer.v1",
+  "ts": "2026-03-19T08:10:04.339200+00:00",
+  "data": {
+    "entity_id": "climate.floor_3_thermostat",
+    "zone": "floor_3",
+    "ts": "2026-03-19T08:10:04.100000+00:00",
+    "hvac_mode": "off",
+    "hvac_action": "idle",
+    "setpoint": 65.0,
+    "current_temp": 68.5
+  }
+}
+```
+
+---
+
+### `homeops.consumer.thermostat_setpoint_reached.v1`
+
+Emitted the first time `current_temperature >= setpoint` is observed for a zone while `hvac_action` is `"heating"` and the previous reading was below setpoint. This is the "zone satisfied" signal and also triggers `zone_time_to_temp.v1` (see below).
+
+Uses the same `data` payload as the other thermostat events.
+
+| Field | Type | Description |
+|---|---|---|
+| `data.entity_id` | string | Climate entity ID |
+| `data.zone` | string | Zone identifier |
+| `data.ts` | string (ISO 8601 UTC) | Timestamp from the original observer event |
+| `data.hvac_mode` | string \| null | Top-level HA climate mode at crossing time |
+| `data.hvac_action` | string \| null | Current HVAC action (always `"heating"` when this fires) |
+| `data.setpoint` | float \| null | The setpoint that was reached |
+| `data.current_temp` | float \| null | The temperature at the moment of crossing |
+
+**Example:**
+
+```json
+{
+  "schema": "homeops.consumer.thermostat_setpoint_reached.v1",
+  "source": "consumer.v1",
+  "ts": "2026-03-19T07:43:12.004821+00:00",
+  "data": {
+    "entity_id": "climate.floor_1_thermostat",
+    "zone": "floor_1",
+    "ts": "2026-03-19T07:43:11.800000+00:00",
+    "hvac_mode": "heat",
+    "hvac_action": "heating",
+    "setpoint": 68.0,
+    "current_temp": 68.1
+  }
+}
+```
+
+---
+
+### `homeops.consumer.zone_time_to_temp.v1`
+
+Emitted alongside `thermostat_setpoint_reached.v1` when the consumer has a tracked heating session start for the zone (i.e. it observed the `hvac_action` transition to `"heating"`). This is the primary per-zone heating performance metric.
+
+| Field | Type | Description |
+|---|---|---|
+| `data.entity_id` | string | Climate entity ID |
+| `data.zone` | string | Zone identifier |
+| `data.start_temp` | float | Temperature when `hvac_action` first became `"heating"` this session |
+| `data.setpoint` | float | Target temperature |
+| `data.setpoint_delta` | float | `setpoint - start_temp`: how many degrees the zone needed to gain |
+| `data.duration_s` | integer | Seconds from session start to setpoint crossed |
+| `data.end_temp` | float | Actual temperature at the moment of setpoint crossing |
+| `data.degrees_gained` | float | `end_temp - start_temp` |
+| `data.degrees_per_min` | float | `degrees_gained / (duration_s / 60)`: normalised rise rate |
+| `data.outdoor_temp_f` | float \| null | Last known outdoor temperature at emission time; `null` if no reading yet |
+| `data.other_zones_calling` | array[string] | Floor-call entity IDs of other zones that were calling at session start |
+
+**Example:**
+
+```json
+{
+  "schema": "homeops.consumer.zone_time_to_temp.v1",
+  "source": "consumer.v1",
+  "ts": "2026-03-19T07:43:12.004821+00:00",
+  "data": {
+    "entity_id": "climate.floor_1_thermostat",
+    "zone": "floor_1",
+    "start_temp": 64.5,
+    "setpoint": 68.0,
+    "setpoint_delta": 3.5,
+    "duration_s": 1140,
+    "end_temp": 68.1,
+    "degrees_gained": 3.6,
+    "degrees_per_min": 0.189,
+    "outdoor_temp_f": 28.4,
+    "other_zones_calling": ["binary_sensor.floor_3_heating_call"]
+  }
+}
+```
+
+---
+
+### `homeops.consumer.zone_overshoot.v1`
+
+Emitted when a heating session ends (`hvac_action` leaves `"heating"`) and setpoint was **already reached** before the session ended. Captures the lag between the thermostat satisfying its call and the furnace/damper fully shutting off.
+
+| Field | Type | Description |
+|---|---|---|
+| `data.entity_id` | string | Climate entity ID |
+| `data.zone` | string | Zone identifier |
+| `data.start_temp` | float \| null | Temperature when `hvac_action` became `"heating"` |
+| `data.setpoint` | float \| null | Target temperature |
+| `data.setpoint_delta` | float \| null | `setpoint - start_temp`; `null` if either is unavailable |
+| `data.end_temp` | float \| null | Temperature when `hvac_action` left `"heating"` |
+| `data.overshoot_s` | integer | Seconds from setpoint-reached to session end |
+| `data.peak_temp` | float \| null | Highest temperature observed between setpoint-reached and session end; `null` if only one reading in that window |
+| `data.outdoor_temp_f` | float \| null | Last known outdoor temperature at emission time |
+| `data.other_zones_calling` | array[string] | Floor-call entity IDs of other zones that were calling at session start |
+
+**Example:**
+
+```json
+{
+  "schema": "homeops.consumer.zone_overshoot.v1",
+  "source": "consumer.v1",
+  "ts": "2026-03-19T08:03:54.118400+00:00",
+  "data": {
+    "entity_id": "climate.floor_2_thermostat",
+    "zone": "floor_2",
+    "start_temp": 63.0,
+    "setpoint": 68.0,
+    "setpoint_delta": 5.0,
+    "end_temp": 69.5,
+    "overshoot_s": 210,
+    "peak_temp": 69.5,
+    "outdoor_temp_f": 31.0,
+    "other_zones_calling": []
+  }
+}
+```
+
+---
+
+### `homeops.consumer.zone_undershoot.v1`
+
+Emitted when a heating session ends (`hvac_action` leaves `"heating"`) and setpoint was **never reached** during the session. The `likely_cause` field distinguishes a deliberate setpoint adjustment from an unexplained early shutdown.
+
+| Field | Type | Description |
+|---|---|---|
+| `data.entity_id` | string | Climate entity ID |
+| `data.zone` | string | Zone identifier |
+| `data.start_temp_f` | float \| null | Temperature when `hvac_action` became `"heating"` |
+| `data.final_temp_f` | float \| null | Temperature when `hvac_action` left `"heating"` |
+| `data.setpoint_f` | float \| null | The target temperature that was not reached |
+| `data.shortfall_f` | float | `setpoint_f - final_temp_f`: degrees below setpoint at session end |
+| `data.call_duration_s` | integer | Seconds from session start to session end |
+| `data.outdoor_temp_f` | float \| null | Last known outdoor temperature at emission time |
+| `data.likely_cause` | string | `"thermostat_adjustment"` if the setpoint changed during the active heating session; `"unknown"` otherwise |
+
+**Example:**
+
+```json
+{
+  "schema": "homeops.consumer.zone_undershoot.v1",
+  "source": "consumer.v1",
+  "ts": "2026-03-19T05:22:44.903100+00:00",
+  "data": {
+    "entity_id": "climate.floor_3_thermostat",
+    "zone": "floor_3",
+    "start_temp_f": 62.0,
+    "final_temp_f": 66.5,
+    "setpoint_f": 68.0,
+    "shortfall_f": 1.5,
+    "call_duration_s": 2880,
+    "outdoor_temp_f": 14.2,
+    "likely_cause": "unknown"
+  }
+}
+```
+
+---
+
+### `homeops.consumer.furnace_daily_summary.v1`
+
+Emitted once per UTC calendar day at the first observer event with a new date (i.e. just after midnight UTC). Summarises the previous day's accumulated furnace and floor runtime.
+
+| Field | Type | Description |
+|---|---|---|
+| `data.date` | string (`YYYY-MM-DD`) | The day being summarised (the day that just ended) |
+| `data.total_furnace_runtime_s` | integer | Total furnace on-time for the day in seconds |
+| `data.session_count` | integer | Number of complete furnace runs recorded |
+| `data.per_floor_runtime_s` | object | `{"floor_1": int, "floor_2": int, "floor_3": int}` — total floor call duration per zone in seconds; zones with no calls have value `0` |
+| `data.outdoor_temp_min_f` | float \| null | Coldest outdoor reading of the day; `null` if no readings received |
+| `data.outdoor_temp_max_f` | float \| null | Warmest outdoor reading of the day; `null` if no readings received |
+
+**Example:**
+
+```json
+{
+  "schema": "homeops.consumer.furnace_daily_summary.v1",
+  "source": "consumer.v1",
+  "ts": "2026-03-20T00:00:04.112700+00:00",
+  "data": {
+    "date": "2026-03-19",
+    "total_furnace_runtime_s": 18420,
+    "session_count": 7,
+    "per_floor_runtime_s": {
+      "floor_1": 12600,
+      "floor_2": 9000,
+      "floor_3": 5400
+    },
+    "outdoor_temp_min_f": 22.1,
+    "outdoor_temp_max_f": 38.6
   }
 }
 ```
