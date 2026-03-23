@@ -83,6 +83,8 @@ _FLOOR_ENTITIES = {
     "binary_sensor.floor_3_heating_call": "floor_3",
 }
 
+_ZONE_TO_FLOOR_ENTITY = {v: k for k, v in _FLOOR_ENTITIES.items()}
+
 CLIMATE_ENTITIES = {
     "climate.floor_1_thermostat": "floor_1",
     "climate.floor_2_thermostat": "floor_2",
@@ -190,13 +192,26 @@ def process_furnace_event(entity_id, old_state, new_state, ts, ts_str, furnace_o
     return events, furnace_on_since
 
 
-def process_climate_event(entity_id, attributes, ts_str, climate_state, new_state=None):
+def process_climate_event(
+    entity_id,
+    attributes,
+    ts_str,
+    climate_state,
+    new_state=None,
+    floor_on_since=None,
+    daily_state=None,
+):
     """
     Process a climate entity state_changed event.
 
     Emits up to 3 events when setpoint, current_temp, or hvac mode/action changes.
+    Also emits zone_time_to_temp.v1 when setpoint is crossed during a tracked heating session,
+    and zone_overshoot.v1 when a heating session ends after setpoint was reached.
+
     climate_state is a dict keyed by entity_id with previous known values.
     new_state is the top-level HA state (e.g. "heat", "off", "cool") used as hvac_mode.
+    floor_on_since is passed through from main() for other_zones_calling computation.
+    daily_state is passed through from main() for outdoor_temp_f lookup.
 
     Returns (events, updated_climate_state).
     """
@@ -206,6 +221,11 @@ def process_climate_event(entity_id, attributes, ts_str, climate_state, new_stat
 
     if not attributes:
         return [], climate_state
+
+    if floor_on_since is None:
+        floor_on_since = {}
+    if daily_state is None:
+        daily_state = {}
 
     setpoint = attributes.get("temperature")
     current_temp = attributes.get("current_temperature")
@@ -225,6 +245,39 @@ def process_climate_event(entity_id, attributes, ts_str, climate_state, new_stat
         "current_temp": current_temp,
     }
 
+    # Parse event timestamp for session duration tracking.
+    ts = None
+    if ts_str:
+        try:
+            ts = isoparse(ts_str)
+        except Exception:
+            pass
+
+    prev_hvac_action = prev.get("hvac_action")
+    prev_current_temp = prev.get("current_temp")
+
+    # Load heating session state persisted from the previous call.
+    heating_start_temp = prev.get("heating_start_temp")
+    heating_start_ts = prev.get("heating_start_ts")
+    setpoint_reached_ts = prev.get("setpoint_reached_ts")
+    setpoint_reached_temp = prev.get("setpoint_reached_temp")
+    post_setpoint_temps = list(prev.get("post_setpoint_temps") or [])
+    heating_start_other_zones = prev.get("heating_start_other_zones")
+    setpoint_changed_during_heating = prev.get("setpoint_changed_during_heating", False)
+
+    # Detect heating session start: hvac_action transitions TO "heating".
+    if prev_hvac_action != "heating" and hvac_action == "heating":
+        heating_start_temp = current_temp
+        heating_start_ts = ts
+        setpoint_reached_ts = None
+        setpoint_reached_temp = None
+        post_setpoint_temps = []
+        setpoint_changed_during_heating = False
+        this_floor_entity = _ZONE_TO_FLOOR_ENTITY.get(zone)
+        heating_start_other_zones = [
+            k for k, v in floor_on_since.items() if v is not None and k != this_floor_entity
+        ]
+
     if setpoint is not None and setpoint != prev.get("setpoint"):
         events.append(
             {
@@ -234,6 +287,8 @@ def process_climate_event(entity_id, attributes, ts_str, climate_state, new_stat
                 "data": common,
             }
         )
+        if prev_hvac_action == "heating" and hvac_action == "heating":
+            setpoint_changed_during_heating = True
 
     if current_temp is not None and current_temp != prev.get("current_temp"):
         events.append(
@@ -256,9 +311,11 @@ def process_climate_event(entity_id, attributes, ts_str, climate_state, new_stat
                 "data": common,
             }
         )
+        if prev_hvac_action == "heating" and hvac_action == "heating":
+            setpoint_changed_during_heating = True
 
-    prev_hvac_action = prev.get("hvac_action")
-    prev_current_temp = prev.get("current_temp")
+    # Setpoint reached: prev was heating and temp just crossed setpoint from below.
+    setpoint_just_reached = False
     if (
         prev_hvac_action == "heating"
         and current_temp is not None
@@ -275,12 +332,133 @@ def process_climate_event(entity_id, attributes, ts_str, climate_state, new_stat
             }
         )
 
+        # Emit zone_time_to_temp.v1 only when we have a tracked heating session start.
+        if heating_start_ts is not None and heating_start_temp is not None:
+            duration_s = int((ts - heating_start_ts).total_seconds()) if ts else 0
+            degrees_gained = current_temp - heating_start_temp
+            degrees_per_min = (
+                round(degrees_gained / (duration_s / 60), 3) if duration_s > 0 else 0.0
+            )
+            this_floor_entity = _ZONE_TO_FLOOR_ENTITY.get(zone)
+            other_zones_calling = [
+                k for k, v in floor_on_since.items() if v is not None and k != this_floor_entity
+            ]
+            events.append(
+                {
+                    "schema": "homeops.consumer.zone_time_to_temp.v1",
+                    "source": "consumer.v1",
+                    "ts": utc_ts(),
+                    "data": {
+                        "entity_id": entity_id,
+                        "zone": zone,
+                        "start_temp": heating_start_temp,
+                        "setpoint": setpoint,
+                        "setpoint_delta": setpoint - heating_start_temp,
+                        "duration_s": duration_s,
+                        "end_temp": current_temp,
+                        "degrees_gained": degrees_gained,
+                        "degrees_per_min": degrees_per_min,
+                        "outdoor_temp_f": daily_state.get("last_outdoor_temp_f"),
+                        "other_zones_calling": other_zones_calling,
+                    },
+                }
+            )
+
+        setpoint_reached_ts = ts
+        setpoint_reached_temp = current_temp
+        post_setpoint_temps.append(current_temp)
+        setpoint_just_reached = True
+
+    # Track subsequent temperature readings after setpoint reached (for peak_temp).
+    if (
+        not setpoint_just_reached
+        and prev.get("setpoint_reached_ts") is not None
+        and hvac_action == "heating"
+        and current_temp is not None
+        and current_temp != prev_current_temp
+    ):
+        post_setpoint_temps.append(current_temp)
+
+    # Detect heating session end: hvac_action transitions FROM "heating".
+    if prev_hvac_action == "heating" and hvac_action != "heating":
+        if setpoint_reached_ts is not None:
+            overshoot_s = (
+                int((ts - setpoint_reached_ts).total_seconds()) if ts and setpoint_reached_ts else 0
+            )
+            peak_temp = max(post_setpoint_temps) if len(post_setpoint_temps) > 1 else None
+            events.append(
+                {
+                    "schema": "homeops.consumer.zone_overshoot.v1",
+                    "source": "consumer.v1",
+                    "ts": utc_ts(),
+                    "data": {
+                        "entity_id": entity_id,
+                        "zone": zone,
+                        "start_temp": heating_start_temp,
+                        "setpoint": setpoint,
+                        "setpoint_delta": (
+                            setpoint - heating_start_temp
+                            if setpoint is not None and heating_start_temp is not None
+                            else None
+                        ),
+                        "end_temp": current_temp,
+                        "overshoot_s": overshoot_s,
+                        "peak_temp": peak_temp,
+                        "outdoor_temp_f": daily_state.get("last_outdoor_temp_f"),
+                        "other_zones_calling": heating_start_other_zones or [],
+                    },
+                }
+            )
+        else:
+            # Heating ended before setpoint was reached — emit undershoot event.
+            if setpoint is not None and current_temp is not None:
+                call_duration_s = (
+                    int((ts - heating_start_ts).total_seconds()) if ts and heating_start_ts else 0
+                )
+                shortfall_f = round(setpoint - current_temp, 1)
+                likely_cause = (
+                    "thermostat_adjustment" if setpoint_changed_during_heating else "unknown"
+                )
+                events.append(
+                    {
+                        "schema": "homeops.consumer.zone_undershoot.v1",
+                        "source": "consumer.v1",
+                        "ts": utc_ts(),
+                        "data": {
+                            "entity_id": entity_id,
+                            "zone": zone,
+                            "start_temp_f": heating_start_temp,
+                            "final_temp_f": current_temp,
+                            "setpoint_f": setpoint,
+                            "shortfall_f": shortfall_f,
+                            "call_duration_s": call_duration_s,
+                            "outdoor_temp_f": daily_state.get("last_outdoor_temp_f"),
+                            "likely_cause": likely_cause,
+                        },
+                    }
+                )
+        # Clear all heating session state for this entity.
+        heating_start_temp = None
+        heating_start_ts = None
+        setpoint_reached_ts = None
+        setpoint_reached_temp = None
+        post_setpoint_temps = []
+        heating_start_other_zones = None
+        setpoint_changed_during_heating = False
+
     updated_state = dict(climate_state)
     updated_state[entity_id] = {
         "setpoint": setpoint,
         "current_temp": current_temp,
         "hvac_mode": hvac_mode,
         "hvac_action": hvac_action,
+        "heating_start_temp": heating_start_temp,
+        "heating_start_ts": heating_start_ts,
+        "setpoint_reached_ts": setpoint_reached_ts,
+        "setpoint_reached_temp": setpoint_reached_temp,
+        "post_setpoint_temps": post_setpoint_temps,
+        "heating_start_other_zones": heating_start_other_zones,
+        "setpoint_changed_during_heating": setpoint_changed_during_heating,
     }
 
     return events, updated_state
@@ -411,6 +589,7 @@ def main():
             "session_count": 0,
             "floor_runtime_s": {},
             "outdoor_temps": [],
+            "last_outdoor_temp_f": None,
         }
 
     daily_state = _empty_daily_state()
@@ -483,6 +662,7 @@ def main():
                     print(json.dumps(derived), flush=True)
                     append_jsonl(derived_log, derived)
                     daily_state["outdoor_temps"].append(derived["data"]["temperature_f"])
+                    daily_state["last_outdoor_temp_f"] = derived["data"]["temperature_f"]
                 if new_state in (None, "unavailable", "unknown", ""):
                     print(
                         f"[{utc_ts()}] WARN: outdoor_temperature state unavailable, skipping",
@@ -501,7 +681,13 @@ def main():
             # Thermostat climate entities: setpoint, current temp, and mode changes.
             if entity_id in CLIMATE_ENTITIES:
                 derived_events, climate_state = process_climate_event(
-                    entity_id, attributes, ts_str, climate_state, new_state
+                    entity_id,
+                    attributes,
+                    ts_str,
+                    climate_state,
+                    new_state,
+                    floor_on_since=floor_on_since,
+                    daily_state=daily_state,
                 )
                 for derived in derived_events:
                     print(json.dumps(derived), flush=True)
