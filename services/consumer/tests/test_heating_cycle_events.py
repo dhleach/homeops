@@ -30,6 +30,7 @@ def make_prev_heating(
     setpoint_reached_temp=None,
     post_setpoint_temps=None,
     heating_start_other_zones=None,
+    setpoint_changed_during_heating=False,
 ):
     return {
         entity_id: {
@@ -43,6 +44,7 @@ def make_prev_heating(
             "setpoint_reached_temp": setpoint_reached_temp,
             "post_setpoint_temps": post_setpoint_temps or [],
             "heating_start_other_zones": heating_start_other_zones or [],
+            "setpoint_changed_during_heating": setpoint_changed_during_heating,
         }
     }
 
@@ -449,3 +451,159 @@ class TestHeatingSessionTracking:
         state = updated[FLOOR_1_CLIMATE]
         assert state["heating_start_ts"] is None
         assert state["setpoint_reached_ts"] is None
+
+
+SCHEMA_ZONE_UNDERSHOOT = "homeops.consumer.zone_undershoot.v1"
+
+TS_UNDERSHOOT_END = "2024-01-15T10:20:40+00:00"  # 1240s after TS_START
+
+
+class TestZoneUndershoot:
+    def test_fires_with_all_fields_populated(self):
+        """zone_undershoot.v1 fires when heating ends without reaching setpoint."""
+        prev = make_prev_heating(
+            FLOOR_1_CLIMATE,
+            setpoint=71.0,
+            current_temp=69.5,
+            heating_start_temp=68.0,
+            heating_start_ts_str=TS_START,
+            setpoint_reached_ts=None,
+        )
+        attrs = {"temperature": 71.0, "current_temperature": 69.5, "hvac_action": "idle"}
+
+        events, _ = process_climate_event(
+            FLOOR_1_CLIMATE,
+            attrs,
+            TS_UNDERSHOOT_END,
+            prev,
+            new_state="heat",
+            daily_state={"last_outdoor_temp_f": 28.0},
+        )
+
+        schemas = [e["schema"] for e in events]
+        assert SCHEMA_ZONE_UNDERSHOOT in schemas
+
+        evt = next(e for e in events if e["schema"] == SCHEMA_ZONE_UNDERSHOOT)
+        d = evt["data"]
+        assert d["entity_id"] == FLOOR_1_CLIMATE
+        assert d["zone"] == "floor_1"
+        assert d["start_temp_f"] == 68.0
+        assert d["final_temp_f"] == 69.5
+        assert d["setpoint_f"] == 71.0
+        assert d["shortfall_f"] == 1.5
+        assert d["call_duration_s"] == 1240
+        assert d["outdoor_temp_f"] == 28.0
+        assert d["likely_cause"] == "unknown"
+
+    def test_likely_cause_thermostat_adjustment(self):
+        """likely_cause is 'thermostat_adjustment' when setpoint changed during heating."""
+        prev = make_prev_heating(
+            FLOOR_1_CLIMATE,
+            setpoint=71.0,
+            current_temp=69.5,
+            heating_start_temp=68.0,
+            setpoint_reached_ts=None,
+            setpoint_changed_during_heating=True,
+        )
+        attrs = {"temperature": 71.0, "current_temperature": 69.5, "hvac_action": "idle"}
+
+        events, _ = process_climate_event(
+            FLOOR_1_CLIMATE, attrs, TS_UNDERSHOOT_END, prev, new_state="heat"
+        )
+
+        evt = next(e for e in events if e["schema"] == SCHEMA_ZONE_UNDERSHOOT)
+        assert evt["data"]["likely_cause"] == "thermostat_adjustment"
+
+    def test_no_fire_when_setpoint_was_reached(self):
+        """zone_undershoot.v1 does NOT fire when setpoint was reached (overshoot path)."""
+        prev = make_prev_heating(
+            FLOOR_1_CLIMATE,
+            setpoint=70.0,
+            current_temp=70.5,
+            setpoint_reached_ts=isoparse(TS_SETPOINT_REACHED),
+            post_setpoint_temps=[70.0, 70.5],
+        )
+        attrs = {"temperature": 70.0, "current_temperature": 70.5, "hvac_action": "idle"}
+
+        events, _ = process_climate_event(
+            FLOOR_1_CLIMATE, attrs, TS_SESSION_END, prev, new_state="heat"
+        )
+
+        schemas = [e["schema"] for e in events]
+        assert SCHEMA_ZONE_UNDERSHOOT not in schemas
+        assert SCHEMA_ZONE_OVERSHOOT in schemas
+
+    def test_no_fire_when_setpoint_is_none(self):
+        """zone_undershoot.v1 is skipped when setpoint is None."""
+        prev = make_prev_heating(
+            FLOOR_1_CLIMATE,
+            setpoint=None,
+            current_temp=69.5,
+            heating_start_temp=68.0,
+            setpoint_reached_ts=None,
+        )
+        attrs = {"temperature": None, "current_temperature": 69.5, "hvac_action": "idle"}
+
+        events, _ = process_climate_event(
+            FLOOR_1_CLIMATE, attrs, TS_UNDERSHOOT_END, prev, new_state="heat"
+        )
+
+        schemas = [e["schema"] for e in events]
+        assert SCHEMA_ZONE_UNDERSHOOT not in schemas
+
+    def test_no_fire_when_current_temp_is_none(self):
+        """zone_undershoot.v1 is skipped when current_temp is None."""
+        prev = make_prev_heating(
+            FLOOR_1_CLIMATE,
+            setpoint=71.0,
+            current_temp=69.5,
+            heating_start_temp=68.0,
+            setpoint_reached_ts=None,
+        )
+        attrs = {"temperature": 71.0, "current_temperature": None, "hvac_action": "idle"}
+
+        events, _ = process_climate_event(
+            FLOOR_1_CLIMATE, attrs, TS_UNDERSHOOT_END, prev, new_state="heat"
+        )
+
+        schemas = [e["schema"] for e in events]
+        assert SCHEMA_ZONE_UNDERSHOOT not in schemas
+
+    def test_setpoint_changed_flag_set_when_setpoint_changes_during_heating(self):
+        """setpoint_changed_during_heating is set True when setpoint changes while heating."""
+        prev = make_prev_heating(
+            FLOOR_1_CLIMATE,
+            setpoint=70.0,
+            current_temp=68.0,
+            setpoint_reached_ts=None,
+            setpoint_changed_during_heating=False,
+        )
+        # Setpoint changes from 70.0 to 71.0 while still heating
+        attrs = {"temperature": 71.0, "current_temperature": 68.0, "hvac_action": "heating"}
+
+        _, updated = process_climate_event(FLOOR_1_CLIMATE, attrs, TS_START, prev, new_state="heat")
+
+        assert updated[FLOOR_1_CLIMATE]["setpoint_changed_during_heating"] is True
+
+    def test_setpoint_changed_flag_reset_on_new_heating_session(self):
+        """setpoint_changed_during_heating resets to False at the start of each heating session."""
+        prev = {
+            FLOOR_1_CLIMATE: {
+                "setpoint": 70.0,
+                "current_temp": 68.0,
+                "hvac_mode": "heat",
+                "hvac_action": "idle",
+                "heating_start_temp": None,
+                "heating_start_ts": None,
+                "setpoint_reached_ts": None,
+                "setpoint_reached_temp": None,
+                "post_setpoint_temps": [],
+                "heating_start_other_zones": None,
+                "setpoint_changed_during_heating": True,  # leftover from previous session
+            }
+        }
+        attrs = {"temperature": 70.0, "current_temperature": 68.0, "hvac_action": "heating"}
+
+        _, updated = process_climate_event(FLOOR_1_CLIMATE, attrs, TS_START, prev, new_state="heat")
+
+        assert updated[FLOOR_1_CLIMATE]["setpoint_changed_during_heating"] is False
