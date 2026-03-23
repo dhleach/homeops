@@ -257,6 +257,24 @@ def process_climate_event(entity_id, attributes, ts_str, climate_state, new_stat
             }
         )
 
+    prev_hvac_action = prev.get("hvac_action")
+    prev_current_temp = prev.get("current_temp")
+    if (
+        prev_hvac_action == "heating"
+        and current_temp is not None
+        and setpoint is not None
+        and current_temp >= setpoint
+        and (prev_current_temp is None or prev_current_temp < setpoint)
+    ):
+        events.append(
+            {
+                "schema": "homeops.consumer.thermostat_setpoint_reached.v1",
+                "source": "consumer.v1",
+                "ts": utc_ts(),
+                "data": common,
+            }
+        )
+
     updated_state = dict(climate_state)
     updated_state[entity_id] = {
         "setpoint": setpoint,

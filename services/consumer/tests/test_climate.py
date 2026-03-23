@@ -181,6 +181,63 @@ class TestUnknownEntity:
         assert state == {}
 
 
+SCHEMA_SETPOINT_REACHED = "homeops.consumer.thermostat_setpoint_reached.v1"
+
+
+class TestSetpointReached:
+    def test_crossing_emits_event(self):
+        """prev heating + temp crosses from below to >= setpoint → event fires."""
+        prev = make_prev(FLOOR_1_CLIMATE, setpoint=68.0, current_temp=67.5, hvac_action="heating")
+        attrs = make_attrs(temperature=68.0, current_temperature=68.0, hvac_action="idle")
+        events, _ = make_call(FLOOR_1_CLIMATE, attrs, TS_STR, prev)
+        schemas = [e["schema"] for e in events]
+        assert SCHEMA_SETPOINT_REACHED in schemas
+
+    def test_crossing_event_data(self):
+        prev = make_prev(FLOOR_1_CLIMATE, setpoint=68.0, current_temp=67.5, hvac_action="heating")
+        attrs = make_attrs(temperature=68.0, current_temperature=68.5, hvac_action="idle")
+        events, _ = make_call(FLOOR_1_CLIMATE, attrs, TS_STR, prev)
+        evt = next(e for e in events if e["schema"] == SCHEMA_SETPOINT_REACHED)
+        d = evt["data"]
+        assert d["entity_id"] == FLOOR_1_CLIMATE
+        assert d["zone"] == "floor_1"
+        assert d["setpoint"] == 68.0
+        assert d["current_temp"] == 68.5
+
+    def test_no_event_if_not_heating(self):
+        """If prev hvac_action was idle (not heating), no setpoint_reached event."""
+        prev = make_prev(FLOOR_1_CLIMATE, setpoint=68.0, current_temp=67.5, hvac_action="idle")
+        attrs = make_attrs(temperature=68.0, current_temperature=68.5, hvac_action="idle")
+        events, _ = make_call(FLOOR_1_CLIMATE, attrs, TS_STR, prev)
+        schemas = [e["schema"] for e in events]
+        assert SCHEMA_SETPOINT_REACHED not in schemas
+
+    def test_no_duplicate_if_already_above_setpoint(self):
+        """If temp was already >= setpoint in prev state, no event (not a crossing)."""
+        prev = make_prev(FLOOR_1_CLIMATE, setpoint=68.0, current_temp=69.0, hvac_action="heating")
+        attrs = make_attrs(temperature=68.0, current_temperature=70.0, hvac_action="heating")
+        events, _ = make_call(FLOOR_1_CLIMATE, attrs, TS_STR, prev)
+        schemas = [e["schema"] for e in events]
+        assert SCHEMA_SETPOINT_REACHED not in schemas
+
+    def test_no_event_if_setpoint_none(self):
+        prev = make_prev(FLOOR_1_CLIMATE, setpoint=None, current_temp=67.5, hvac_action="heating")
+        attrs = make_attrs(hvac_action="idle")
+        attrs["temperature"] = None
+        attrs["current_temperature"] = 68.5
+        events, _ = make_call(FLOOR_1_CLIMATE, attrs, TS_STR, prev)
+        schemas = [e["schema"] for e in events]
+        assert SCHEMA_SETPOINT_REACHED not in schemas
+
+    def test_no_event_if_current_temp_none(self):
+        prev = make_prev(FLOOR_1_CLIMATE, setpoint=68.0, current_temp=67.5, hvac_action="heating")
+        attrs = make_attrs(temperature=68.0, hvac_action="idle")
+        attrs["current_temperature"] = None
+        events, _ = make_call(FLOOR_1_CLIMATE, attrs, TS_STR, prev)
+        schemas = [e["schema"] for e in events]
+        assert SCHEMA_SETPOINT_REACHED not in schemas
+
+
 class TestFirstSeen:
     def test_first_event_emits_all_three_events(self):
         """On first sight (no prior state), all fields are considered changed."""
