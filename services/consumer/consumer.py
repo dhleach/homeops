@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 import json
 import os
+import signal
+import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
 from dateutil.parser import isoparse
+
+STATE_FILE = Path("state/consumer/state.json")
 
 
 def utc_ts():
@@ -582,6 +586,135 @@ def check_floor_2_warning(floor_on_since, floor_2_warn_sent, floor_2_warn_thresh
     return warn_event, True
 
 
+def _empty_daily_state() -> dict:
+    return {
+        "furnace_runtime_s": 0,
+        "session_count": 0,
+        "floor_runtime_s": {},
+        "outdoor_temps": [],
+        "last_outdoor_temp_f": None,
+    }
+
+
+def _parse_dt(s: str | None):
+    if s is None:
+        return None
+    try:
+        return isoparse(s)
+    except Exception:
+        return None
+
+
+def _save_state(
+    floor_on_since: dict,
+    furnace_on_since,
+    climate_state: dict,
+    daily_state: dict,
+    *,
+    state_file: Path | None = None,
+) -> None:
+    """Atomically persist consumer runtime state to disk."""
+
+    def _dt(dt):
+        return dt.isoformat() if dt is not None else None
+
+    serialized_fos = {k: _dt(v) for k, v in floor_on_since.items()}
+
+    serialized_cs: dict = {}
+    for eid, es in climate_state.items():
+        s = dict(es)
+        s["heating_start_ts"] = _dt(s.get("heating_start_ts"))
+        s["setpoint_reached_ts"] = _dt(s.get("setpoint_reached_ts"))
+        serialized_cs[eid] = s
+
+    payload = {
+        "floor_on_since": serialized_fos,
+        "furnace_on_since": _dt(furnace_on_since),
+        "climate_state": serialized_cs,
+        "daily_state": daily_state,
+        "saved_at": utc_ts(),
+    }
+    sf = state_file or STATE_FILE
+    sf.parent.mkdir(parents=True, exist_ok=True)
+    tmp = sf.with_suffix(".tmp")
+    tmp.write_text(json.dumps(payload), encoding="utf-8")
+    tmp.rename(sf)
+
+
+def _load_state(*, state_file: Path | None = None) -> dict | None:
+    """
+    Load persisted consumer state from disk.
+
+    Returns None on cold-start (file missing or older than 3720 s / 62 min).
+    Returns the state dict when resuming from a recent restart.
+    """
+    sf = state_file or STATE_FILE
+    if not sf.exists():
+        return None
+    try:
+        data = json.loads(sf.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    saved_at_str = data.get("saved_at")
+    if not saved_at_str:
+        return None
+    try:
+        age_s = (datetime.now(UTC) - isoparse(saved_at_str)).total_seconds()
+    except Exception:
+        return None
+    if age_s > 3720:
+        return None
+    return data
+
+
+def _register_sigterm_handler(*, state_file: Path | None = None) -> None:
+    """Register a SIGTERM handler that stamps shutdown_ts into the state file."""
+    sf = state_file or STATE_FILE
+
+    def _handler(signum, frame):
+        state: dict = {}
+        if sf.exists():
+            try:
+                state = json.loads(sf.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+        state["shutdown_ts"] = utc_ts()
+        try:
+            sf.write_text(json.dumps(state), encoding="utf-8")
+        except Exception:
+            pass
+        sys.exit(0)
+
+    signal.signal(signal.SIGTERM, _handler)
+
+
+_RESTART_CLEAR_SCHEMAS = frozenset(
+    {
+        "homeops.consumer.zone_setpoint_miss.v1",
+        "homeops.consumer.zone_time_to_temp.v1",
+    }
+)
+
+
+def _emit_derived(derived: dict, derived_log: str, fresh_restart: bool) -> bool:
+    """
+    Print + append a derived event; tag with across_restart when applicable.
+
+    Returns the updated fresh_restart flag (cleared after the first full session).
+    """
+    if fresh_restart:
+        derived["data"]["across_restart"] = True
+    print(json.dumps(derived), flush=True)
+    append_jsonl(derived_log, derived)
+    if fresh_restart and derived.get("schema") in _RESTART_CLEAR_SCHEMAS:
+        print(
+            f"[{utc_ts()}] Cleared fresh_restart after first full heating session",
+            flush=True,
+        )
+        return False
+    return fresh_restart
+
+
 def main():
     """Tail observer events and emit derived floor/furnace session events."""
     path = os.environ.get("EVENT_LOG", "state/observer/events.jsonl")
@@ -595,32 +728,45 @@ def main():
     telegram_bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
     telegram_chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
 
-    # Track session state across events so "ended" records can include durations.
-    furnace_on_since = last_furnace_on_since(path)
-    if furnace_on_since:
-        print(
-            f"[{utc_ts()}] Bootstrapped furnace_on_since={furnace_on_since.isoformat()}",
-            flush=True,
-        )
+    _register_sigterm_handler()
 
     floor_entities = _FLOOR_ENTITIES
-    floor_on_since = {key: None for key in floor_entities.keys()}
     floor_2_warn_sent = False  # reset each time floor 2 starts a new call
 
-    # Track previous climate state per entity to detect changes.
-    climate_state: dict = {}
+    # Attempt to resume from a recent state file; otherwise cold-start.
+    saved = _load_state()
+    fresh_restart = True  # always set on any restart (cold or resume)
 
-    # Daily accumulation state for furnace_daily_summary.v1
-    def _empty_daily_state():
-        return {
-            "furnace_runtime_s": 0,
-            "session_count": 0,
-            "floor_runtime_s": {},
-            "outdoor_temps": [],
-            "last_outdoor_temp_f": None,
-        }
+    if saved is not None:
+        fos_raw = saved.get("floor_on_since") or {}
+        floor_on_since = {k: _parse_dt(v) for k, v in fos_raw.items()}
+        for k in floor_entities:
+            floor_on_since.setdefault(k, None)
+        furnace_on_since = _parse_dt(saved.get("furnace_on_since"))
+        raw_cs = saved.get("climate_state") or {}
+        climate_state: dict = {}
+        for eid, es in raw_cs.items():
+            s = dict(es)
+            s["heating_start_ts"] = _parse_dt(s.get("heating_start_ts"))
+            s["setpoint_reached_ts"] = _parse_dt(s.get("setpoint_reached_ts"))
+            climate_state[eid] = s
+        daily_state = saved.get("daily_state") or _empty_daily_state()
+        print(
+            f"[{utc_ts()}] Resumed from state file (saved_at={saved.get('saved_at')})",
+            flush=True,
+        )
+    else:
+        # Cold-start: bootstrap furnace state from the observer log.
+        furnace_on_since = last_furnace_on_since(path)
+        if furnace_on_since:
+            print(
+                f"[{utc_ts()}] Bootstrapped furnace_on_since={furnace_on_since.isoformat()}",
+                flush=True,
+            )
+        floor_on_since = {key: None for key in floor_entities.keys()}
+        climate_state = {}
+        daily_state = _empty_daily_state()
 
-    daily_state = _empty_daily_state()
     current_date = datetime.now(UTC).strftime("%Y-%m-%d")
 
     # Main stream loop: consume observer events and emit higher-level derived events.
@@ -674,8 +820,7 @@ def main():
                     entity_id, old_state, new_state, ts, ts_str, floor_on_since, floor_2_warn_sent
                 )
                 for derived in derived_events:
-                    print(json.dumps(derived), flush=True)
-                    append_jsonl(derived_log, derived)
+                    fresh_restart = _emit_derived(derived, derived_log, fresh_restart)
                     if derived["schema"] == "homeops.consumer.floor_call_ended.v1":
                         d = derived["data"]
                         if d.get("duration_s") is not None:
@@ -683,12 +828,12 @@ def main():
                             daily_state["floor_runtime_s"][eid] = (
                                 daily_state["floor_runtime_s"].get(eid, 0) + d["duration_s"]
                             )
+                _save_state(floor_on_since, furnace_on_since, climate_state, daily_state)
 
             # Outdoor temperature readings are passed through as-is from the sensor.
             if entity_id == "sensor.outdoor_temperature":
                 for derived in process_outdoor_temp_event(entity_id, new_state, ts_str):
-                    print(json.dumps(derived), flush=True)
-                    append_jsonl(derived_log, derived)
+                    fresh_restart = _emit_derived(derived, derived_log, fresh_restart)
                     daily_state["outdoor_temps"].append(derived["data"]["temperature_f"])
                     daily_state["last_outdoor_temp_f"] = derived["data"]["temperature_f"]
                 if new_state in (None, "unavailable", "unknown", ""):
@@ -705,6 +850,8 @@ def main():
                             f" {new_state!r}, skipping",
                             flush=True,
                         )
+                # Always save on outdoor_temp event — this is the 62-min heartbeat write.
+                _save_state(floor_on_since, furnace_on_since, climate_state, daily_state)
 
             # Thermostat climate entities: setpoint, current temp, and mode changes.
             if entity_id in CLIMATE_ENTITIES:
@@ -718,8 +865,8 @@ def main():
                     daily_state=daily_state,
                 )
                 for derived in derived_events:
-                    print(json.dumps(derived), flush=True)
-                    append_jsonl(derived_log, derived)
+                    fresh_restart = _emit_derived(derived, derived_log, fresh_restart)
+                _save_state(floor_on_since, furnace_on_since, climate_state, daily_state)
 
             # Whole-home heating sessions are derived from furnace on/off transitions.
             if entity_id == "binary_sensor.furnace_heating":
@@ -727,21 +874,20 @@ def main():
                     entity_id, old_state, new_state, ts, ts_str, furnace_on_since
                 )
                 for derived in derived_events:
-                    print(json.dumps(derived), flush=True)
-                    append_jsonl(derived_log, derived)
+                    fresh_restart = _emit_derived(derived, derived_log, fresh_restart)
                     if derived["schema"] == "homeops.consumer.heating_session_ended.v1":
                         d = derived["data"]
                         if d.get("duration_s") is not None:
                             daily_state["furnace_runtime_s"] += d["duration_s"]
                         daily_state["session_count"] += 1
+                _save_state(floor_on_since, furnace_on_since, climate_state, daily_state)
 
         # In-flight floor-2 long-call check (runs on every event and on timeouts)
         warn_event, floor_2_warn_sent = check_floor_2_warning(
             floor_on_since, floor_2_warn_sent, floor_2_warn_threshold_s, datetime.now(UTC)
         )
         if warn_event:
-            print(json.dumps(warn_event), flush=True)
-            append_jsonl(derived_log, warn_event)
+            fresh_restart = _emit_derived(warn_event, derived_log, fresh_restart)
             if telegram_bot_token and telegram_chat_id:
                 import urllib.parse as _parse
                 import urllib.request as _urllib

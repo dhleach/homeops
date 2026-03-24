@@ -3,11 +3,15 @@ import asyncio
 import json
 import os
 import sys
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 
 import websockets
 from dotenv import load_dotenv
+
+_OUTDOOR_ENTITY = "sensor.outdoor_temperature"
+_OUTDOOR_POLL_INTERVAL_S = 3600  # 60 min — guarantees consumer state is never > 62 min stale
 
 
 def utc_ts():
@@ -33,6 +37,35 @@ def _get_version() -> str:
 
 def eprint(*args, **kwargs):
     print(*args, file=sys.stderr, **kwargs)
+
+
+def _emit_fetched_state(state_obj: dict, event_log: str | None) -> None:
+    """Emit a synthetic state_changed.v1 event from a get_states result object."""
+    entity_id = state_obj.get("entity_id", "")
+    state_val = state_obj.get("state")
+    attrs = state_obj.get("attributes") or {}
+    event_data: dict = {
+        "entity_id": entity_id,
+        "old_state": state_val,
+        "new_state": state_val,
+    }
+    if attrs:
+        event_data["attributes"] = attrs
+    out = {
+        "schema": "homeops.observer.state_changed.v1",
+        "source": "ha.websocket",
+        "ts": utc_ts(),
+        "data": event_data,
+    }
+    line = json.dumps(out)
+    print(line, flush=True)
+    if event_log:
+        try:
+            Path(event_log).parent.mkdir(parents=True, exist_ok=True)
+            with open(event_log, "a", encoding="utf-8") as f:
+                f.write(line + "\n")
+        except OSError as e:
+            eprint(f"[{utc_ts()}] WARN: failed to append to {event_log}: {e}")
 
 
 async def main():
@@ -98,9 +131,38 @@ async def main():
                     + (", ".join(sorted(watch)) if watch else "(ALL)")
                 )
 
-                # 4) Print matching state changes
+                # 4) Print matching state changes; periodically fetch outdoor temp
+                req_counter = 1  # 1 is already used for subscribe
+                pending_states_id: int | None = None
+                # Fetch immediately on connect so consumer gets an up-to-date value.
+                next_outdoor_poll: float = time.time()
+
                 while True:
-                    msg = json.loads(await ws.recv())
+                    now = time.time()
+                    # Kick off a periodic outdoor-temp poll (via get_states).
+                    if now >= next_outdoor_poll and pending_states_id is None:
+                        req_counter += 1
+                        pending_states_id = req_counter
+                        await ws.send(json.dumps({"id": req_counter, "type": "get_states"}))
+                        next_outdoor_poll = now + _OUTDOOR_POLL_INTERVAL_S
+
+                    recv_timeout = max(1.0, next_outdoor_poll - time.time())
+                    try:
+                        raw = await asyncio.wait_for(ws.recv(), timeout=recv_timeout)
+                        msg = json.loads(raw)
+                    except TimeoutError:
+                        continue
+
+                    # Handle get_states result — emit outdoor temp then discard.
+                    if msg.get("type") == "result":
+                        if msg.get("id") == pending_states_id and msg.get("success"):
+                            pending_states_id = None
+                            for state_obj in msg.get("result") or []:
+                                if state_obj.get("entity_id") == _OUTDOOR_ENTITY:
+                                    _emit_fetched_state(state_obj, event_log)
+                                    break
+                        continue
+
                     # The HA websocket sends other message types (pong/result/etc).
                     if msg.get("type") != "event":
                         continue
