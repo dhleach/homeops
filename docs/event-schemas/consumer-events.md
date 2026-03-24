@@ -558,6 +558,7 @@ extreme cold that triggered an early shutoff.
 | `delta` | float | `setpoint - closest_temp` | Pre-computed shortfall in degrees. Positive means the zone fell short; zero would indicate setpoint was just barely touched (this event should not fire in that case). |
 | `outdoor_temp_f` | float \| null | `daily_state["last_outdoor_temp_f"]` | Critical covariate for misses: extreme cold is an expected driver; mild-weather misses are the real alert signal. |
 | `other_zones_calling` | list[string] | `floor_on_since` at session start | Competing zones reduce per-zone airflow and can contribute to a miss, especially on floor_3 (top floor, longest duct run). |
+| `likely_cause` | `"thermostat_adjustment" \| "unknown"` | `"thermostat_adjustment"` if setpoint changed during the heating session, else `"unknown"` | Provides a first-pass triage signal: a thermostat adjustment during heating is the most common non-pathological cause of a miss; `"unknown"` warrants further investigation (e.g. furnace lockout, extreme cold load). |
 
 **Excluded fields:**
 
@@ -583,7 +584,8 @@ extreme cold that triggered an early shutoff.
     "closest_temp": 66.5,
     "delta": 1.5,
     "outdoor_temp_f": 14.2,
-    "other_zones_calling": ["binary_sensor.floor_1_heating_call", "binary_sensor.floor_2_heating_call"]
+    "other_zones_calling": ["binary_sensor.floor_1_heating_call", "binary_sensor.floor_2_heating_call"],
+    "likely_cause": "unknown"
   }
 }
 ```

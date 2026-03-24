@@ -662,8 +662,8 @@ class TestZoneSetpointMiss:
         assert len(miss_events) == 1
         assert miss_events[0]["data"]["closest_temp"] == pytest.approx(66.5)
 
-    def test_miss_with_thermostat_adjustment_no_likely_cause_field(self):
-        """zone_setpoint_miss.v1 does not include likely_cause — verify schema fields only."""
+    def test_miss_with_thermostat_adjustment_likely_cause_field(self):
+        """zone_setpoint_miss.v1 includes likely_cause='thermostat_adjustment' when setpoint changed."""
         entity_id = CLIMATE_FLOOR_1
         climate_state = _heating_start_state(entity_id, start_temp=65.0, setpoint=70.0)
         climate_state[entity_id]["setpoint_changed_during_heating"] = True
@@ -678,9 +678,7 @@ class TestZoneSetpointMiss:
         miss_events = [e for e in events if e["schema"] == "homeops.consumer.zone_setpoint_miss.v1"]
         assert len(miss_events) == 1
         d = miss_events[0]["data"]
-        # Schema does not include likely_cause; confirm it's absent
-        assert "likely_cause" not in d
-        # Core fields present
+        assert d["likely_cause"] == "thermostat_adjustment"
         assert d["start_temp"] == pytest.approx(65.0)
         assert d["setpoint"] == pytest.approx(70.0)
 

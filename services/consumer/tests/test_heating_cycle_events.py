@@ -455,13 +455,12 @@ class TestHeatingSessionTracking:
         assert state["setpoint_reached_ts"] is None
 
 
-SCHEMA_ZONE_UNDERSHOOT = "homeops.consumer.zone_undershoot.v1"
 SCHEMA_ZONE_SETPOINT_MISS = "homeops.consumer.zone_setpoint_miss.v1"
 
 TS_UNDERSHOOT_END = "2024-01-15T10:20:40+00:00"  # 1240s after TS_START
 
 
-class TestZoneUndershoot:
+class TestZoneSetpointMiss:
     def test_fires_with_all_fields_populated(self):
         """zone_setpoint_miss.v1 fires when heating ends without reaching setpoint."""
         prev = make_prev_heating(
@@ -486,7 +485,6 @@ class TestZoneUndershoot:
 
         schemas = [e["schema"] for e in events]
         assert SCHEMA_ZONE_SETPOINT_MISS in schemas
-        assert SCHEMA_ZONE_UNDERSHOOT not in schemas
 
         evt = next(e for e in events if e["schema"] == SCHEMA_ZONE_SETPOINT_MISS)
         d = evt["data"]
@@ -500,6 +498,7 @@ class TestZoneUndershoot:
         assert d["delta"] == 71.0 - 69.5
         assert d["outdoor_temp_f"] == 28.0
         assert d["other_zones_calling"] == []
+        assert d["likely_cause"] == "unknown"
 
     def test_likely_cause_thermostat_adjustment(self):
         """zone_setpoint_miss.v1 fires even when setpoint changed during heating."""
@@ -518,8 +517,7 @@ class TestZoneUndershoot:
         )
 
         evt = next(e for e in events if e["schema"] == SCHEMA_ZONE_SETPOINT_MISS)
-        # zone_setpoint_miss.v1 does not include likely_cause field
-        assert "likely_cause" not in evt["data"]
+        assert evt["data"]["likely_cause"] == "thermostat_adjustment"
         assert evt["data"]["start_temp"] == 68.0
 
     def test_no_fire_when_setpoint_was_reached(self):
@@ -538,7 +536,6 @@ class TestZoneUndershoot:
         )
 
         schemas = [e["schema"] for e in events]
-        assert SCHEMA_ZONE_UNDERSHOOT not in schemas
         assert SCHEMA_ZONE_SETPOINT_MISS not in schemas
         assert SCHEMA_ZONE_OVERSHOOT in schemas
 
@@ -558,7 +555,6 @@ class TestZoneUndershoot:
         )
 
         schemas = [e["schema"] for e in events]
-        assert SCHEMA_ZONE_UNDERSHOOT not in schemas
         assert SCHEMA_ZONE_SETPOINT_MISS not in schemas
 
     def test_no_fire_when_current_temp_is_none(self):
@@ -577,7 +573,6 @@ class TestZoneUndershoot:
         )
 
         schemas = [e["schema"] for e in events]
-        assert SCHEMA_ZONE_UNDERSHOOT not in schemas
         assert SCHEMA_ZONE_SETPOINT_MISS not in schemas
 
     def test_setpoint_changed_flag_set_when_setpoint_changes_during_heating(self):

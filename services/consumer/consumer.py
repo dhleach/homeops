@@ -437,6 +437,11 @@ def process_climate_event(
                             "delta": setpoint - closest_temp,
                             "outdoor_temp_f": daily_state.get("last_outdoor_temp_f"),
                             "other_zones_calling": heating_start_other_zones or [],
+                            "likely_cause": (
+                                "thermostat_adjustment"
+                                if setpoint_changed_during_heating
+                                else "unknown"
+                            ),
                         },
                     }
                 )
