@@ -11,6 +11,23 @@ def utc_ts():
     return datetime.now(UTC).isoformat()
 
 
+def _get_version() -> str:
+    """Return the current git short commit hash, or "unknown" if unavailable."""
+    try:
+        import subprocess as _subprocess
+
+        return (
+            _subprocess.check_output(
+                ["git", "-C", str(Path(__file__).parent), "rev-parse", "--short", "HEAD"],
+                stderr=_subprocess.DEVNULL,
+            )
+            .decode()
+            .strip()
+        )
+    except Exception:
+        return "unknown"
+
+
 def follow(path: str, timeout_s: float = 60.0):
     """Yield new lines as they are appended to a file, or yield None on timeout."""
     import select as _select
@@ -560,6 +577,7 @@ def main():
     path = os.environ.get("EVENT_LOG", "state/observer/events.jsonl")
     derived_log = os.environ.get("DERIVED_EVENT_LOG", "state/consumer/events.jsonl")
     print(f"[{utc_ts()}] Derived log: {derived_log}", flush=True)
+    print(f"[{utc_ts()}] Consumer version: {_get_version()}", flush=True)
     print(f"[{utc_ts()}] Consumer following: {path}", flush=True)
 
     floor_2_warn_threshold_s = int(os.environ.get("FLOOR_2_WARN_THRESHOLD_S", "2700"))  # 45 min
