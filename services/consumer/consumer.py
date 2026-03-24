@@ -12,13 +12,13 @@ def utc_ts():
 
 
 def _get_version() -> str:
-    """Return the current git short commit hash, or "unknown" if unavailable."""
+    """Return the current git version as <short_hash>-<YYYY-MM-DD>, or "unknown" if unavailable."""
     try:
         import subprocess as _subprocess
 
         return (
             _subprocess.check_output(
-                ["git", "-C", str(Path(__file__).parent), "rev-parse", "--short", "HEAD"],
+                ["git", "-C", str(Path(__file__).parent), "log", "-1", "--format=%h-%as"],
                 stderr=_subprocess.DEVNULL,
             )
             .decode()

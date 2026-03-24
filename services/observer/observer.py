@@ -14,6 +14,23 @@ def utc_ts():
     return datetime.now(UTC).isoformat()
 
 
+def _get_version() -> str:
+    """Return the current git version as <short_hash>-<YYYY-MM-DD>, or "unknown" if unavailable."""
+    try:
+        import subprocess as _subprocess
+
+        return (
+            _subprocess.check_output(
+                ["git", "-C", str(Path(__file__).parent), "log", "-1", "--format=%h-%as"],
+                stderr=_subprocess.DEVNULL,
+            )
+            .decode()
+            .strip()
+        )
+    except Exception:
+        return "unknown"
+
+
 def eprint(*args, **kwargs):
     print(*args, file=sys.stderr, **kwargs)
 
@@ -24,6 +41,8 @@ async def main():
     # Note: default path is relative to the current working directory.
     env_path = os.environ.get("HA_ENV_FILE", "secrets/ha.env")
     load_dotenv(env_path)
+
+    print(f"[{utc_ts()}] Observer version: {_get_version()}", flush=True)
 
     ws_url = os.environ.get("HA_WS_URL")
     token = os.environ.get("HA_TOKEN")
