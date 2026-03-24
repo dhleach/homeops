@@ -29,6 +29,7 @@ def make_prev_heating(
     setpoint_reached_ts=None,
     setpoint_reached_temp=None,
     post_setpoint_temps=None,
+    session_temps=None,
     heating_start_other_zones=None,
     setpoint_changed_during_heating=False,
 ):
@@ -43,6 +44,7 @@ def make_prev_heating(
             "setpoint_reached_ts": setpoint_reached_ts,
             "setpoint_reached_temp": setpoint_reached_temp,
             "post_setpoint_temps": post_setpoint_temps or [],
+            "session_temps": session_temps or [],
             "heating_start_other_zones": heating_start_other_zones or [],
             "setpoint_changed_during_heating": setpoint_changed_during_heating,
         }
@@ -453,14 +455,14 @@ class TestHeatingSessionTracking:
         assert state["setpoint_reached_ts"] is None
 
 
-SCHEMA_ZONE_UNDERSHOOT = "homeops.consumer.zone_undershoot.v1"
+SCHEMA_ZONE_SETPOINT_MISS = "homeops.consumer.zone_setpoint_miss.v1"
 
 TS_UNDERSHOOT_END = "2024-01-15T10:20:40+00:00"  # 1240s after TS_START
 
 
-class TestZoneUndershoot:
+class TestZoneSetpointMiss:
     def test_fires_with_all_fields_populated(self):
-        """zone_undershoot.v1 fires when heating ends without reaching setpoint."""
+        """zone_setpoint_miss.v1 fires when heating ends without reaching setpoint."""
         prev = make_prev_heating(
             FLOOR_1_CLIMATE,
             setpoint=71.0,
@@ -468,6 +470,7 @@ class TestZoneUndershoot:
             heating_start_temp=68.0,
             heating_start_ts_str=TS_START,
             setpoint_reached_ts=None,
+            session_temps=[68.5, 69.0, 69.5],
         )
         attrs = {"temperature": 71.0, "current_temperature": 69.5, "hvac_action": "idle"}
 
@@ -481,22 +484,24 @@ class TestZoneUndershoot:
         )
 
         schemas = [e["schema"] for e in events]
-        assert SCHEMA_ZONE_UNDERSHOOT in schemas
+        assert SCHEMA_ZONE_SETPOINT_MISS in schemas
 
-        evt = next(e for e in events if e["schema"] == SCHEMA_ZONE_UNDERSHOOT)
+        evt = next(e for e in events if e["schema"] == SCHEMA_ZONE_SETPOINT_MISS)
         d = evt["data"]
         assert d["entity_id"] == FLOOR_1_CLIMATE
         assert d["zone"] == "floor_1"
-        assert d["start_temp_f"] == 68.0
-        assert d["final_temp_f"] == 69.5
-        assert d["setpoint_f"] == 71.0
-        assert d["shortfall_f"] == 1.5
-        assert d["call_duration_s"] == 1240
+        assert d["start_temp"] == 68.0
+        assert d["setpoint"] == 71.0
+        assert d["setpoint_delta"] == 3.0
+        assert d["duration_s"] == 1240
+        assert d["closest_temp"] == 69.5  # max of session_temps
+        assert d["delta"] == 71.0 - 69.5
         assert d["outdoor_temp_f"] == 28.0
+        assert d["other_zones_calling"] == []
         assert d["likely_cause"] == "unknown"
 
     def test_likely_cause_thermostat_adjustment(self):
-        """likely_cause is 'thermostat_adjustment' when setpoint changed during heating."""
+        """zone_setpoint_miss.v1 fires even when setpoint changed during heating."""
         prev = make_prev_heating(
             FLOOR_1_CLIMATE,
             setpoint=71.0,
@@ -511,11 +516,12 @@ class TestZoneUndershoot:
             FLOOR_1_CLIMATE, attrs, TS_UNDERSHOOT_END, prev, new_state="heat"
         )
 
-        evt = next(e for e in events if e["schema"] == SCHEMA_ZONE_UNDERSHOOT)
+        evt = next(e for e in events if e["schema"] == SCHEMA_ZONE_SETPOINT_MISS)
         assert evt["data"]["likely_cause"] == "thermostat_adjustment"
+        assert evt["data"]["start_temp"] == 68.0
 
     def test_no_fire_when_setpoint_was_reached(self):
-        """zone_undershoot.v1 does NOT fire when setpoint was reached (overshoot path)."""
+        """zone_setpoint_miss.v1 does NOT fire when setpoint was reached (overshoot path)."""
         prev = make_prev_heating(
             FLOOR_1_CLIMATE,
             setpoint=70.0,
@@ -530,11 +536,11 @@ class TestZoneUndershoot:
         )
 
         schemas = [e["schema"] for e in events]
-        assert SCHEMA_ZONE_UNDERSHOOT not in schemas
+        assert SCHEMA_ZONE_SETPOINT_MISS not in schemas
         assert SCHEMA_ZONE_OVERSHOOT in schemas
 
     def test_no_fire_when_setpoint_is_none(self):
-        """zone_undershoot.v1 is skipped when setpoint is None."""
+        """zone_setpoint_miss.v1 is skipped when setpoint is None."""
         prev = make_prev_heating(
             FLOOR_1_CLIMATE,
             setpoint=None,
@@ -549,15 +555,15 @@ class TestZoneUndershoot:
         )
 
         schemas = [e["schema"] for e in events]
-        assert SCHEMA_ZONE_UNDERSHOOT not in schemas
+        assert SCHEMA_ZONE_SETPOINT_MISS not in schemas
 
     def test_no_fire_when_current_temp_is_none(self):
-        """zone_undershoot.v1 is skipped when current_temp is None."""
+        """zone_setpoint_miss.v1 is skipped when heating_start_temp is None."""
         prev = make_prev_heating(
             FLOOR_1_CLIMATE,
             setpoint=71.0,
             current_temp=69.5,
-            heating_start_temp=68.0,
+            heating_start_temp=None,
             setpoint_reached_ts=None,
         )
         attrs = {"temperature": 71.0, "current_temperature": None, "hvac_action": "idle"}
@@ -567,7 +573,7 @@ class TestZoneUndershoot:
         )
 
         schemas = [e["schema"] for e in events]
-        assert SCHEMA_ZONE_UNDERSHOOT not in schemas
+        assert SCHEMA_ZONE_SETPOINT_MISS not in schemas
 
     def test_setpoint_changed_flag_set_when_setpoint_changes_during_heating(self):
         """setpoint_changed_during_heating is set True when setpoint changes while heating."""
