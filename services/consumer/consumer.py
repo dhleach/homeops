@@ -264,6 +264,7 @@ def process_climate_event(
     post_setpoint_temps = list(prev.get("post_setpoint_temps") or [])
     heating_start_other_zones = prev.get("heating_start_other_zones")
     setpoint_changed_during_heating = prev.get("setpoint_changed_during_heating", False)
+    session_temps = list(prev.get("session_temps") or [])
 
     # Detect heating session start: hvac_action transitions TO "heating".
     if prev_hvac_action != "heating" and hvac_action == "heating":
@@ -273,6 +274,7 @@ def process_climate_event(
         setpoint_reached_temp = None
         post_setpoint_temps = []
         setpoint_changed_during_heating = False
+        session_temps = []
         this_floor_entity = _ZONE_TO_FLOOR_ENTITY.get(zone)
         heating_start_other_zones = [
             k for k, v in floor_on_since.items() if v is not None and k != this_floor_entity
@@ -299,6 +301,9 @@ def process_climate_event(
                 "data": common,
             }
         )
+        # Track all temp readings during heating for closest_temp computation.
+        if hvac_action == "heating":
+            session_temps.append(current_temp)
 
     if (hvac_mode is not None and hvac_mode != prev.get("hvac_mode")) or (
         hvac_action is not None and hvac_action != prev.get("hvac_action")
@@ -410,30 +415,28 @@ def process_climate_event(
                 }
             )
         else:
-            # Heating ended before setpoint was reached — emit undershoot event.
-            if setpoint is not None and current_temp is not None:
-                call_duration_s = (
+            # Heating ended before setpoint was reached — emit setpoint miss event.
+            if setpoint is not None and heating_start_temp is not None:
+                duration_s = (
                     int((ts - heating_start_ts).total_seconds()) if ts and heating_start_ts else 0
                 )
-                shortfall_f = round(setpoint - current_temp, 1)
-                likely_cause = (
-                    "thermostat_adjustment" if setpoint_changed_during_heating else "unknown"
-                )
+                closest_temp = max(session_temps) if session_temps else heating_start_temp
                 events.append(
                     {
-                        "schema": "homeops.consumer.zone_undershoot.v1",
+                        "schema": "homeops.consumer.zone_setpoint_miss.v1",
                         "source": "consumer.v1",
                         "ts": utc_ts(),
                         "data": {
                             "entity_id": entity_id,
                             "zone": zone,
-                            "start_temp_f": heating_start_temp,
-                            "final_temp_f": current_temp,
-                            "setpoint_f": setpoint,
-                            "shortfall_f": shortfall_f,
-                            "call_duration_s": call_duration_s,
+                            "start_temp": heating_start_temp,
+                            "setpoint": setpoint,
+                            "setpoint_delta": setpoint - heating_start_temp,
+                            "duration_s": duration_s,
+                            "closest_temp": closest_temp,
+                            "delta": setpoint - closest_temp,
                             "outdoor_temp_f": daily_state.get("last_outdoor_temp_f"),
-                            "likely_cause": likely_cause,
+                            "other_zones_calling": heating_start_other_zones or [],
                         },
                     }
                 )
@@ -443,6 +446,7 @@ def process_climate_event(
         setpoint_reached_ts = None
         setpoint_reached_temp = None
         post_setpoint_temps = []
+        session_temps = []
         heating_start_other_zones = None
         setpoint_changed_during_heating = False
 
@@ -457,6 +461,7 @@ def process_climate_event(
         "setpoint_reached_ts": setpoint_reached_ts,
         "setpoint_reached_temp": setpoint_reached_temp,
         "post_setpoint_temps": post_setpoint_temps,
+        "session_temps": session_temps,
         "heating_start_other_zones": heating_start_other_zones,
         "setpoint_changed_during_heating": setpoint_changed_during_heating,
     }

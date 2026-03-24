@@ -7,6 +7,7 @@ import pytest
 from consumer import (
     check_floor_2_warning,
     last_furnace_on_since,
+    process_climate_event,
     process_floor_event,
     process_furnace_event,
     process_outdoor_temp_event,
@@ -546,3 +547,237 @@ class TestFurnaceBootstrapValidation:
         )
         assert event2 is None
         assert floor_2_warn_sent is True  # unchanged
+
+
+# ---------------------------------------------------------------------------
+# process_climate_event — zone_setpoint_miss.v1
+# ---------------------------------------------------------------------------
+
+CLIMATE_FLOOR_1 = "climate.floor_1_thermostat"
+CLIMATE_FLOOR_3 = "climate.floor_3_thermostat"
+
+
+def _make_attrs(setpoint=68.0, current_temp=65.0, hvac_action="heating"):
+    return {
+        "temperature": setpoint,
+        "current_temperature": current_temp,
+        "hvac_action": hvac_action,
+    }
+
+
+def _heating_start_state(entity_id, start_temp=64.0, setpoint=68.0, start_ts=None):
+    """Return a climate_state dict simulating mid-heating session with no setpoint reached."""
+    if start_ts is None:
+        start_ts = TS - timedelta(minutes=30)
+    return {
+        entity_id: {
+            "setpoint": setpoint,
+            "current_temp": start_temp,
+            "hvac_mode": "heat",
+            "hvac_action": "heating",
+            "heating_start_temp": start_temp,
+            "heating_start_ts": start_ts,
+            "setpoint_reached_ts": None,
+            "setpoint_reached_temp": None,
+            "post_setpoint_temps": [],
+            "session_temps": [],
+            "heating_start_other_zones": [],
+            "setpoint_changed_during_heating": False,
+        }
+    }
+
+
+class TestZoneSetpointMiss:
+    """Tests for zone_setpoint_miss.v1 emission in process_climate_event."""
+
+    def test_normal_miss_emits_setpoint_miss(self):
+        """Heating ends without reaching setpoint — miss event is emitted."""
+        entity_id = CLIMATE_FLOOR_1
+        start_temp = 64.0
+        setpoint = 68.0
+        # Heating was active; now hvac_action leaves "heating"
+        climate_state = _heating_start_state(entity_id, start_temp=start_temp, setpoint=setpoint)
+        # Add some session temps to check closest_temp
+        climate_state[entity_id]["session_temps"] = [64.5, 65.0, 65.5, 66.0]
+        attrs = _make_attrs(setpoint=setpoint, current_temp=65.5, hvac_action="idle")
+        events, _ = process_climate_event(
+            entity_id,
+            attrs,
+            TS.isoformat(),
+            climate_state,
+            new_state="heat",
+        )
+        miss_events = [e for e in events if e["schema"] == "homeops.consumer.zone_setpoint_miss.v1"]
+        assert len(miss_events) == 1
+        d = miss_events[0]["data"]
+        assert d["entity_id"] == entity_id
+        assert d["zone"] == "floor_1"
+        assert d["start_temp"] == start_temp
+        assert d["setpoint"] == setpoint
+        assert d["setpoint_delta"] == pytest.approx(setpoint - start_temp)
+        assert d["closest_temp"] == pytest.approx(66.0)  # max of session_temps
+        assert d["delta"] == pytest.approx(setpoint - 66.0)
+        assert d["outdoor_temp_f"] is None
+        assert d["other_zones_calling"] == []
+
+    def test_session_temps_tracks_closest_temp(self):
+        """session_temps are accumulated during heating and used for closest_temp."""
+        entity_id = CLIMATE_FLOOR_1
+        start_temp = 63.0
+        setpoint = 68.0
+        climate_state = {entity_id: {}}
+
+        # Step 1: Heating starts
+        attrs_start = _make_attrs(setpoint=setpoint, current_temp=start_temp, hvac_action="heating")
+        _, climate_state = process_climate_event(
+            entity_id,
+            attrs_start,
+            (TS - timedelta(minutes=40)).isoformat(),
+            climate_state,
+            new_state="heat",
+            floor_on_since=make_floor_on_since(),
+        )
+
+        # Step 2: Temperature rises but doesn't reach setpoint
+        for temp in [63.5, 64.0, 65.0, 66.5]:
+            attrs_mid = _make_attrs(setpoint=setpoint, current_temp=temp, hvac_action="heating")
+            _, climate_state = process_climate_event(
+                entity_id,
+                attrs_mid,
+                (TS - timedelta(minutes=20)).isoformat(),
+                climate_state,
+                new_state="heat",
+            )
+
+        # Step 3: Heating ends without reaching setpoint
+        attrs_end = _make_attrs(setpoint=setpoint, current_temp=66.5, hvac_action="idle")
+        events, _ = process_climate_event(
+            entity_id,
+            attrs_end,
+            TS.isoformat(),
+            climate_state,
+            new_state="heat",
+        )
+        miss_events = [e for e in events if e["schema"] == "homeops.consumer.zone_setpoint_miss.v1"]
+        assert len(miss_events) == 1
+        assert miss_events[0]["data"]["closest_temp"] == pytest.approx(66.5)
+
+    def test_miss_with_thermostat_adjustment_no_likely_cause_field(self):
+        """zone_setpoint_miss.v1 does not include likely_cause — verify schema fields only."""
+        entity_id = CLIMATE_FLOOR_1
+        climate_state = _heating_start_state(entity_id, start_temp=65.0, setpoint=70.0)
+        climate_state[entity_id]["setpoint_changed_during_heating"] = True
+        attrs = _make_attrs(setpoint=70.0, current_temp=67.0, hvac_action="idle")
+        events, _ = process_climate_event(
+            entity_id,
+            attrs,
+            TS.isoformat(),
+            climate_state,
+            new_state="heat",
+        )
+        miss_events = [e for e in events if e["schema"] == "homeops.consumer.zone_setpoint_miss.v1"]
+        assert len(miss_events) == 1
+        d = miss_events[0]["data"]
+        # Schema does not include likely_cause; confirm it's absent
+        assert "likely_cause" not in d
+        # Core fields present
+        assert d["start_temp"] == pytest.approx(65.0)
+        assert d["setpoint"] == pytest.approx(70.0)
+
+    def test_miss_with_other_zones_calling(self):
+        """other_zones_calling reflects heating_start_other_zones."""
+        entity_id = CLIMATE_FLOOR_1
+        climate_state = _heating_start_state(entity_id, start_temp=64.0, setpoint=68.0)
+        climate_state[entity_id]["heating_start_other_zones"] = [
+            "binary_sensor.floor_2_heating_call",
+            "binary_sensor.floor_3_heating_call",
+        ]
+        attrs = _make_attrs(setpoint=68.0, current_temp=65.5, hvac_action="idle")
+        events, _ = process_climate_event(
+            entity_id,
+            attrs,
+            TS.isoformat(),
+            climate_state,
+            new_state="heat",
+        )
+        miss_events = [e for e in events if e["schema"] == "homeops.consumer.zone_setpoint_miss.v1"]
+        assert len(miss_events) == 1
+        assert miss_events[0]["data"]["other_zones_calling"] == [
+            "binary_sensor.floor_2_heating_call",
+            "binary_sensor.floor_3_heating_call",
+        ]
+
+    def test_no_miss_when_setpoint_was_reached(self):
+        """When setpoint_reached_ts is set, zone_overshoot fires instead of miss."""
+        entity_id = CLIMATE_FLOOR_1
+        setpoint_reached = TS - timedelta(minutes=5)
+        climate_state = _heating_start_state(entity_id, start_temp=64.0, setpoint=68.0)
+        climate_state[entity_id]["setpoint_reached_ts"] = setpoint_reached
+        climate_state[entity_id]["setpoint_reached_temp"] = 68.1
+        climate_state[entity_id]["post_setpoint_temps"] = [68.1, 68.3]
+        attrs = _make_attrs(setpoint=68.0, current_temp=68.3, hvac_action="idle")
+        events, _ = process_climate_event(
+            entity_id,
+            attrs,
+            TS.isoformat(),
+            climate_state,
+            new_state="heat",
+        )
+        miss_schemas = [e["schema"] for e in events if "miss" in e["schema"]]
+        overshoot_schemas = [e["schema"] for e in events if "overshoot" in e["schema"]]
+        assert miss_schemas == []
+        assert len(overshoot_schemas) == 1
+
+    def test_miss_edge_case_empty_session_temps_uses_start_temp(self):
+        """When session_temps is empty, closest_temp falls back to start_temp."""
+        entity_id = CLIMATE_FLOOR_1
+        start_temp = 64.0
+        setpoint = 68.0
+        climate_state = _heating_start_state(entity_id, start_temp=start_temp, setpoint=setpoint)
+        # session_temps is [] (already the default in _heating_start_state)
+        attrs = _make_attrs(setpoint=setpoint, current_temp=64.0, hvac_action="idle")
+        events, _ = process_climate_event(
+            entity_id,
+            attrs,
+            TS.isoformat(),
+            climate_state,
+            new_state="heat",
+        )
+        miss_events = [e for e in events if e["schema"] == "homeops.consumer.zone_setpoint_miss.v1"]
+        assert len(miss_events) == 1
+        d = miss_events[0]["data"]
+        assert d["closest_temp"] == pytest.approx(start_temp)
+        assert d["delta"] == pytest.approx(setpoint - start_temp)
+
+    def test_miss_outdoor_temp_populated(self):
+        """outdoor_temp_f is taken from daily_state['last_outdoor_temp_f']."""
+        entity_id = CLIMATE_FLOOR_1
+        climate_state = _heating_start_state(entity_id, start_temp=63.0, setpoint=68.0)
+        attrs = _make_attrs(setpoint=68.0, current_temp=65.0, hvac_action="idle")
+        daily_state = {"last_outdoor_temp_f": 22.5}
+        events, _ = process_climate_event(
+            entity_id,
+            attrs,
+            TS.isoformat(),
+            climate_state,
+            new_state="heat",
+            daily_state=daily_state,
+        )
+        miss_events = [e for e in events if e["schema"] == "homeops.consumer.zone_setpoint_miss.v1"]
+        assert len(miss_events) == 1
+        assert miss_events[0]["data"]["outdoor_temp_f"] == pytest.approx(22.5)
+
+    def test_no_miss_emitted_without_undershoot_event(self):
+        """zone_undershoot.v1 should NOT appear — it has been replaced by zone_setpoint_miss.v1."""
+        entity_id = CLIMATE_FLOOR_1
+        climate_state = _heating_start_state(entity_id, start_temp=64.0, setpoint=68.0)
+        attrs = _make_attrs(setpoint=68.0, current_temp=65.5, hvac_action="idle")
+        events, _ = process_climate_event(
+            entity_id,
+            attrs,
+            TS.isoformat(),
+            climate_state,
+            new_state="heat",
+        )
+        undershoot_schemas = [e["schema"] for e in events if "undershoot" in e["schema"]]
+        assert undershoot_schemas == []
