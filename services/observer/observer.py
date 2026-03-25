@@ -100,7 +100,9 @@ async def main():
 
                 # 4) Print matching state changes
                 while True:
-                    msg = json.loads(await ws.recv())
+                    raw = await ws.recv()
+                    msg = json.loads(raw)
+
                     # The HA websocket sends other message types (pong/result/etc).
                     if msg.get("type") != "event":
                         continue

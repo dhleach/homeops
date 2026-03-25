@@ -1,10 +1,16 @@
 """Unit tests for consumer.py pure event-processing functions."""
 
 import json
+import signal
 from datetime import UTC, datetime, timedelta
+from unittest import mock
 
 import pytest
 from consumer import (
+    _emit_derived,
+    _load_state,
+    _register_sigterm_handler,
+    _save_state,
     check_floor_2_warning,
     last_furnace_on_since,
     process_climate_event,
@@ -779,3 +785,301 @@ class TestZoneSetpointMiss:
         )
         undershoot_schemas = [e["schema"] for e in events if "undershoot" in e["schema"]]
         assert undershoot_schemas == []
+
+
+# ---------------------------------------------------------------------------
+# _save_state / _load_state
+# ---------------------------------------------------------------------------
+
+FLOOR_1 = "binary_sensor.floor_1_heating_call"
+FLOOR_2 = "binary_sensor.floor_2_heating_call"
+FLOOR_3 = "binary_sensor.floor_3_heating_call"
+
+
+class TestSaveState:
+    def _base_state(self):
+        floor_on_since = {FLOOR_1: None, FLOOR_2: None, FLOOR_3: None}
+        furnace_on_since = None
+        climate_state = {}
+        daily_state = {
+            "furnace_runtime_s": 0,
+            "session_count": 0,
+            "floor_runtime_s": {},
+            "outdoor_temps": [],
+            "last_outdoor_temp_f": None,
+        }
+        return floor_on_since, furnace_on_since, climate_state, daily_state
+
+    def test_writes_correct_json_structure(self, tmp_path):
+        sf = tmp_path / "state.json"
+        fos, furnace, cs, daily = self._base_state()
+        _save_state(fos, furnace, cs, daily, state_file=sf)
+        assert sf.exists()
+        data = json.loads(sf.read_text())
+        assert "floor_on_since" in data
+        assert "furnace_on_since" in data
+        assert "climate_state" in data
+        assert "daily_state" in data
+        assert "saved_at" in data
+        assert "shutdown_ts" not in data
+
+    def test_serializes_floor_on_since_datetimes(self, tmp_path):
+        sf = tmp_path / "state.json"
+        ts = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        fos = {FLOOR_1: ts, FLOOR_2: None, FLOOR_3: None}
+        _save_state(fos, None, {}, {}, state_file=sf)
+        data = json.loads(sf.read_text())
+        assert data["floor_on_since"][FLOOR_1] == ts.isoformat()
+        assert data["floor_on_since"][FLOOR_2] is None
+
+    def test_serializes_furnace_on_since(self, tmp_path):
+        sf = tmp_path / "state.json"
+        ts = datetime(2024, 1, 15, 8, 0, 0, tzinfo=UTC)
+        _save_state({}, ts, {}, {}, state_file=sf)
+        data = json.loads(sf.read_text())
+        assert data["furnace_on_since"] == ts.isoformat()
+
+    def test_serializes_climate_state_datetime_fields(self, tmp_path):
+        sf = tmp_path / "state.json"
+        hts = datetime(2024, 1, 15, 9, 0, 0, tzinfo=UTC)
+        cs = {
+            "climate.floor_1_thermostat": {
+                "setpoint": 68.0,
+                "current_temp": 65.0,
+                "hvac_action": "heating",
+                "heating_start_ts": hts,
+                "setpoint_reached_ts": None,
+                "post_setpoint_temps": [],
+                "session_temps": [],
+            }
+        }
+        _save_state({}, None, cs, {}, state_file=sf)
+        data = json.loads(sf.read_text())
+        cs_saved = data["climate_state"]["climate.floor_1_thermostat"]
+        assert cs_saved["heating_start_ts"] == hts.isoformat()
+        assert cs_saved["setpoint_reached_ts"] is None
+
+    def test_atomic_write_uses_tmp_then_rename(self, tmp_path):
+        sf = tmp_path / "state.json"
+        _save_state({}, None, {}, {}, state_file=sf)
+        # After write, only the final file exists (tmp is renamed away)
+        assert sf.exists()
+        assert not sf.with_suffix(".tmp").exists()
+
+
+class TestLoadState:
+    def _write_state(self, path, saved_at_override=None):
+        from datetime import UTC, datetime
+
+        saved_at = saved_at_override or datetime.now(UTC).isoformat()
+        payload = {
+            "floor_on_since": {},
+            "furnace_on_since": None,
+            "climate_state": {},
+            "daily_state": {},
+            "saved_at": saved_at,
+        }
+        path.write_text(json.dumps(payload))
+
+    def test_returns_none_for_missing_file(self, tmp_path):
+        sf = tmp_path / "state.json"
+        assert _load_state(state_file=sf) is None
+
+    def test_returns_none_for_stale_file(self, tmp_path):
+        sf = tmp_path / "state.json"
+        # 63 minutes ago — older than 3720 s limit
+        stale_ts = datetime(2024, 1, 15, 8, 0, 0, tzinfo=UTC)
+        self._write_state(sf, saved_at_override=stale_ts.isoformat())
+        # Mock "now" to be 63 min after saved_at
+        fake_now = datetime(2024, 1, 15, 9, 3, 0, tzinfo=UTC)
+        with mock.patch("consumer.datetime") as mock_dt:
+            mock_dt.now.return_value = fake_now
+            mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+            result = _load_state(state_file=sf)
+        assert result is None
+
+    def test_returns_dict_for_recent_file(self, tmp_path):
+        sf = tmp_path / "state.json"
+        recent_ts = datetime.now(UTC).isoformat()
+        self._write_state(sf, saved_at_override=recent_ts)
+        result = _load_state(state_file=sf)
+        assert result is not None
+        assert "floor_on_since" in result
+
+    def test_returns_none_when_saved_at_missing(self, tmp_path):
+        sf = tmp_path / "state.json"
+        sf.write_text(json.dumps({"floor_on_since": {}}))
+        assert _load_state(state_file=sf) is None
+
+    def test_returns_none_for_malformed_json(self, tmp_path):
+        sf = tmp_path / "state.json"
+        sf.write_text("not json {{{")
+        assert _load_state(state_file=sf) is None
+
+    def test_round_trip_preserves_state(self, tmp_path):
+        sf = tmp_path / "state.json"
+        ts = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        fos = {FLOOR_1: ts, FLOOR_2: None, FLOOR_3: None}
+        furnace = datetime(2024, 1, 15, 9, 30, 0, tzinfo=UTC)
+        daily = {"furnace_runtime_s": 300, "session_count": 1}
+        _save_state(fos, furnace, {}, daily, state_file=sf)
+        loaded = _load_state(state_file=sf)
+        assert loaded is not None
+        assert loaded["furnace_on_since"] == furnace.isoformat()
+        assert loaded["floor_on_since"][FLOOR_1] == ts.isoformat()
+        assert loaded["daily_state"]["furnace_runtime_s"] == 300
+
+
+# ---------------------------------------------------------------------------
+# State restoration on startup
+# ---------------------------------------------------------------------------
+
+
+class TestStateRestoration:
+    def test_floor_on_since_restored_with_datetime(self, tmp_path):
+        """floor_on_since datetimes are correctly deserialized from ISO strings."""
+
+        sf = tmp_path / "state.json"
+        ts = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        fos = {FLOOR_1: ts, FLOOR_2: None, FLOOR_3: None}
+        _save_state(fos, None, {}, {}, state_file=sf)
+        loaded = _load_state(state_file=sf)
+        assert loaded is not None
+        from consumer import _parse_dt
+
+        restored_fos = {k: _parse_dt(v) for k, v in loaded["floor_on_since"].items()}
+        assert restored_fos[FLOOR_1] == ts
+        assert restored_fos[FLOOR_2] is None
+
+    def test_climate_state_datetime_fields_restored(self, tmp_path):
+        from consumer import _parse_dt
+
+        sf = tmp_path / "state.json"
+        hts = datetime(2024, 1, 15, 9, 0, 0, tzinfo=UTC)
+        cs = {
+            "climate.floor_1_thermostat": {
+                "setpoint": 68.0,
+                "current_temp": 65.0,
+                "hvac_action": "heating",
+                "heating_start_ts": hts,
+                "setpoint_reached_ts": None,
+                "post_setpoint_temps": [],
+                "session_temps": [],
+            }
+        }
+        _save_state({}, None, cs, {}, state_file=sf)
+        loaded = _load_state(state_file=sf)
+        assert loaded is not None
+        raw_cs = loaded["climate_state"]["climate.floor_1_thermostat"]
+        assert _parse_dt(raw_cs["heating_start_ts"]) == hts
+        assert _parse_dt(raw_cs["setpoint_reached_ts"]) is None
+
+    def test_daily_state_intact_after_round_trip(self, tmp_path):
+        sf = tmp_path / "state.json"
+        daily = {
+            "furnace_runtime_s": 1800,
+            "session_count": 3,
+            "floor_runtime_s": {FLOOR_1: 900},
+            "outdoor_temps": [32.0, 33.5],
+            "last_outdoor_temp_f": 33.5,
+        }
+        _save_state({}, None, {}, daily, state_file=sf)
+        loaded = _load_state(state_file=sf)
+        assert loaded["daily_state"] == daily
+
+
+# ---------------------------------------------------------------------------
+# across_restart flag via _emit_derived
+# ---------------------------------------------------------------------------
+
+
+class TestAcrossRestart:
+    def _make_event(self, schema="homeops.consumer.floor_call_started.v1"):
+        return {
+            "schema": schema,
+            "source": "consumer.v1",
+            "ts": TS.isoformat(),
+            "data": {"floor": "floor_1"},
+        }
+
+    def test_across_restart_true_on_first_event_when_fresh_restart(self, tmp_path):
+        derived_log = str(tmp_path / "events.jsonl")
+        evt = self._make_event()
+        new_fresh = _emit_derived(evt, derived_log, fresh_restart=True)
+        assert evt["data"].get("across_restart") is True
+        assert new_fresh is True  # not cleared by a non-terminal event
+
+    def test_across_restart_not_added_when_not_fresh_restart(self, tmp_path):
+        derived_log = str(tmp_path / "events.jsonl")
+        evt = self._make_event()
+        _emit_derived(evt, derived_log, fresh_restart=False)
+        assert "across_restart" not in evt["data"]
+
+    def test_fresh_restart_cleared_after_zone_time_to_temp(self, tmp_path):
+        derived_log = str(tmp_path / "events.jsonl")
+        evt = self._make_event("homeops.consumer.zone_time_to_temp.v1")
+        new_fresh = _emit_derived(evt, derived_log, fresh_restart=True)
+        assert evt["data"].get("across_restart") is True
+        assert new_fresh is False  # cleared
+
+    def test_fresh_restart_cleared_after_zone_setpoint_miss(self, tmp_path):
+        derived_log = str(tmp_path / "events.jsonl")
+        evt = self._make_event("homeops.consumer.zone_setpoint_miss.v1")
+        new_fresh = _emit_derived(evt, derived_log, fresh_restart=True)
+        assert new_fresh is False
+
+    def test_fresh_restart_not_cleared_by_non_terminal_schemas(self, tmp_path):
+        derived_log = str(tmp_path / "events.jsonl")
+        for schema in [
+            "homeops.consumer.floor_call_started.v1",
+            "homeops.consumer.heating_session_started.v1",
+            "homeops.consumer.thermostat_setpoint_changed.v1",
+            "homeops.consumer.outdoor_temp_updated.v1",
+        ]:
+            evt = self._make_event(schema)
+            new_fresh = _emit_derived(evt, derived_log, fresh_restart=True)
+            assert new_fresh is True, f"Expected fresh_restart to remain True for {schema}"
+
+    def test_events_written_to_log(self, tmp_path):
+        derived_log = str(tmp_path / "events.jsonl")
+        evt = self._make_event()
+        _emit_derived(evt, derived_log, fresh_restart=False)
+        lines = (tmp_path / "events.jsonl").read_text().strip().splitlines()
+        assert len(lines) == 1
+        written = json.loads(lines[0])
+        assert written["schema"] == evt["schema"]
+
+
+# ---------------------------------------------------------------------------
+# SIGTERM handler
+# ---------------------------------------------------------------------------
+
+
+class TestSigtermHandler:
+    def test_writes_shutdown_ts_to_existing_state_file(self, tmp_path):
+        sf = tmp_path / "state.json"
+        sf.write_text(json.dumps({"saved_at": datetime.now(UTC).isoformat()}))
+        _register_sigterm_handler(state_file=sf)
+        handler = signal.getsignal(signal.SIGTERM)
+        with pytest.raises(SystemExit):
+            handler(signal.SIGTERM, None)
+        state = json.loads(sf.read_text())
+        assert "shutdown_ts" in state
+        assert "saved_at" in state  # original content preserved
+
+    def test_writes_shutdown_ts_when_no_state_file(self, tmp_path):
+        sf = tmp_path / "state.json"
+        _register_sigterm_handler(state_file=sf)
+        handler = signal.getsignal(signal.SIGTERM)
+        with pytest.raises(SystemExit):
+            handler(signal.SIGTERM, None)
+        state = json.loads(sf.read_text())
+        assert "shutdown_ts" in state
+
+    def test_exits_cleanly_on_sigterm(self, tmp_path):
+        sf = tmp_path / "state.json"
+        _register_sigterm_handler(state_file=sf)
+        handler = signal.getsignal(signal.SIGTERM)
+        with pytest.raises(SystemExit) as exc_info:
+            handler(signal.SIGTERM, None)
+        assert exc_info.value.code == 0
