@@ -451,30 +451,34 @@ def process_climate_event(
                     int((ts - heating_start_ts).total_seconds()) if ts and heating_start_ts else 0
                 )
                 closest_temp = max(session_temps) if session_temps else heating_start_temp
-                events.append(
-                    {
-                        "schema": "homeops.consumer.zone_setpoint_miss.v1",
-                        "source": "consumer.v1",
-                        "ts": utc_ts(),
-                        "data": {
-                            "entity_id": entity_id,
-                            "zone": zone,
-                            "start_temp": heating_start_temp,
-                            "setpoint": setpoint,
-                            "setpoint_delta": setpoint - heating_start_temp,
-                            "duration_s": duration_s,
-                            "closest_temp": closest_temp,
-                            "delta": setpoint - closest_temp,
-                            "outdoor_temp_f": daily_state.get("last_outdoor_temp_f"),
-                            "other_zones_calling": heating_start_other_zones or [],
-                            "likely_cause": (
-                                "thermostat_adjustment"
-                                if setpoint_changed_during_heating
-                                else "unknown"
-                            ),
-                        },
-                    }
-                )
+                setpoint_delta = setpoint - heating_start_temp
+                # Guard 1: skip if zone was already at/above setpoint when heating started.
+                # Guard 2: skip if closest_temp reached setpoint (fallback for missed edge).
+                if setpoint_delta > 0 and closest_temp < setpoint:
+                    events.append(
+                        {
+                            "schema": "homeops.consumer.zone_setpoint_miss.v1",
+                            "source": "consumer.v1",
+                            "ts": utc_ts(),
+                            "data": {
+                                "entity_id": entity_id,
+                                "zone": zone,
+                                "start_temp": heating_start_temp,
+                                "setpoint": setpoint,
+                                "setpoint_delta": setpoint_delta,
+                                "duration_s": duration_s,
+                                "closest_temp": closest_temp,
+                                "delta": setpoint - closest_temp,
+                                "outdoor_temp_f": daily_state.get("last_outdoor_temp_f"),
+                                "other_zones_calling": heating_start_other_zones or [],
+                                "likely_cause": (
+                                    "thermostat_adjustment"
+                                    if setpoint_changed_during_heating
+                                    else "unknown"
+                                ),
+                            },
+                        }
+                    )
         # Clear all heating session state for this entity.
         heating_start_temp = None
         heating_start_ts = None
