@@ -643,3 +643,59 @@ Check observer service on Pi.
   }
 }
 ```
+
+---
+
+## Event: `homeops.consumer.zone_slow_to_heat_warning.v1`
+
+Fires during an active heating session when a zone has been calling for heat longer than a
+per-floor expected window without reaching its setpoint. This is distinct from
+`floor_no_response_warning.v1` (which fires when temperature isn't rising at all) — this event
+fires even if temperature IS rising, but too slowly to reach setpoint within the expected window.
+
+Thresholds are configurable via environment variables and default to:
+- `floor_1`: 900 s (15 min) — `SLOW_TO_HEAT_THRESHOLD_FLOOR1_S`
+- `floor_2`: 1800 s (30 min) — `SLOW_TO_HEAT_THRESHOLD_FLOOR2_S`
+- `floor_3`: 600 s (10 min) — `SLOW_TO_HEAT_THRESHOLD_FLOOR3_S`
+
+The warning fires **at most once per heating session** (suppressed by `slow_to_heat_sent` flag,
+reset when a new session starts).
+
+### Field Table
+
+| Field | Type | Source | Rationale |
+|---|---|---|---|
+| `schema` | string | hardcoded | Event type identifier. |
+| `ts` | ISO 8601 string | `utc_ts()` at emission | Emission timestamp. |
+| `zone` | string | `CLIMATE_ENTITIES[entity_id]` | Zone grouping key (e.g. `"floor_2"`). |
+| `entity_id` | string | HA climate entity | Ties event back to the thermostat. |
+| `elapsed_s` | int | `(now - heating_start_ts).total_seconds()` | How long the zone has been calling. |
+| `threshold_s` | int | `SLOW_TO_HEAT_THRESHOLDS_S[zone]` | The per-floor threshold that was exceeded. |
+| `start_temp` | float \| null | `heating_start_temp` from session state | Temperature when heating began. |
+| `current_temp` | float \| null | `current_temperature` attribute | Temperature at warning time. |
+| `setpoint` | float \| null | `temperature` attribute | Target setpoint not yet reached. |
+| `setpoint_delta` | float \| null | `setpoint - start_temp` | How much total warming was needed. |
+| `degrees_gained` | float \| null | `current_temp - start_temp` | How much warming has occurred so far. |
+| `outdoor_temp_f` | float \| null | `daily_state["last_outdoor_temp_f"]` | Outdoor context; cold weather is an expected driver of slow heat. |
+
+### JSON Example
+
+```json
+{
+  "schema": "homeops.consumer.zone_slow_to_heat_warning.v1",
+  "source": "consumer.v1",
+  "ts": "2026-01-15T07:45:12.003100+00:00",
+  "data": {
+    "zone": "floor_2",
+    "entity_id": "climate.floor_2_thermostat",
+    "elapsed_s": 1850,
+    "threshold_s": 1800,
+    "start_temp": 64.0,
+    "current_temp": 65.0,
+    "setpoint": 68.0,
+    "setpoint_delta": 4.0,
+    "degrees_gained": 1.0,
+    "outdoor_temp_f": 28.5
+  }
+}
+```

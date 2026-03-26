@@ -73,7 +73,7 @@ Every derived event is:
 
 > **Full authoritative schema reference:** [`docs/event-schemas/consumer-events.md`](../../docs/event-schemas/consumer-events.md)
 >
-> That document contains complete field tables with source/rationale columns, design notes, and planned (not-yet-implemented) events. The sections below are the working reference for the 14 currently implemented event types.
+> That document contains complete field tables with source/rationale columns, design notes, and planned (not-yet-implemented) events. The sections below are the working reference for the 15 currently implemented event types.
 
 The consumer emits fourteen derived event types. All share a common envelope.
 
@@ -597,6 +597,7 @@ All configuration is via environment variables.
 | `EVENT_LOG` | `state/observer/events.jsonl` | Path to the observer's output JSONL file to tail |
 | `DERIVED_EVENT_LOG` | `state/consumer/events.jsonl` | Path to write derived events (created if absent) |
 | `FLOOR_2_WARN_THRESHOLD_S` | `2700` | Seconds a floor-2 call must be active before a warning is emitted (default: 45 min) |
+| `OBSERVER_SILENCE_THRESHOLD_S` | `600` | Seconds of no observer events before a silence warning is emitted (default: 10 min) |
 | `TELEGRAM_BOT_TOKEN` | _(unset)_ | Telegram Bot API token for overheating alerts |
 | `TELEGRAM_CHAT_ID` | _(unset)_ | Telegram chat ID to receive overheating alerts |
 
