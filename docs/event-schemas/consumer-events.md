@@ -646,6 +646,7 @@ Check observer service on Pi.
 
 ---
 
+
 ## Event: `homeops.consumer.zone_slow_to_heat_warning.v1`
 
 Fires during an active heating session when a zone has been calling for heat longer than a
