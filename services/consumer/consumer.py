@@ -8,6 +8,9 @@ from pathlib import Path
 
 from dateutil.parser import isoparse
 
+# Add insights rules to path for floor_no_response rule
+sys.path.insert(0, str(Path(__file__).parent.parent.parent / "insights"))
+
 STATE_FILE = Path("state/consumer/state.json")
 
 
@@ -105,6 +108,12 @@ _FLOOR_ENTITIES = {
 }
 
 _ZONE_TO_FLOOR_ENTITY = {v: k for k, v in _FLOOR_ENTITIES.items()}
+
+_ZONE_TO_CLIMATE_ENTITY = {
+    "floor_1": "climate.floor_1_thermostat",
+    "floor_2": "climate.floor_2_thermostat",
+    "floor_3": "climate.floor_3_thermostat",
+}
 
 CLIMATE_ENTITIES = {
     "climate.floor_1_thermostat": "floor_1",
@@ -733,6 +742,11 @@ def main():
     floor_entities = _FLOOR_ENTITIES
     floor_2_warn_sent = False  # reset each time floor 2 starts a new call
 
+    # Floor-not-responding rule (temp-based: zone calling > threshold with no temp rise).
+    from rules.floor_no_response import FloorNoResponseRule  # noqa: PLC0415
+
+    floor_no_response_rule = FloorNoResponseRule()
+
     # Attempt to resume from a recent state file; otherwise cold-start.
     saved = _load_state()
     fresh_restart = True  # always set on any restart (cold or resume)
@@ -821,8 +835,18 @@ def main():
                 )
                 for derived in derived_events:
                     fresh_restart = _emit_derived(derived, derived_log, fresh_restart)
+                    if derived["schema"] == "homeops.consumer.floor_call_started.v1":
+                        zone = derived["data"]["floor"]
+                        climate_eid = _ZONE_TO_CLIMATE_ENTITY.get(zone)
+                        start_temp = None
+                        if climate_eid:
+                            start_temp = (climate_state.get(climate_eid) or {}).get("current_temp")
+                        floor_no_response_rule.on_floor_call_started(
+                            zone, ts or datetime.now(UTC), start_temp
+                        )
                     if derived["schema"] == "homeops.consumer.floor_call_ended.v1":
                         d = derived["data"]
+                        floor_no_response_rule.on_floor_call_ended(d["floor"])
                         if d.get("duration_s") is not None:
                             eid = d["entity_id"]
                             daily_state["floor_runtime_s"][eid] = (
@@ -866,6 +890,11 @@ def main():
                 )
                 for derived in derived_events:
                     fresh_restart = _emit_derived(derived, derived_log, fresh_restart)
+                # Feed temperature updates to the floor-not-responding rule.
+                zone = CLIMATE_ENTITIES.get(entity_id)
+                current_temp = (attributes or {}).get("current_temperature")
+                if zone and current_temp is not None:
+                    floor_no_response_rule.on_temp_updated(zone, current_temp)
                 _save_state(floor_on_since, furnace_on_since, climate_state, daily_state)
 
             # Whole-home heating sessions are derived from furnace on/off transitions.
@@ -908,6 +937,42 @@ def main():
                 print(
                     f"[{utc_ts()}] WARN: TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID"
                     " not set, skipping alert",
+                    flush=True,
+                )
+
+        # In-flight floor-not-responding check (runs on every event and on timeouts)
+        for finding in floor_no_response_rule.check(datetime.now(UTC)):
+            no_resp_event = {
+                "schema": "homeops.consumer.floor_no_response_warning.v1",
+                "source": "consumer.v1",
+                "ts": utc_ts(),
+                "data": finding,
+            }
+            fresh_restart = _emit_derived(no_resp_event, derived_log, fresh_restart)
+            zone_label = finding["zone"].replace("_", " ").title()
+            if telegram_bot_token and telegram_chat_id:
+                import urllib.parse as _parse
+                import urllib.request as _urllib
+
+                start_t = finding["start_temp"]
+                curr_t = finding["current_temp"]
+                elapsed_m = finding["minutes_elapsed"]
+                msg = (
+                    f"⚠️ {zone_label} not responding!\n"
+                    f"Calling for {elapsed_m:.0f} min with no temperature increase.\n"
+                    f"Start temp: {start_t}°F, Current: {curr_t}°F\n"
+                    f"Check thermostat or vents."
+                )
+                url = f"https://api.telegram.org/bot{telegram_bot_token}/sendMessage"
+                data = _parse.urlencode({"chat_id": telegram_chat_id, "text": msg}).encode()
+                try:
+                    _urllib.urlopen(url, data=data, timeout=10)
+                except Exception as e:
+                    print(f"[{utc_ts()}] WARN: Telegram alert failed: {e}", flush=True)
+            else:
+                print(
+                    f"[{utc_ts()}] WARN: TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID"
+                    " not set, skipping floor-not-responding alert",
                     flush=True,
                 )
 
