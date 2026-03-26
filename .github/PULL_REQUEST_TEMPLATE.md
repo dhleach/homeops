@@ -8,7 +8,7 @@
 
 ## Checklist
 
-- [ ] READMEs updated (root, `services/consumer/`, `services/observer/`) if behavior/config/events changed
+- [ ] READMEs reviewed (root, `services/consumer/`, `services/observer/`) — updated if anything changed, confirmed accurate if not
 - [ ] Event schema docs updated (`docs/event-schemas/consumer-events.md`) if new events added
 - [ ] Ruff lint/format clean (`ruff check services/ && ruff format --check services/`)
 - [ ] Tests added or updated
