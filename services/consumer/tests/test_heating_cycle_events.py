@@ -575,6 +575,87 @@ class TestZoneSetpointMiss:
         schemas = [e["schema"] for e in events]
         assert SCHEMA_ZONE_SETPOINT_MISS not in schemas
 
+    def test_no_fire_when_setpoint_delta_zero(self):
+        """zone_setpoint_miss.v1 is skipped when start_temp == setpoint (nothing to heat)."""
+        prev = make_prev_heating(
+            FLOOR_1_CLIMATE,
+            setpoint=70.0,
+            current_temp=70.0,
+            heating_start_temp=70.0,
+            setpoint_reached_ts=None,
+            session_temps=[70.0],
+        )
+        attrs = {"temperature": 70.0, "current_temperature": 70.0, "hvac_action": "idle"}
+
+        events, _ = process_climate_event(
+            FLOOR_1_CLIMATE, attrs, TS_UNDERSHOOT_END, prev, new_state="heat"
+        )
+
+        schemas = [e["schema"] for e in events]
+        assert SCHEMA_ZONE_SETPOINT_MISS not in schemas
+
+    def test_no_fire_when_setpoint_delta_negative(self):
+        """zone_setpoint_miss.v1 is skipped when start_temp > setpoint (already above target)."""
+        prev = make_prev_heating(
+            FLOOR_1_CLIMATE,
+            setpoint=69.0,
+            current_temp=70.5,
+            heating_start_temp=70.5,
+            setpoint_reached_ts=None,
+            session_temps=[70.5],
+        )
+        attrs = {"temperature": 69.0, "current_temperature": 70.5, "hvac_action": "idle"}
+
+        events, _ = process_climate_event(
+            FLOOR_1_CLIMATE, attrs, TS_UNDERSHOOT_END, prev, new_state="heat"
+        )
+
+        schemas = [e["schema"] for e in events]
+        assert SCHEMA_ZONE_SETPOINT_MISS not in schemas
+
+    def test_no_fire_when_closest_temp_reaches_setpoint(self):
+        """zone_setpoint_miss.v1 is skipped when closest_temp >= setpoint (fallback guard)."""
+        prev = make_prev_heating(
+            FLOOR_1_CLIMATE,
+            setpoint=71.0,
+            current_temp=70.0,
+            heating_start_temp=68.0,
+            setpoint_reached_ts=None,
+            session_temps=[68.5, 69.5, 70.5, 71.0],  # reached setpoint in session
+        )
+        attrs = {"temperature": 71.0, "current_temperature": 70.0, "hvac_action": "idle"}
+
+        events, _ = process_climate_event(
+            FLOOR_1_CLIMATE, attrs, TS_UNDERSHOOT_END, prev, new_state="heat"
+        )
+
+        schemas = [e["schema"] for e in events]
+        assert SCHEMA_ZONE_SETPOINT_MISS not in schemas
+
+    def test_fires_when_genuine_miss(self):
+        """zone_setpoint_miss.v1 fires when start_temp < setpoint and closest_temp < setpoint."""
+        prev = make_prev_heating(
+            FLOOR_1_CLIMATE,
+            setpoint=72.0,
+            current_temp=69.0,
+            heating_start_temp=67.0,
+            heating_start_ts_str=TS_START,
+            setpoint_reached_ts=None,
+            session_temps=[67.5, 68.0, 69.0],
+        )
+        attrs = {"temperature": 72.0, "current_temperature": 69.0, "hvac_action": "idle"}
+
+        events, _ = process_climate_event(
+            FLOOR_1_CLIMATE, attrs, TS_UNDERSHOOT_END, prev, new_state="heat"
+        )
+
+        schemas = [e["schema"] for e in events]
+        assert SCHEMA_ZONE_SETPOINT_MISS in schemas
+        evt = next(e for e in events if e["schema"] == SCHEMA_ZONE_SETPOINT_MISS)
+        assert evt["data"]["setpoint_delta"] == 5.0  # 72 - 67
+        assert evt["data"]["closest_temp"] == 69.0
+        assert evt["data"]["delta"] == 3.0  # 72 - 69
+
     def test_setpoint_changed_flag_set_when_setpoint_changes_during_heating(self):
         """setpoint_changed_during_heating is set True when setpoint changes while heating."""
         prev = make_prev_heating(
