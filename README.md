@@ -11,7 +11,7 @@ Home Assistant alone can't prevent this. It sees state changes; it doesn't reaso
 ## What It Does
 
 - **Real-time overheating prevention** — tracks how long floor 2 has been calling for heat; fires a Telegram alert before the limit switch trips (configurable threshold, default 45 min)
-- **14 derived event types** from raw HA state changes — floor call sessions, furnace sessions, thermostat setpoint/mode/temp changes, outdoor temperature, and a daily furnace summary
+- **15 derived event types** from raw HA state changes — floor call sessions, furnace sessions, thermostat setpoint/mode/temp changes, outdoor temperature, daily summaries, and observer silence watchdog
 - **Heating cycle analytics** — `zone_time_to_temp` (how fast each zone heats), `zone_overshoot` (how far past setpoint the zone runs), `zone_undershoot` (calls that fail to reach setpoint, with a `likely_cause` field)
 - **Thermostat entity tracking** — setpoint changes, mode changes, current temp updates, and setpoint-reached events per zone
 - **Event-driven pipeline** — observer writes raw `state_changed` events to JSONL; consumer tails that file and emits semantically rich derived events downstream
@@ -46,7 +46,7 @@ Both services run as independent `systemd` units on the same Pi and communicate 
 
 ## Event Types
 
-The consumer emits **14 derived event types**:
+The consumer emits **15 derived event types**:
 
 | Category | Events |
 |---|---|
@@ -55,7 +55,7 @@ The consumer emits **14 derived event types**:
 | Thermostat state | `thermostat_setpoint_changed.v1`, `thermostat_current_temp_updated.v1`, `thermostat_mode_changed.v1`, `thermostat_setpoint_reached.v1` |
 | Heating performance | `zone_time_to_temp.v1`, `zone_overshoot.v1`, `zone_undershoot.v1` |
 | Environmental | `outdoor_temp_updated.v1` |
-| Alerting | `floor_2_long_call_warning.v1` |
+| Alerting | `floor_2_long_call_warning.v1`, `observer_silence_warning.v1` |
 | Summaries | `furnace_daily_summary.v1` |
 
 All events share a common envelope (`schema`, `source`, `ts`, `data`) and are written as newline-delimited JSON.

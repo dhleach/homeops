@@ -615,6 +615,41 @@ def check_floor_2_warning(
     return warn_event, True
 
 
+def check_observer_silence(
+    last_event_ts: datetime | None,
+    observer_silence_sent: bool,
+    threshold_s: int,
+    now_ts: datetime,
+) -> tuple[dict | None, bool]:
+    """
+    Check whether the observer has been silent longer than threshold_s.
+
+    Returns (warning_event_or_None, updated_observer_silence_sent).
+    Only fires once per silence episode (deduplicated via observer_silence_sent flag).
+    """
+    if observer_silence_sent:
+        return None, observer_silence_sent
+
+    if last_event_ts is None:
+        return None, observer_silence_sent
+
+    silence_s = int((now_ts - last_event_ts).total_seconds())
+    if silence_s < threshold_s:
+        return None, observer_silence_sent
+
+    warn_event = {
+        "schema": "homeops.consumer.observer_silence_warning.v1",
+        "source": "consumer.v1",
+        "ts": utc_ts(),
+        "data": {
+            "last_event_ts": last_event_ts.isoformat(),
+            "silence_s": silence_s,
+            "threshold_s": threshold_s,
+        },
+    }
+    return warn_event, True
+
+
 def _empty_daily_state() -> dict:
     return {
         "furnace_runtime_s": 0,
@@ -759,6 +794,10 @@ def main():
         + ", ".join(f"{z}={t}s" for z, t in SLOW_TO_HEAT_THRESHOLDS_S.items()),
         flush=True,
     )
+    observer_silence_threshold_s = int(
+        os.environ.get("OBSERVER_SILENCE_THRESHOLD_S", "600")
+    )  # 10 min
+    print(f"[{utc_ts()}] Observer silence threshold: {observer_silence_threshold_s}s", flush=True)
     telegram_bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
     telegram_chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
 
@@ -766,6 +805,8 @@ def main():
 
     floor_entities = _FLOOR_ENTITIES
     floor_2_warn_sent = False  # reset each time floor 2 starts a new call
+    last_observer_event_ts: datetime | None = None
+    observer_silence_sent = False  # reset when a new event arrives after silence
 
     # Floor-not-responding rule (temp-based: zone calling > threshold with no temp rise).
     from rules.floor_no_response import FloorNoResponseRule  # noqa: PLC0415
@@ -824,6 +865,12 @@ def main():
             # Ignore non-observer events if this file is shared with other producers.
             if schema != "homeops.observer.state_changed.v1":
                 continue
+
+            # Track last observer event time for silence watchdog.
+            last_observer_event_ts = datetime.now(UTC)
+            if observer_silence_sent:
+                # New event arrived after a silence period — reset dedup flag.
+                observer_silence_sent = False
 
             ts_str = evt.get("ts")
             data = evt.get("data", {})
@@ -1016,6 +1063,41 @@ def main():
                 print(
                     f"[{utc_ts()}] WARN: TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID"
                     " not set, skipping alert",
+                    flush=True,
+                )
+
+        # Observer silence watchdog (runs on every event and on timeouts)
+        silence_event, observer_silence_sent = check_observer_silence(
+            last_observer_event_ts,
+            observer_silence_sent,
+            observer_silence_threshold_s,
+            datetime.now(UTC),
+        )
+        if silence_event:
+            fresh_restart = _emit_derived(silence_event, derived_log, fresh_restart)
+            if telegram_bot_token and telegram_chat_id:
+                import urllib.parse as _parse
+                import urllib.request as _urllib
+
+                silence_s = silence_event["data"]["silence_s"]
+                last_ts = silence_event["data"]["last_event_ts"]
+                silence_min = silence_s // 60
+                msg = (
+                    f"⚠️ Observer silence detected!\n"
+                    f"No events received for {silence_min} min.\n"
+                    f"Last event: {last_ts}\n"
+                    f"Check observer service on Pi."
+                )
+                url = f"https://api.telegram.org/bot{telegram_bot_token}/sendMessage"
+                data = _parse.urlencode({"chat_id": telegram_chat_id, "text": msg}).encode()
+                try:
+                    _urllib.urlopen(url, data=data, timeout=10)
+                except Exception as e:
+                    print(f"[{utc_ts()}] WARN: Telegram alert failed: {e}", flush=True)
+            else:
+                print(
+                    f"[{utc_ts()}] WARN: TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID"
+                    " not set, skipping observer silence alert",
                     flush=True,
                 )
 
