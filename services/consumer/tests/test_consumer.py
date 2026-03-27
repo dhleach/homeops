@@ -7,6 +7,7 @@ from unittest import mock
 
 import pytest
 from consumer import (
+    SLOW_TO_HEAT_THRESHOLDS_S,
     _emit_derived,
     _load_state,
     _register_sigterm_handler,
@@ -1156,3 +1157,182 @@ class TestCheckObserverSilence:
         event, sent = check_observer_silence(None, False, self.THRESHOLD_S, now)
         assert event is None
         assert sent is False
+
+
+# ---------------------------------------------------------------------------
+# zone_slow_to_heat_warning.v1
+# ---------------------------------------------------------------------------
+
+CLIMATE_FLOOR_2 = "climate.floor_2_thermostat"
+
+THRESHOLD_FLOOR_1 = SLOW_TO_HEAT_THRESHOLDS_S["floor_1"]  # 900 s default
+THRESHOLD_FLOOR_2 = SLOW_TO_HEAT_THRESHOLDS_S["floor_2"]  # 1800 s default
+
+
+def _slow_to_heat_state(entity_id, start_temp=64.0, setpoint=68.0, elapsed_s=0, slow_sent=False):
+    """Return a climate_state dict simulating an in-progress heating session."""
+    start_ts = TS - timedelta(seconds=elapsed_s)
+    return {
+        entity_id: {
+            "setpoint": setpoint,
+            "current_temp": start_temp,
+            "hvac_mode": "heat",
+            "hvac_action": "heating",
+            "heating_start_temp": start_temp,
+            "heating_start_ts": start_ts,
+            "setpoint_reached_ts": None,
+            "setpoint_reached_temp": None,
+            "post_setpoint_temps": [],
+            "session_temps": [],
+            "heating_start_other_zones": [],
+            "setpoint_changed_during_heating": False,
+            "slow_to_heat_sent": slow_sent,
+        }
+    }
+
+
+class TestZoneSlowToHeatWarning:
+    """Tests for zone_slow_to_heat_warning.v1 emission in process_climate_event."""
+
+    def test_slow_to_heat_warning_not_emitted_before_threshold(self):
+        """No warning when elapsed time is below the per-floor threshold."""
+        entity_id = CLIMATE_FLOOR_1
+        elapsed_s = THRESHOLD_FLOOR_1 - 1  # one second short
+        climate_state = _slow_to_heat_state(
+            entity_id, start_temp=64.0, setpoint=68.0, elapsed_s=elapsed_s
+        )
+        attrs = _make_attrs(setpoint=68.0, current_temp=65.0, hvac_action="heating")
+        events, _ = process_climate_event(
+            entity_id,
+            attrs,
+            TS.isoformat(),
+            climate_state,
+            new_state="heat",
+        )
+        warn_events = [
+            e for e in events if e["schema"] == "homeops.consumer.zone_slow_to_heat_warning.v1"
+        ]
+        assert warn_events == []
+
+    def test_slow_to_heat_warning_emitted_after_threshold(self):
+        """Warning fires when elapsed time meets or exceeds the per-floor threshold."""
+        entity_id = CLIMATE_FLOOR_2
+        elapsed_s = THRESHOLD_FLOOR_2 + 60  # 1 minute over
+        climate_state = _slow_to_heat_state(
+            entity_id, start_temp=64.0, setpoint=68.0, elapsed_s=elapsed_s
+        )
+        attrs = _make_attrs(setpoint=68.0, current_temp=65.0, hvac_action="heating")
+        events, updated = process_climate_event(
+            entity_id,
+            attrs,
+            TS.isoformat(),
+            climate_state,
+            new_state="heat",
+        )
+        warn_events = [
+            e for e in events if e["schema"] == "homeops.consumer.zone_slow_to_heat_warning.v1"
+        ]
+        assert len(warn_events) == 1
+        d = warn_events[0]["data"]
+        assert d["zone"] == "floor_2"
+        assert d["entity_id"] == entity_id
+        assert d["elapsed_s"] >= THRESHOLD_FLOOR_2
+        assert d["threshold_s"] == THRESHOLD_FLOOR_2
+        assert d["start_temp"] == pytest.approx(64.0)
+        assert d["current_temp"] == pytest.approx(65.0)
+        assert d["setpoint"] == pytest.approx(68.0)
+        assert d["setpoint_delta"] == pytest.approx(4.0)
+        assert d["degrees_gained"] == pytest.approx(1.0)
+        assert d["outdoor_temp_f"] is None
+        # Flag is persisted so the warning won't fire again this session.
+        assert updated[entity_id]["slow_to_heat_sent"] is True
+
+    def test_slow_to_heat_warning_not_emitted_if_setpoint_already_reached(self):
+        """No warning when setpoint_reached_ts is set (zone already made it)."""
+        entity_id = CLIMATE_FLOOR_1
+        elapsed_s = THRESHOLD_FLOOR_1 + 300
+        start_ts = TS - timedelta(seconds=elapsed_s)
+        climate_state = {
+            entity_id: {
+                "setpoint": 68.0,
+                "current_temp": 68.0,
+                "hvac_mode": "heat",
+                "hvac_action": "heating",
+                "heating_start_temp": 64.0,
+                "heating_start_ts": start_ts,
+                "setpoint_reached_ts": start_ts + timedelta(seconds=700),
+                "setpoint_reached_temp": 68.0,
+                "post_setpoint_temps": [68.0],
+                "session_temps": [65.0, 66.0, 68.0],
+                "heating_start_other_zones": [],
+                "setpoint_changed_during_heating": False,
+                "slow_to_heat_sent": False,
+            }
+        }
+        attrs = _make_attrs(setpoint=68.0, current_temp=68.5, hvac_action="heating")
+        events, _ = process_climate_event(
+            entity_id,
+            attrs,
+            TS.isoformat(),
+            climate_state,
+            new_state="heat",
+        )
+        warn_events = [
+            e for e in events if e["schema"] == "homeops.consumer.zone_slow_to_heat_warning.v1"
+        ]
+        assert warn_events == []
+
+    def test_slow_to_heat_warning_not_emitted_twice_per_session(self):
+        """Warning fires at most once per heating session (slow_to_heat_sent flag)."""
+        entity_id = CLIMATE_FLOOR_1
+        elapsed_s = THRESHOLD_FLOOR_1 + 300
+        # slow_to_heat_sent already True from a prior call.
+        climate_state = _slow_to_heat_state(
+            entity_id, start_temp=64.0, setpoint=68.0, elapsed_s=elapsed_s, slow_sent=True
+        )
+        attrs = _make_attrs(setpoint=68.0, current_temp=65.0, hvac_action="heating")
+        events, updated = process_climate_event(
+            entity_id,
+            attrs,
+            TS.isoformat(),
+            climate_state,
+            new_state="heat",
+        )
+        warn_events = [
+            e for e in events if e["schema"] == "homeops.consumer.zone_slow_to_heat_warning.v1"
+        ]
+        assert warn_events == []
+        assert updated[entity_id]["slow_to_heat_sent"] is True  # flag unchanged
+
+    def test_slow_to_heat_warning_resets_on_new_session(self):
+        """slow_to_heat_sent is cleared when a new heating session starts."""
+        entity_id = CLIMATE_FLOOR_1
+        # Previous session had the flag set and hvac went idle.
+        climate_state = {
+            entity_id: {
+                "setpoint": 68.0,
+                "current_temp": 68.0,
+                "hvac_mode": "heat",
+                "hvac_action": "idle",  # session ended
+                "heating_start_temp": None,
+                "heating_start_ts": None,
+                "setpoint_reached_ts": None,
+                "setpoint_reached_temp": None,
+                "post_setpoint_temps": [],
+                "session_temps": [],
+                "heating_start_other_zones": [],
+                "setpoint_changed_during_heating": False,
+                "slow_to_heat_sent": True,  # was set in prior session
+            }
+        }
+        # New heating session starts.
+        attrs = _make_attrs(setpoint=68.0, current_temp=64.0, hvac_action="heating")
+        _, updated = process_climate_event(
+            entity_id,
+            attrs,
+            TS.isoformat(),
+            climate_state,
+            new_state="heat",
+            floor_on_since=make_floor_on_since(),
+        )
+        assert updated[entity_id]["slow_to_heat_sent"] is False

@@ -303,6 +303,7 @@ def process_climate_event(
     heating_start_other_zones = prev.get("heating_start_other_zones")
     setpoint_changed_during_heating = prev.get("setpoint_changed_during_heating", False)
     session_temps = list(prev.get("session_temps") or [])
+    slow_to_heat_sent = prev.get("slow_to_heat_sent", False)
 
     # Detect heating session start: hvac_action transitions TO "heating".
     if prev_hvac_action != "heating" and hvac_action == "heating":
@@ -313,6 +314,7 @@ def process_climate_event(
         post_setpoint_temps = []
         setpoint_changed_during_heating = False
         session_temps = []
+        slow_to_heat_sent = False
         this_floor_entity = _ZONE_TO_FLOOR_ENTITY.get(zone)
         heating_start_other_zones = [
             k for k, v in floor_on_since.items() if v is not None and k != this_floor_entity
@@ -496,6 +498,48 @@ def process_climate_event(
         session_temps = []
         heating_start_other_zones = None
         setpoint_changed_during_heating = False
+        slow_to_heat_sent = False
+
+    # Slow-to-heat check: zone has been calling longer than threshold without reaching setpoint.
+    if (
+        hvac_action == "heating"
+        and heating_start_ts is not None
+        and setpoint_reached_ts is None
+        and not slow_to_heat_sent
+        and ts is not None
+        and zone in SLOW_TO_HEAT_THRESHOLDS_S
+    ):
+        threshold_s = SLOW_TO_HEAT_THRESHOLDS_S[zone]
+        elapsed_s = int((ts - heating_start_ts).total_seconds())
+        if elapsed_s >= threshold_s:
+            events.append(
+                {
+                    "schema": "homeops.consumer.zone_slow_to_heat_warning.v1",
+                    "source": "consumer.v1",
+                    "ts": utc_ts(),
+                    "data": {
+                        "zone": zone,
+                        "entity_id": entity_id,
+                        "elapsed_s": elapsed_s,
+                        "threshold_s": threshold_s,
+                        "start_temp": heating_start_temp,
+                        "current_temp": current_temp,
+                        "setpoint": setpoint,
+                        "setpoint_delta": (
+                            setpoint - heating_start_temp
+                            if setpoint is not None and heating_start_temp is not None
+                            else None
+                        ),
+                        "degrees_gained": (
+                            current_temp - heating_start_temp
+                            if current_temp is not None and heating_start_temp is not None
+                            else None
+                        ),
+                        "outdoor_temp_f": daily_state.get("last_outdoor_temp_f"),
+                    },
+                }
+            )
+            slow_to_heat_sent = True
 
     updated_state = dict(climate_state)
     updated_state[entity_id] = {
@@ -511,6 +555,7 @@ def process_climate_event(
         "session_temps": session_temps,
         "heating_start_other_zones": heating_start_other_zones,
         "setpoint_changed_during_heating": setpoint_changed_during_heating,
+        "slow_to_heat_sent": slow_to_heat_sent,
     }
 
     return events, updated_state
