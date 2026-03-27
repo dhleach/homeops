@@ -347,6 +347,9 @@ accumulated in `daily_state`.
 | `per_floor_runtime_s` | object | `{floor_name: int}` for `floor_1`, `floor_2`, `floor_3` | Total call duration per zone in seconds, keyed by floor name. Zones with no calls have a value of `0`. |
 | `outdoor_temp_min_f` | float \| null | `min(outdoor_temps)` across all `outdoor_temp_updated.v1` events on this date | Coldest outdoor reading of the day. `null` if no outdoor temperature readings were received. |
 | `outdoor_temp_max_f` | float \| null | `max(outdoor_temps)` | Warmest outdoor reading of the day. `null` if no readings received. |
+| `outdoor_temp_avg_f` | float \| null | `mean(outdoor_temps)`, rounded to 1 decimal place | Average outdoor temperature for the day. `null` if no readings received. |
+| `per_floor_session_count` | object | `{floor_name: int}` for `floor_1`, `floor_2`, `floor_3` | Count of completed floor heating sessions per zone for the day. Zones with no sessions have a value of `0`. |
+| `warnings_triggered` | object | `{warning_type: int}` | Counts of each warning type fired during the day. Keys: `floor_2_long_call`, `floor_no_response`, `zone_slow_to_heat`, `observer_silence`, `setpoint_miss`. All zero on quiet days. |
 
 ### JSON Example
 
@@ -365,7 +368,20 @@ accumulated in `daily_state`.
       "floor_3": 5400
     },
     "outdoor_temp_min_f": 22.1,
-    "outdoor_temp_max_f": 38.6
+    "outdoor_temp_max_f": 38.6,
+    "outdoor_temp_avg_f": 30.4,
+    "per_floor_session_count": {
+      "floor_1": 4,
+      "floor_2": 2,
+      "floor_3": 1
+    },
+    "warnings_triggered": {
+      "floor_2_long_call": 0,
+      "floor_no_response": 0,
+      "zone_slow_to_heat": 1,
+      "observer_silence": 0,
+      "setpoint_miss": 0
+    }
   }
 }
 ```

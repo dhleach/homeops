@@ -9,11 +9,14 @@ import pytest
 from consumer import (
     SLOW_TO_HEAT_THRESHOLDS_S,
     _emit_derived,
+    _empty_daily_state,
     _load_state,
     _register_sigterm_handler,
     _save_state,
     check_floor_2_warning,
     check_observer_silence,
+    emit_daily_summary,
+    format_daily_summary_message,
     last_furnace_on_since,
     process_climate_event,
     process_floor_event,
@@ -1336,3 +1339,214 @@ class TestZoneSlowToHeatWarning:
             floor_on_since=make_floor_on_since(),
         )
         assert updated[entity_id]["slow_to_heat_sent"] is False
+
+
+# ---------------------------------------------------------------------------
+# emit_daily_summary — new fields
+# ---------------------------------------------------------------------------
+
+
+class TestEmitDailySummaryNewFields:
+    """Tests for new fields added in the daily-efficiency-summary feature."""
+
+    def _make_state(
+        self,
+        outdoor_temps=None,
+        per_floor_session_count=None,
+        warnings_triggered=None,
+        floor_runtime_s=None,
+        session_count=3,
+        furnace_runtime_s=7200,
+    ) -> dict:
+        state = _empty_daily_state()
+        state["session_count"] = session_count
+        state["furnace_runtime_s"] = furnace_runtime_s
+        if outdoor_temps is not None:
+            state["outdoor_temps"] = outdoor_temps
+        if per_floor_session_count is not None:
+            state["per_floor_session_count"] = per_floor_session_count
+        if warnings_triggered is not None:
+            state["warnings_triggered"] = warnings_triggered
+        if floor_runtime_s is not None:
+            state["floor_runtime_s"] = floor_runtime_s
+        return state
+
+    def test_outdoor_temp_avg_calculated_correctly(self):
+        """outdoor_temp_avg_f should be the mean of outdoor_temps, rounded to 1 dp."""
+        state = self._make_state(outdoor_temps=[20.0, 30.0, 40.0])
+        evt = emit_daily_summary(state, "2026-01-15")
+        assert evt["data"]["outdoor_temp_avg_f"] == 30.0
+
+    def test_outdoor_temp_avg_none_when_no_readings(self):
+        """outdoor_temp_avg_f should be None when outdoor_temps list is empty."""
+        state = self._make_state(outdoor_temps=[])
+        evt = emit_daily_summary(state, "2026-01-15")
+        assert evt["data"]["outdoor_temp_avg_f"] is None
+
+    def test_per_floor_session_count_in_event(self):
+        """per_floor_session_count should map floor names to session counts."""
+        pfsc = {
+            "binary_sensor.floor_1_heating_call": 4,
+            "binary_sensor.floor_2_heating_call": 2,
+            "binary_sensor.floor_3_heating_call": 1,
+        }
+        state = self._make_state(per_floor_session_count=pfsc)
+        evt = emit_daily_summary(state, "2026-01-15")
+        data = evt["data"]["per_floor_session_count"]
+        assert data["floor_1"] == 4
+        assert data["floor_2"] == 2
+        assert data["floor_3"] == 1
+
+    def test_warnings_triggered_passed_through(self):
+        """warnings_triggered dict should appear in event data."""
+        warnings = {
+            "floor_2_long_call": 2,
+            "floor_no_response": 1,
+            "zone_slow_to_heat": 0,
+            "observer_silence": 0,
+            "setpoint_miss": 3,
+        }
+        state = self._make_state(warnings_triggered=warnings)
+        evt = emit_daily_summary(state, "2026-01-15")
+        assert evt["data"]["warnings_triggered"] == warnings
+
+    def test_empty_daily_state_has_new_fields(self):
+        """_empty_daily_state() must contain per_floor_session_count and warnings_triggered."""
+        state = _empty_daily_state()
+        assert "per_floor_session_count" in state
+        assert "warnings_triggered" in state
+        assert state["per_floor_session_count"] == {
+            "binary_sensor.floor_1_heating_call": 0,
+            "binary_sensor.floor_2_heating_call": 0,
+            "binary_sensor.floor_3_heating_call": 0,
+        }
+        assert state["warnings_triggered"] == {
+            "floor_2_long_call": 0,
+            "floor_no_response": 0,
+            "zone_slow_to_heat": 0,
+            "observer_silence": 0,
+            "setpoint_miss": 0,
+        }
+
+
+# ---------------------------------------------------------------------------
+# format_daily_summary_message
+# ---------------------------------------------------------------------------
+
+
+class TestFormatDailySummaryMessage:
+    """Tests for the format_daily_summary_message helper."""
+
+    def _base_data(self, **overrides) -> dict:
+        data = {
+            "date": "2026-01-15",
+            "total_furnace_runtime_s": 7200,  # 2h 0m
+            "session_count": 5,
+            "per_floor_runtime_s": {
+                "floor_1": 3600,
+                "floor_2": 1800,
+                "floor_3": 1200,
+            },
+            "per_floor_session_count": {
+                "floor_1": 3,
+                "floor_2": 1,
+                "floor_3": 1,
+            },
+            "outdoor_temp_min_f": 22.0,
+            "outdoor_temp_max_f": 38.0,
+            "outdoor_temp_avg_f": 30.5,
+            "warnings_triggered": {
+                "floor_2_long_call": 0,
+                "floor_no_response": 0,
+                "zone_slow_to_heat": 0,
+                "observer_silence": 0,
+                "setpoint_miss": 0,
+            },
+        }
+        data.update(overrides)
+        return data
+
+    def test_header_contains_date(self):
+        """Message should start with summary header containing the date."""
+        msg = format_daily_summary_message(self._base_data())
+        assert "📊 Daily Heating Summary — 2026-01-15" in msg
+
+    def test_outdoor_temp_line_present(self):
+        """Outdoor temp line should show min, max, and avg when data is available."""
+        msg = format_daily_summary_message(self._base_data())
+        assert "🌡️ Outdoor temp:" in msg
+        assert "22°F" in msg
+        assert "38°F" in msg
+        assert "30.5°F" in msg
+
+    def test_outdoor_temp_line_omitted_when_all_none(self):
+        """Outdoor temp line should be omitted when all outdoor temp values are None."""
+        data = self._base_data(
+            outdoor_temp_min_f=None, outdoor_temp_max_f=None, outdoor_temp_avg_f=None
+        )
+        msg = format_daily_summary_message(data)
+        assert "🌡️" not in msg
+
+    def test_zero_warnings_shows_none_checkmark(self):
+        """When all warnings are zero, the message should say 'None ✅'."""
+        msg = format_daily_summary_message(self._base_data())
+        assert "None ✅" in msg
+
+    def test_warnings_shown_when_nonzero(self):
+        """Non-zero warnings should be listed individually."""
+        data = self._base_data(
+            warnings_triggered={
+                "floor_2_long_call": 2,
+                "floor_no_response": 0,
+                "zone_slow_to_heat": 1,
+                "observer_silence": 0,
+                "setpoint_miss": 0,
+            }
+        )
+        msg = format_daily_summary_message(data)
+        assert "Floor-2 long call: 2" in msg
+        assert "Slow to heat: 1" in msg
+        # Zero-count lines should be omitted
+        assert "Floor no-response" not in msg
+        assert "Observer silence" not in msg
+
+    def test_floor2_avg_warning_appended_when_over_30min(self):
+        """Floor 2 line should append ⚠️ when avg session > 30 minutes."""
+        # floor_2: 1 session, 2000s runtime = ~33m avg (> 30m threshold)
+        data = self._base_data(
+            per_floor_runtime_s={"floor_1": 3600, "floor_2": 2000, "floor_3": 1200},
+            per_floor_session_count={"floor_1": 3, "floor_2": 1, "floor_3": 1},
+        )
+        msg = format_daily_summary_message(data)
+        lines = msg.splitlines()
+        floor2_line = next(ln for ln in lines if "Floor 2" in ln)
+        assert "⚠️" in floor2_line
+
+    def test_floor2_avg_no_warning_when_under_30min(self):
+        """Floor 2 line should NOT append ⚠️ when avg session ≤ 30 minutes."""
+        # floor_2: 2 sessions, 3000s total = 1500s avg = 25m (under threshold)
+        data = self._base_data(
+            per_floor_runtime_s={"floor_1": 3600, "floor_2": 3000, "floor_3": 1200},
+            per_floor_session_count={"floor_1": 3, "floor_2": 2, "floor_3": 1},
+        )
+        msg = format_daily_summary_message(data)
+        lines = msg.splitlines()
+        floor2_line = next(ln for ln in lines if "Floor 2" in ln)
+        assert "⚠️" not in floor2_line
+
+    def test_floor_with_zero_sessions_shows_no_avg(self):
+        """A floor with 0 sessions should show '0 sessions' with no avg."""
+        data = self._base_data(
+            per_floor_runtime_s={"floor_1": 0, "floor_2": 0, "floor_3": 0},
+            per_floor_session_count={"floor_1": 0, "floor_2": 0, "floor_3": 0},
+        )
+        msg = format_daily_summary_message(data)
+        assert "Floor 1: 0 sessions" in msg
+        assert "Floor 2: 0 sessions" in msg
+        assert "Floor 3: 0 sessions" in msg
+
+    def test_total_runtime_formatted_as_hours_and_minutes(self):
+        """Total furnace runtime should be expressed as Xh Ym."""
+        data = self._base_data(total_furnace_runtime_s=5400)  # 1h 30m
+        msg = format_daily_summary_message(data)
+        assert "1h 30m" in msg
