@@ -797,6 +797,52 @@ def check_observer_silence(
     return warn_event, True
 
 
+ZONE_TEMP_SNAPSHOT_INTERVAL_S = 300  # 5 minutes
+ZONE_TEMP_SNAPSHOT_LOG = "state/consumer/zone_temps.jsonl"
+
+
+def write_zone_temp_snapshot(
+    climate_state: dict,
+    daily_state: dict,
+    snapshot_log: str = ZONE_TEMP_SNAPSHOT_LOG,
+) -> bool:
+    """Write a zone_temp_snapshot.v1 record if climate_state has at least one zone.
+
+    Returns True if a snapshot was written, False otherwise.
+    """
+    if not climate_state:
+        return False
+
+    zones: dict = {}
+    for _eid, zone_data in climate_state.items():
+        zone_name = zone_data.get("zone")
+        if not zone_name:
+            continue
+        current_temp = zone_data.get("current_temp")
+        if current_temp is None:
+            continue
+        zones[zone_name] = {
+            "current_temp": current_temp,
+            "setpoint": zone_data.get("setpoint"),
+            "hvac_action": zone_data.get("hvac_action"),
+        }
+
+    if not zones:
+        return False
+
+    record = {
+        "schema": "homeops.consumer.zone_temp_snapshot.v1",
+        "source": "consumer.v1",
+        "ts": utc_ts(),
+        "data": {
+            "zones": zones,
+            "outdoor_temp_f": daily_state.get("last_outdoor_temp_f"),
+        },
+    }
+    append_jsonl(snapshot_log, record)
+    return True
+
+
 def _empty_daily_state() -> dict:
     return {
         "furnace_runtime_s": 0,
@@ -1007,6 +1053,7 @@ def main():
         daily_state = _empty_daily_state()
 
     current_date = datetime.now(UTC).strftime("%Y-%m-%d")
+    last_snapshot_ts: datetime | None = None
 
     # Main stream loop: consume observer events and emit higher-level derived events.
     for line in follow(path):
@@ -1326,6 +1373,16 @@ def main():
                     " not set, skipping floor-not-responding alert",
                     flush=True,
                 )
+
+        # Zone temperature snapshot — write every 5 minutes if we have data.
+        now = datetime.now(UTC)
+        if (
+            last_snapshot_ts is None
+            or (now - last_snapshot_ts).total_seconds() >= ZONE_TEMP_SNAPSHOT_INTERVAL_S
+        ):
+            if write_zone_temp_snapshot(climate_state, daily_state):
+                print(f"[{utc_ts()}] Zone temp snapshot written", flush=True)
+            last_snapshot_ts = now
 
 
 if __name__ == "__main__":
