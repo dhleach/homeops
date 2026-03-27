@@ -121,6 +121,14 @@ CLIMATE_ENTITIES = {
     "climate.floor_3_thermostat": "floor_3",
 }
 
+# Per-floor thresholds for the slow-to-heat warning (seconds).
+# Overridable via env vars: SLOW_TO_HEAT_THRESHOLD_FLOOR1_S / FLOOR2_S / FLOOR3_S.
+SLOW_TO_HEAT_THRESHOLDS_S: dict[str, int] = {
+    "floor_1": int(os.environ.get("SLOW_TO_HEAT_THRESHOLD_FLOOR1_S", "900")),  # 15 min
+    "floor_2": int(os.environ.get("SLOW_TO_HEAT_THRESHOLD_FLOOR2_S", "1800")),  # 30 min
+    "floor_3": int(os.environ.get("SLOW_TO_HEAT_THRESHOLD_FLOOR3_S", "600")),  # 10 min
+}
+
 
 def process_floor_event(
     entity_id, old_state, new_state, ts, ts_str, floor_on_since, floor_2_warn_sent
@@ -567,7 +575,9 @@ def emit_daily_summary(daily_state: dict, date_str: str) -> dict:
     }
 
 
-def check_floor_2_warning(floor_on_since, floor_2_warn_sent, floor_2_warn_threshold_s, now_ts):
+def check_floor_2_warning(
+    floor_on_since, floor_2_warn_sent, floor_2_warn_threshold_s, now_ts, climate_state=None
+):
     """
     Check whether the floor-2 long-call warning should fire.
 
@@ -585,6 +595,10 @@ def check_floor_2_warning(floor_on_since, floor_2_warn_sent, floor_2_warn_thresh
     if elapsed_s < floor_2_warn_threshold_s:
         return None, floor_2_warn_sent
 
+    f2_climate = (climate_state or {}).get("climate.floor_2_thermostat", {})
+    current_temp = f2_climate.get("current_temp")
+    setpoint = f2_climate.get("setpoint")
+
     warn_event = {
         "schema": "homeops.consumer.floor_2_long_call_warning.v1",
         "source": "consumer.v1",
@@ -594,6 +608,8 @@ def check_floor_2_warning(floor_on_since, floor_2_warn_sent, floor_2_warn_thresh
             "elapsed_s": elapsed_s,
             "threshold_s": floor_2_warn_threshold_s,
             "entity_id": f2_entity,
+            "current_temp": current_temp,
+            "setpoint": setpoint,
         },
     }
     return warn_event, True
@@ -738,6 +754,11 @@ def main():
 
     floor_2_warn_threshold_s = int(os.environ.get("FLOOR_2_WARN_THRESHOLD_S", "2700"))  # 45 min
     print(f"[{utc_ts()}] Floor-2 warning threshold: {floor_2_warn_threshold_s}s", flush=True)
+    print(
+        f"[{utc_ts()}] Slow-to-heat thresholds: "
+        + ", ".join(f"{z}={t}s" for z, t in SLOW_TO_HEAT_THRESHOLDS_S.items()),
+        flush=True,
+    )
     telegram_bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
     telegram_chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
 
@@ -894,6 +915,47 @@ def main():
                 )
                 for derived in derived_events:
                     fresh_restart = _emit_derived(derived, derived_log, fresh_restart)
+                    if derived["schema"] == "homeops.consumer.zone_slow_to_heat_warning.v1":
+                        d = derived["data"]
+                        zone_label = d["zone"].replace("_", " ").title()
+                        elapsed_min = d["elapsed_s"] // 60
+                        start_t = d["start_temp"]
+                        curr_t = d["current_temp"]
+                        sp = d["setpoint"]
+                        away = (
+                            round(sp - curr_t, 1) if sp is not None and curr_t is not None else None
+                        )
+                        away_str = f"{away}°" if away is not None else "?"
+                        msg = (
+                            f"⚠️ {zone_label} slow to heat!\n"
+                            f"Calling for {elapsed_min} min — setpoint not reached yet.\n"
+                            f"Start: {start_t}°F → Now: {curr_t}°F → Target: {sp}°F"
+                            f" ({away_str} away)"
+                        )
+                        outdoor_t = d.get("outdoor_temp_f")
+                        if outdoor_t is not None:
+                            msg += f"\nOutdoor temp: {round(outdoor_t)}°F"
+                        if telegram_bot_token and telegram_chat_id:
+                            import urllib.parse as _parse
+                            import urllib.request as _urllib
+
+                            url = f"https://api.telegram.org/bot{telegram_bot_token}/sendMessage"
+                            data = _parse.urlencode(
+                                {"chat_id": telegram_chat_id, "text": msg}
+                            ).encode()
+                            try:
+                                _urllib.urlopen(url, data=data, timeout=10)
+                            except Exception as e:
+                                print(
+                                    f"[{utc_ts()}] WARN: Telegram slow-to-heat alert failed: {e}",
+                                    flush=True,
+                                )
+                        else:
+                            print(
+                                f"[{utc_ts()}] WARN: TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID"
+                                " not set, skipping slow-to-heat alert",
+                                flush=True,
+                            )
                 # Feed temperature updates to the floor-not-responding rule.
                 zone = CLIMATE_ENTITIES.get(entity_id)
                 current_temp = (attributes or {}).get("current_temperature")
@@ -917,7 +979,11 @@ def main():
 
         # In-flight floor-2 long-call check (runs on every event and on timeouts)
         warn_event, floor_2_warn_sent = check_floor_2_warning(
-            floor_on_since, floor_2_warn_sent, floor_2_warn_threshold_s, datetime.now(UTC)
+            floor_on_since,
+            floor_2_warn_sent,
+            floor_2_warn_threshold_s,
+            datetime.now(UTC),
+            climate_state,
         )
         if warn_event:
             fresh_restart = _emit_derived(warn_event, derived_log, fresh_restart)
@@ -926,8 +992,17 @@ def main():
                 import urllib.request as _urllib
 
                 elapsed_s = warn_event["data"]["elapsed_s"]
+                current_temp = warn_event["data"].get("current_temp")
+                setpoint = warn_event["data"].get("setpoint")
+                temp_line = ""
+                if current_temp is not None and setpoint is not None:
+                    delta = abs(round(setpoint - current_temp))
+                    temp_line = (
+                        f"Current temp: {current_temp}°F → Setpoint: {setpoint}°F ({delta}° away)\n"
+                    )
                 msg = (
                     f"⚠️ Floor 2 has been calling for {elapsed_s // 60} min!\n"
+                    f"{temp_line}"
                     f"Risk of furnace overheating (Code 4/7 limit trip).\n"
                     f"Consider lowering floor 2 thermostat manually."
                 )

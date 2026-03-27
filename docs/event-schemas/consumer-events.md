@@ -1,7 +1,7 @@
 # Consumer Event Schemas
 
 This document is the reference for all consumer events emitted by
-`services/consumer/consumer.py` into `state/consumer/events.jsonl`. It covers **10 implemented
+`services/consumer/consumer.py` into `state/consumer/events.jsonl`. It covers **11 implemented
 events** and **3 planned events** (not yet implemented). All events are derived from raw
 `homeops.observer.state_changed.v1` records and represent higher-level state transitions
 (floor calls, furnace sessions, thermostat changes, outdoor temperature readings, daily
@@ -586,6 +586,60 @@ extreme cold that triggered an early shutoff.
     "outdoor_temp_f": 14.2,
     "other_zones_calling": ["binary_sensor.floor_1_heating_call", "binary_sensor.floor_2_heating_call"],
     "likely_cause": "unknown"
+  }
+}
+```
+
+---
+
+## Event: `homeops.consumer.observer_silence_warning.v1`
+
+Fires when the consumer has received no `homeops.observer.state_changed.v1` events for longer
+than `OBSERVER_SILENCE_THRESHOLD_S` seconds (default: 600 s / 10 min). This indicates the
+observer service may have disconnected from Home Assistant, the WebSocket may have hung, or
+the Pi may have lost network connectivity.
+
+**Deduplication:** only one warning fires per silence episode. The flag resets when a new
+observer event arrives, allowing the watchdog to re-arm for subsequent episodes.
+
+### Field Table
+
+| Field | Type | Source | Rationale |
+|---|---|---|---|
+| `schema` | string | hardcoded | Event type identifier. |
+| `ts` | ISO 8601 string | `utc_ts()` at emission | Emission timestamp. |
+| `data.last_event_ts` | ISO 8601 string | `last_observer_event_ts.isoformat()` | Timestamp of the last event received from the observer, for triage. |
+| `data.silence_s` | int | `(now - last_event_ts).total_seconds()` | Observed silence duration in seconds at the time of emission. |
+| `data.threshold_s` | int | `OBSERVER_SILENCE_THRESHOLD_S` env var (default 600) | Configured threshold that was exceeded. |
+
+### Telegram Alert
+
+When `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` are set, the consumer sends:
+
+```
+⚠️ Observer silence detected!
+No events received for <N> min.
+Last event: <last_event_ts>
+Check observer service on Pi.
+```
+
+### Configuration
+
+| Env var | Default | Description |
+|---|---|---|
+| `OBSERVER_SILENCE_THRESHOLD_S` | `600` | Seconds of silence before alert fires. |
+
+### JSON Example
+
+```json
+{
+  "schema": "homeops.consumer.observer_silence_warning.v1",
+  "source": "consumer.v1",
+  "ts": "2026-03-26T19:10:00.000000+00:00",
+  "data": {
+    "last_event_ts": "2026-03-26T18:58:00.000000+00:00",
+    "silence_s": 720,
+    "threshold_s": 600
   }
 }
 ```

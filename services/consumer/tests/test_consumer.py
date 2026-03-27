@@ -12,6 +12,7 @@ from consumer import (
     _register_sigterm_handler,
     _save_state,
     check_floor_2_warning,
+    check_observer_silence,
     last_furnace_on_since,
     process_climate_event,
     process_floor_event,
@@ -669,7 +670,7 @@ class TestZoneSetpointMiss:
         assert miss_events[0]["data"]["closest_temp"] == pytest.approx(66.5)
 
     def test_miss_with_thermostat_adjustment_likely_cause_field(self):
-        """zone_setpoint_miss.v1 includes likely_cause='thermostat_adjustment' when setpoint changed."""
+        """zone_setpoint_miss.v1 includes likely_cause='thermostat_adjustment' when setpoint changed."""  # noqa: E501
         entity_id = CLIMATE_FLOOR_1
         climate_state = _heating_start_state(entity_id, start_temp=65.0, setpoint=70.0)
         climate_state[entity_id]["setpoint_changed_during_heating"] = True
@@ -1083,3 +1084,75 @@ class TestSigtermHandler:
         with pytest.raises(SystemExit) as exc_info:
             handler(signal.SIGTERM, None)
         assert exc_info.value.code == 0
+
+
+# ---------------------------------------------------------------------------
+# check_observer_silence
+# ---------------------------------------------------------------------------
+
+
+class TestCheckObserverSilence:
+    """Tests for the observer heartbeat silence watchdog."""
+
+    THRESHOLD_S = 600  # 10 min
+
+    def _now(self):
+        return datetime.now(UTC)
+
+    def test_observer_silence_warning_not_emitted_before_threshold(self):
+        """No warning when silence duration is below the threshold."""
+        now = self._now()
+        last_event_ts = now - timedelta(seconds=self.THRESHOLD_S - 1)
+        event, sent = check_observer_silence(last_event_ts, False, self.THRESHOLD_S, now)
+        assert event is None
+        assert sent is False
+
+    def test_observer_silence_warning_emitted_after_threshold(self):
+        """Warning fires and flag is set when silence exceeds threshold."""
+        now = self._now()
+        last_event_ts = now - timedelta(seconds=self.THRESHOLD_S + 120)
+        event, sent = check_observer_silence(last_event_ts, False, self.THRESHOLD_S, now)
+        assert event is not None
+        assert sent is True
+        assert event["schema"] == "homeops.consumer.observer_silence_warning.v1"
+        assert event["source"] == "consumer.v1"
+        data = event["data"]
+        assert data["silence_s"] >= self.THRESHOLD_S
+        assert data["threshold_s"] == self.THRESHOLD_S
+        assert data["last_event_ts"] == last_event_ts.isoformat()
+
+    def test_observer_silence_warning_not_emitted_twice(self):
+        """Once silence_sent=True, no further warnings are emitted."""
+        now = self._now()
+        last_event_ts = now - timedelta(seconds=self.THRESHOLD_S + 300)
+        # First call fires.
+        event1, sent1 = check_observer_silence(last_event_ts, False, self.THRESHOLD_S, now)
+        assert event1 is not None
+        assert sent1 is True
+        # Second call with sent=True — should be suppressed.
+        event2, sent2 = check_observer_silence(last_event_ts, sent1, self.THRESHOLD_S, now)
+        assert event2 is None
+        assert sent2 is True  # flag unchanged
+
+    def test_observer_silence_warning_resets_after_new_event(self):
+        """After observer_silence_sent resets, watchdog re-arms for subsequent episodes."""
+        now = self._now()
+        last_event_ts = now - timedelta(seconds=self.THRESHOLD_S + 60)
+        # Fire once.
+        event, sent = check_observer_silence(last_event_ts, False, self.THRESHOLD_S, now)
+        assert event is not None
+        assert sent is True
+        # Simulate a new event arriving: consumer resets sent to False and updates last_event_ts.
+        sent = False
+        last_event_ts = now  # fresh event just arrived
+        # Immediately after reset, silence_s should be ~0 — no new warning.
+        event2, sent2 = check_observer_silence(last_event_ts, sent, self.THRESHOLD_S, now)
+        assert event2 is None
+        assert sent2 is False
+
+    def test_observer_silence_warning_not_emitted_when_last_event_ts_none(self):
+        """No warning when last_observer_event_ts is None (consumer just started, no events yet)."""
+        now = self._now()
+        event, sent = check_observer_silence(None, False, self.THRESHOLD_S, now)
+        assert event is None
+        assert sent is False
