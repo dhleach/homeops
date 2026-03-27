@@ -939,7 +939,11 @@ def main():
     path = os.environ.get("EVENT_LOG", "state/observer/events.jsonl")
     derived_log = os.environ.get("DERIVED_EVENT_LOG", "state/consumer/events.jsonl")
     print(f"[{utc_ts()}] Derived log: {derived_log}", flush=True)
-    print(f"[{utc_ts()}] Consumer version: {_get_version()}", flush=True)
+    version = _get_version()
+    print(f"[{utc_ts()}] Consumer version: {version}", flush=True)
+    os.makedirs("state/consumer", exist_ok=True)
+    with open("state/consumer/version.txt", "w", encoding="utf-8") as _vf:
+        _vf.write(version + "\n")
     print(f"[{utc_ts()}] Consumer following: {path}", flush=True)
 
     floor_2_warn_threshold_s = int(os.environ.get("FLOOR_2_WARN_THRESHOLD_S", "2700"))  # 45 min

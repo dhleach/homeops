@@ -42,7 +42,11 @@ async def main():
     env_path = os.environ.get("HA_ENV_FILE", "secrets/ha.env")
     load_dotenv(env_path)
 
-    print(f"[{utc_ts()}] Observer version: {_get_version()}", flush=True)
+    version = _get_version()
+    print(f"[{utc_ts()}] Observer version: {version}", flush=True)
+    os.makedirs("state/observer", exist_ok=True)
+    with open("state/observer/version.txt", "w", encoding="utf-8") as _vf:
+        _vf.write(version + "\n")
 
     ws_url = os.environ.get("HA_WS_URL")
     token = os.environ.get("HA_TOKEN")
