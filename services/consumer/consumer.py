@@ -9,7 +9,7 @@ from pathlib import Path
 from dateutil.parser import isoparse
 
 # Add insights rules to path for floor_no_response rule
-sys.path.insert(0, str(Path(__file__).parent.parent.parent / "insights"))
+sys.path.insert(0, str(Path(__file__).parent.parent / "insights"))
 
 STATE_FILE = Path("state/consumer/state.json")
 
