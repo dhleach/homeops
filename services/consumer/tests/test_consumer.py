@@ -1422,6 +1422,7 @@ class TestEmitDailySummaryNewFields:
         }
         assert state["warnings_triggered"] == {
             "floor_2_long_call": 0,
+            "floor_2_escalation": 0,
             "floor_no_response": 0,
             "zone_slow_to_heat": 0,
             "observer_silence": 0,

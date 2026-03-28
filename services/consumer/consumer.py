@@ -619,6 +619,7 @@ def emit_daily_summary(daily_state: dict, date_str: str) -> dict:
             "warnings_triggered",
             {
                 "floor_2_long_call": 0,
+                "floor_2_escalation": 0,
                 "floor_no_response": 0,
                 "zone_slow_to_heat": 0,
                 "observer_silence": 0,
@@ -709,6 +710,7 @@ def format_daily_summary_message(data: dict) -> str:
         lines.append(f"⚠️ Warnings today: {total_warnings}")
         warning_display = [
             ("floor_2_long_call", "Floor-2 long call"),
+            ("floor_2_escalation", "Floor-2 escalation 🚨"),
             ("floor_no_response", "Floor no-response"),
             ("zone_slow_to_heat", "Slow to heat"),
             ("setpoint_miss", "Setpoint miss"),
@@ -760,6 +762,45 @@ def check_floor_2_warning(
         },
     }
     return warn_event, True
+
+
+def check_floor_2_escalation(
+    long_call_count_today: int,
+    floor_2_warn_threshold_s: int,
+    climate_state: dict | None = None,
+) -> dict | None:
+    """
+    Return a floor_2_long_call_escalation.v1 event if today's long-call count has
+    reached the escalation threshold (>= 2), otherwise return None.
+
+    This fires on the 2nd, 3rd, etc. long-call warning in the same calendar day so
+    ongoing furnace issues stay visible.
+
+    Args:
+        long_call_count_today: Value of daily_state["warnings_triggered"]["floor_2_long_call"]
+            *after* it has already been incremented for the current warning.
+        floor_2_warn_threshold_s: The threshold used for long-call warnings (seconds).
+        climate_state: Optional climate_state dict for current_temp / setpoint.
+
+    Returns:
+        An escalation event dict, or None if escalation should not fire.
+    """
+    if long_call_count_today < 2:
+        return None
+
+    f2_climate = (climate_state or {}).get("climate.floor_2_thermostat", {})
+    return {
+        "schema": "homeops.consumer.floor_2_long_call_escalation.v1",
+        "source": "consumer.v1",
+        "ts": utc_ts(),
+        "data": {
+            "floor": "floor_2",
+            "long_call_count_today": long_call_count_today,
+            "threshold_s": floor_2_warn_threshold_s,
+            "current_temp": f2_climate.get("current_temp"),
+            "setpoint": f2_climate.get("setpoint"),
+        },
+    }
 
 
 def check_observer_silence(
@@ -853,6 +894,7 @@ def _empty_daily_state() -> dict:
         "last_outdoor_temp_f": None,
         "warnings_triggered": {
             "floor_2_long_call": 0,
+            "floor_2_escalation": 0,
             "floor_no_response": 0,
             "zone_slow_to_heat": 0,
             "observer_silence": 0,
@@ -1396,6 +1438,39 @@ def main():
                     " not set, skipping alert",
                     flush=True,
                 )
+            # Escalation: fire on 2nd, 3rd, etc. long-call warning in the same day
+            long_call_count = daily_state["warnings_triggered"]["floor_2_long_call"]
+            escalation_event = check_floor_2_escalation(
+                long_call_count, floor_2_warn_threshold_s, climate_state
+            )
+            if escalation_event:
+                daily_state["warnings_triggered"]["floor_2_escalation"] += 1
+                fresh_restart = _emit_derived(escalation_event, derived_log, fresh_restart)
+                if telegram_bot_token and telegram_chat_id:
+                    import urllib.parse as _parse
+                    import urllib.request as _urllib
+
+                    esc_msg = (
+                        f"🚨 Floor 2 long-call escalation: {long_call_count} long calls today"
+                        " — furnace may be struggling. Check HVAC."
+                    )
+                    _url = f"https://api.telegram.org/bot{telegram_bot_token}/sendMessage"
+                    _tdata = _parse.urlencode(
+                        {"chat_id": telegram_chat_id, "text": esc_msg}
+                    ).encode()
+                    try:
+                        _urllib.urlopen(_url, _tdata, timeout=10)
+                    except Exception as _esc_e:
+                        print(
+                            f"[{utc_ts()}] WARN: Telegram escalation alert failed: {_esc_e}",
+                            flush=True,
+                        )
+                else:
+                    print(
+                        f"[{utc_ts()}] WARN: TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID"
+                        " not set, skipping escalation alert",
+                        flush=True,
+                    )
 
         # Observer silence watchdog (runs on every event and on timeouts)
         silence_event, observer_silence_sent = check_observer_silence(
