@@ -1015,8 +1015,20 @@ def main():
 
     # Floor-not-responding rule (temp-based: zone calling > threshold with no temp rise).
     from rules.floor_no_response import FloorNoResponseRule  # noqa: PLC0415
+    from rules.furnace_session_anomaly import FurnaceSessionAnomalyRule  # noqa: PLC0415
 
     floor_no_response_rule = FloorNoResponseRule()
+
+    # Furnace session anomaly rule — load baseline once at startup if available.
+    _baseline_path = Path("state/consumer/baseline_constants.json")
+    _baseline: dict = {}
+    if _baseline_path.exists():
+        try:
+            _baseline = json.loads(_baseline_path.read_text(encoding="utf-8"))
+            print(f"[{utc_ts()}] Loaded baseline from {_baseline_path}", flush=True)
+        except Exception as _e:
+            print(f"[{utc_ts()}] WARN: Could not load baseline: {_e}", flush=True)
+    furnace_session_anomaly_rule = FurnaceSessionAnomalyRule(_baseline)
 
     # Attempt to resume from a recent state file; otherwise cold-start.
     saved = _load_state()
@@ -1256,6 +1268,90 @@ def main():
                         if d.get("duration_s") is not None:
                             daily_state["furnace_runtime_s"] += d["duration_s"]
                         daily_state["session_count"] += 1
+                        # Check for session duration anomalies.
+                        _session_floor = d.get("floor")
+                        _session_dur = d.get("duration_s")
+                        _session_ts = d.get("ended_at") or derived["ts"]
+                        for _anom in furnace_session_anomaly_rule.check_session(
+                            _session_floor, _session_dur, _session_ts
+                        ):
+                            fresh_restart = _emit_derived(_anom, derived_log, fresh_restart)
+                            _anom_data = _anom["data"]
+                            if (
+                                _anom["schema"]
+                                == "homeops.consumer.heating_short_session_warning.v1"
+                            ):
+                                _anom_floor = _anom_data["floor"] or "unknown"
+                                _anom_dur = _anom_data["duration_s"]
+                                _anom_thr = _anom_data["threshold_s"]
+                                _anom_msg = (
+                                    f"⚡ Short furnace session on {_anom_floor}:"
+                                    f" {_anom_dur}s (threshold: {_anom_thr}s)"
+                                    " — possible short-cycling"
+                                )
+                                if telegram_bot_token and telegram_chat_id:
+                                    import urllib.parse as _parse
+                                    import urllib.request as _urllib
+
+                                    _url = (
+                                        f"https://api.telegram.org/bot{telegram_bot_token}"
+                                        "/sendMessage"
+                                    )
+                                    _tdata = _parse.urlencode(
+                                        {"chat_id": telegram_chat_id, "text": _anom_msg}
+                                    ).encode()
+                                    try:
+                                        _urllib.urlopen(_url, _tdata, timeout=10)
+                                    except Exception as _te:
+                                        print(
+                                            f"[{utc_ts()}] WARN: Telegram short-session"
+                                            f" alert failed: {_te}",
+                                            flush=True,
+                                        )
+                                else:
+                                    print(
+                                        f"[{utc_ts()}] WARN: TELEGRAM_BOT_TOKEN or"
+                                        " TELEGRAM_CHAT_ID not set, skipping short-session alert",
+                                        flush=True,
+                                    )
+                            elif _anom[
+                                "schema"
+                            ] == "homeops.consumer.heating_long_session_warning.v1" and _anom_data[
+                                "floor"
+                            ] in ("floor_2", None):
+                                _anom_floor = _anom_data["floor"] or "unknown"
+                                _anom_dur = _anom_data["duration_s"]
+                                _anom_thr = _anom_data["threshold_s"]
+                                _anom_msg = (
+                                    f"🔥 Long furnace session on {_anom_floor}:"
+                                    f" {_anom_dur}s (threshold: {_anom_thr}s)"
+                                    " — overheating risk"
+                                )
+                                if telegram_bot_token and telegram_chat_id:
+                                    import urllib.parse as _parse
+                                    import urllib.request as _urllib
+
+                                    _url = (
+                                        f"https://api.telegram.org/bot{telegram_bot_token}"
+                                        "/sendMessage"
+                                    )
+                                    _tdata = _parse.urlencode(
+                                        {"chat_id": telegram_chat_id, "text": _anom_msg}
+                                    ).encode()
+                                    try:
+                                        _urllib.urlopen(_url, _tdata, timeout=10)
+                                    except Exception as _te:
+                                        print(
+                                            f"[{utc_ts()}] WARN: Telegram long-session"
+                                            f" alert failed: {_te}",
+                                            flush=True,
+                                        )
+                                else:
+                                    print(
+                                        f"[{utc_ts()}] WARN: TELEGRAM_BOT_TOKEN or"
+                                        " TELEGRAM_CHAT_ID not set, skipping long-session alert",
+                                        flush=True,
+                                    )
                 _save_state(floor_on_since, furnace_on_since, climate_state, daily_state)
 
         # In-flight floor-2 long-call check (runs on every event and on timeouts)
