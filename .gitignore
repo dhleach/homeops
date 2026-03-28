@@ -12,7 +12,7 @@ secrets/*
 
 # python
 __pycache__/
-.venv/-e 
+.venv/
 # Core dumps (from bundled tools like ripgrep in Claude Code)
 core
 core.*
