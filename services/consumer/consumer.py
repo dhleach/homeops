@@ -1182,6 +1182,45 @@ def main():
                     daily_state = _empty_daily_state()
                     current_date = evt_date
 
+                    # --- Floor runtime anomaly detection ---
+                    # Load prior daily summaries (exclude today to avoid circular reference).
+                    from rules.floor_runtime_anomaly import FloorRuntimeAnomalyRule  # noqa: PLC0415
+
+                    _prior_summaries: list[dict] = []
+                    _summary_date = summary["data"]["date"]
+                    if Path(derived_log).exists():
+                        try:
+                            with open(derived_log, encoding="utf-8") as _dlog:
+                                for _line in _dlog:
+                                    _line = _line.strip()
+                                    if not _line:
+                                        continue
+                                    try:
+                                        _evt = json.loads(_line)
+                                    except json.JSONDecodeError:
+                                        continue
+                                    if (
+                                        _evt.get("schema")
+                                        == "homeops.consumer.furnace_daily_summary.v1"
+                                        and _evt.get("data", {}).get("date") != _summary_date
+                                    ):
+                                        _prior_summaries.append(_evt)
+                        except Exception as _e:
+                            print(
+                                f"[{utc_ts()}] WARN: Could not read derived log"
+                                f" for anomaly check: {_e}",
+                                flush=True,
+                            )
+
+                    _runtime_anomaly_rule = FloorRuntimeAnomalyRule(history=_prior_summaries)
+                    _per_floor = summary["data"].get("per_floor_runtime_s", {})
+                    for _floor, _floor_runtime_s in _per_floor.items():
+                        for _anom_evt in _runtime_anomaly_rule.check_daily_runtime(
+                            _floor, _floor_runtime_s, summary["data"]["date"]
+                        ):
+                            print(json.dumps(_anom_evt), flush=True)
+                            append_jsonl(derived_log, _anom_evt)
+
             # Per-floor call sessions are derived from floor_* heating_call sensors.
             if entity_id in floor_entities:
                 derived_events, floor_on_since, floor_2_warn_sent = process_floor_event(
