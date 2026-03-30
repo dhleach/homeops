@@ -716,3 +716,58 @@ reset when a new session starts).
   }
 }
 ```
+
+---
+
+## Event: `homeops.consumer.floor_runtime_anomaly.v1`
+
+Fires at end-of-day when a floor's daily heating runtime significantly exceeds its rolling
+historical baseline. Evaluated after `furnace_daily_summary.v1` is written, once per floor
+per day.
+
+**Guards:**
+- Requires at least **3 prior data points** in the lookback window — skips if history is
+  insufficient (new install, data gap, etc.).
+- Does not fire if the floor's baseline mean is **< 300 s** — avoids noise from floors
+  that rarely run.
+
+**Lookback:** defaults to the last 14 days of `furnace_daily_summary.v1` events, excluding
+today (prevents circular reference with the current-day summary).
+
+**Threshold:** `runtime_s > baseline_mean_s × threshold_multiplier` (default 1.5×).
+
+### Field Table
+
+| Field | Type | Source | Rationale |
+|---|---|---|---|
+| `schema` | string | hardcoded | Event type identifier. |
+| `source` | string | hardcoded `"consumer.v1"` | Emitting service. |
+| `ts` | ISO 8601 string | `utc_ts()` at emission | Emission timestamp. |
+| `data.floor` | string | caller | Floor identifier, e.g. `"floor_2"`. |
+| `data.runtime_s` | int | today's daily summary | Today's total heating runtime in seconds. |
+| `data.baseline_mean_s` | float | rolling history | Mean daily runtime over the lookback window. |
+| `data.threshold_multiplier` | float | config (default 1.5) | Multiplier applied to mean to compute threshold. |
+| `data.threshold_s` | float | computed | `baseline_mean_s × threshold_multiplier` — the value `runtime_s` exceeded. |
+| `data.lookback_days` | int | config (default 14) | Number of prior days included in baseline. |
+| `data.history_count` | int | computed | Actual number of data points used (≤ `lookback_days`). |
+| `data.date` | string | caller | Date of the anomaly, `"YYYY-MM-DD"`. |
+
+### JSON Example
+
+```json
+{
+  "schema": "homeops.consumer.floor_runtime_anomaly.v1",
+  "source": "consumer.v1",
+  "ts": "2026-03-30T05:00:01.123456+00:00",
+  "data": {
+    "floor": "floor_2",
+    "runtime_s": 5400,
+    "baseline_mean_s": 2800.0,
+    "threshold_multiplier": 1.5,
+    "threshold_s": 4200.0,
+    "lookback_days": 14,
+    "history_count": 12,
+    "date": "2026-03-29"
+  }
+}
+```
