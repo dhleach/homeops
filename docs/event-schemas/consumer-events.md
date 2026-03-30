@@ -771,3 +771,45 @@ today (prevents circular reference with the current-day summary).
   }
 }
 ```
+
+---
+
+## Event: `homeops.consumer.floor_2_long_call_escalation.v1`
+
+Fires when floor 2 triggers a long-call warning for the **second or subsequent time** in the
+same calendar day. The first long-call warning is emitted as `floor_2_long_call_warning.v1`;
+this escalation event fires on the 2nd, 3rd, etc. occurrence so that ongoing furnace issues
+remain visible rather than being silently suppressed.
+
+**Trigger:** `long_call_count_today >= 2` (count is incremented before the check, so this fires
+on the 2nd warning and every warning after).
+
+### Field Table
+
+| Field | Type | Source | Rationale |
+|---|---|---|---|
+| `schema` | string | hardcoded | Event type identifier. |
+| `source` | string | hardcoded `"consumer.v1"` | Emitting service. |
+| `ts` | ISO 8601 string | `utc_ts()` at emission | Emission timestamp. |
+| `data.floor` | string | hardcoded `"floor_2"` | Always floor 2 — this rule is floor-2-specific. |
+| `data.long_call_count_today` | int | `daily_state["warnings_triggered"]["floor_2_long_call"]` | How many long-call warnings have fired today (≥ 2 when this event emits). |
+| `data.threshold_s` | int | `FLOOR_2_WARN_THRESHOLD_S` env var | The long-call duration threshold in seconds that was exceeded. |
+| `data.current_temp` | float \| null | `climate_state["climate.floor_2_thermostat"]["current_temp"]` | Current floor 2 temperature at escalation time; null if climate state unavailable. |
+| `data.setpoint` | float \| null | `climate_state["climate.floor_2_thermostat"]["setpoint"]` | Floor 2 setpoint at escalation time; null if climate state unavailable. |
+
+### JSON Example
+
+```json
+{
+  "schema": "homeops.consumer.floor_2_long_call_escalation.v1",
+  "source": "consumer.v1",
+  "ts": "2026-01-15T09:32:44.001200+00:00",
+  "data": {
+    "floor": "floor_2",
+    "long_call_count_today": 2,
+    "threshold_s": 2700,
+    "current_temp": 65.5,
+    "setpoint": 68.0
+  }
+}
+```
