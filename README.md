@@ -17,7 +17,7 @@ Home Assistant alone can't prevent this. It sees state changes; it doesn't reaso
 - **Event-driven pipeline** — observer writes raw `state_changed` events to JSONL; consumer tails that file and emits semantically rich derived events downstream
 - **Schema-versioned events** — every event carries a `schema` field (e.g. `homeops.consumer.floor_2_long_call_warning.v1`) for safe downstream evolution
 - **Production-grade operations** — runs as `systemd` services on the Pi, log rotation via `logrotate`, exponential-backoff reconnects on the WebSocket
-- **226 pytest tests**, GitHub Actions CI, Ruff lint/format enforcement on every PR
+- **241 pytest tests**, GitHub Actions CI, Ruff lint/format enforcement on every PR
 
 ## Architecture
 
@@ -111,7 +111,13 @@ homeops/
 │   │   ├── requirements.txt
 │   │   └── README.md
 │   └── consumer/
-│       ├── consumer.py
+│       ├── consumer.py           # lean entry point / main loop
+│       ├── constants.py          # entity maps, env config, shared constants
+│       ├── utils.py              # utc_ts, follow, append_jsonl, _parse_dt
+│       ├── state.py              # state persistence and bootstrap logic
+│       ├── processors.py         # floor, furnace, climate, outdoor-temp handlers
+│       ├── alerts.py             # floor-2 warning, escalation, silence, temp snapshot
+│       ├── reporting.py          # daily summary generation and formatting
 │       ├── requirements.txt
 │       └── README.md             # full consumer reference
 ├── docs/
