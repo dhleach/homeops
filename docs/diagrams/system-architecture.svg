@@ -1,0 +1,131 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="580" viewBox="0 0 1000 580" font-family="Arial, Helvetica, sans-serif">
+  <!-- Background -->
+  <rect width="1000" height="580" fill="#0f1923" rx="8"/>
+
+  <!-- Title -->
+  <text x="500" y="38" text-anchor="middle" font-size="20" font-weight="bold" fill="#e2e8f0" letter-spacing="0.5">HomeOps System Architecture</text>
+  <line x1="60" y1="50" x2="940" y2="50" stroke="#2d4a6b" stroke-width="1"/>
+
+  <!-- ==================== RASPBERRY PI HOST BOX ==================== -->
+  <rect x="40" y="70" width="920" height="430" rx="10" fill="none" stroke="#2d4a6b" stroke-width="2" stroke-dasharray="8,4"/>
+  <text x="500" y="92" text-anchor="middle" font-size="12" fill="#64748b" letter-spacing="1">RASPBERRY PI HOST</text>
+
+  <!-- ==================== HOME ASSISTANT BOX ==================== -->
+  <rect x="70" y="105" width="200" height="130" rx="8" fill="#1e3a5f" stroke="#3b82f6" stroke-width="1.5"/>
+  <text x="170" y="128" text-anchor="middle" font-size="13" font-weight="bold" fill="#93c5fd">Home Assistant</text>
+  <line x1="90" y1="135" x2="250" y2="135" stroke="#2d4a6b" stroke-width="1"/>
+  <text x="170" y="153" text-anchor="middle" font-size="11" fill="#94a3b8">WebSocket API</text>
+  <text x="170" y="171" text-anchor="middle" font-size="11" fill="#94a3b8">State API (REST)</text>
+  <text x="170" y="189" text-anchor="middle" font-size="11" fill="#94a3b8">Entity subscriptions</text>
+  <text x="170" y="207" text-anchor="middle" font-size="10" fill="#64748b" font-style="italic">zone sensors, thermostats</text>
+  <text x="170" y="223" text-anchor="middle" font-size="10" fill="#64748b" font-style="italic">furnace binary sensors</text>
+
+  <!-- ==================== OBSERVER BOX ==================== -->
+  <rect x="340" y="105" width="220" height="130" rx="8" fill="#1a3a2a" stroke="#22c55e" stroke-width="1.5"/>
+  <text x="450" y="128" text-anchor="middle" font-size="13" font-weight="bold" fill="#86efac">homeops-observer</text>
+  <line x1="360" y1="135" x2="540" y2="135" stroke="#1e4a2e" stroke-width="1"/>
+  <text x="450" y="153" text-anchor="middle" font-size="11" fill="#94a3b8">Polls HA State API</text>
+  <text x="450" y="171" text-anchor="middle" font-size="11" fill="#94a3b8">every 30 seconds</text>
+  <text x="450" y="189" text-anchor="middle" font-size="11" fill="#94a3b8">Exponential-backoff</text>
+  <text x="450" y="207" text-anchor="middle" font-size="11" fill="#94a3b8">reconnects</text>
+  <text x="450" y="223" text-anchor="middle" font-size="10" fill="#64748b" font-style="italic">systemd: homeops-observer.service</text>
+
+  <!-- ==================== CONSUMER BOX ==================== -->
+  <rect x="640" y="105" width="280" height="130" rx="8" fill="#2a1a3a" stroke="#a855f7" stroke-width="1.5"/>
+  <text x="780" y="128" text-anchor="middle" font-size="13" font-weight="bold" fill="#d8b4fe">homeops-consumer</text>
+  <line x1="660" y1="135" x2="900" y2="135" stroke="#3b1f5e" stroke-width="1"/>
+  <text x="780" y="153" text-anchor="middle" font-size="11" fill="#94a3b8">Tails events.jsonl (select-loop)</text>
+  <text x="780" y="171" text-anchor="middle" font-size="11" fill="#94a3b8">Routes events by entity ID</text>
+  <text x="780" y="189" text-anchor="middle" font-size="11" fill="#94a3b8">Runs rules engine</text>
+  <text x="780" y="207" text-anchor="middle" font-size="11" fill="#94a3b8">Emits derived events</text>
+  <text x="780" y="223" text-anchor="middle" font-size="10" fill="#64748b" font-style="italic">systemd: homeops-consumer.service</text>
+
+  <!-- ==================== EVENTS.JSONL FILE ==================== -->
+  <rect x="340" y="295" width="220" height="70" rx="6" fill="#1a2a3a" stroke="#38bdf8" stroke-width="1.5"/>
+  <text x="450" y="320" text-anchor="middle" font-size="12" font-weight="bold" fill="#7dd3fc">state/observer/</text>
+  <text x="450" y="338" text-anchor="middle" font-size="12" font-weight="bold" fill="#7dd3fc">events.jsonl</text>
+  <text x="450" y="355" text-anchor="middle" font-size="10" fill="#64748b" font-style="italic">raw events · append-only JSONL</text>
+
+  <!-- ==================== DERIVED EVENTS FILE ==================== -->
+  <rect x="640" y="295" width="220" height="70" rx="6" fill="#1a2a3a" stroke="#38bdf8" stroke-width="1.5"/>
+  <text x="750" y="320" text-anchor="middle" font-size="12" font-weight="bold" fill="#7dd3fc">state/consumer/</text>
+  <text x="750" y="338" text-anchor="middle" font-size="12" font-weight="bold" fill="#7dd3fc">derived_events.jsonl</text>
+  <text x="750" y="355" text-anchor="middle" font-size="10" fill="#64748b" font-style="italic">derived events · schema-versioned</text>
+
+  <!-- ==================== STATE FILES BOX ==================== -->
+  <rect x="640" y="415" width="220" height="70" rx="6" fill="#1a2a3a" stroke="#fb923c" stroke-width="1.5"/>
+  <text x="750" y="440" text-anchor="middle" font-size="12" font-weight="bold" fill="#fdba74">state/consumer/</text>
+  <text x="750" y="458" text-anchor="middle" font-size="11" fill="#94a3b8">zone_temps.jsonl</text>
+  <text x="750" y="474" text-anchor="middle" font-size="11" fill="#94a3b8">daily_state.json</text>
+
+  <!-- ==================== TELEGRAM BOX ==================== -->
+  <rect x="70" y="415" width="200" height="70" rx="6" fill="#1a2535" stroke="#38bdf8" stroke-width="1.5"/>
+  <text x="170" y="442" text-anchor="middle" font-size="13" font-weight="bold" fill="#7dd3fc">Telegram Alerts</text>
+  <text x="170" y="462" text-anchor="middle" font-size="11" fill="#94a3b8">Real-time push notifications</text>
+  <text x="170" y="478" text-anchor="middle" font-size="10" fill="#64748b" font-style="italic">floor-2 overheating warnings</text>
+
+  <!-- ==================== ARROWS ==================== -->
+  <!-- HA → Observer (polls) -->
+  <defs>
+    <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#64748b"/>
+    </marker>
+    <marker id="arrowhead-green" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#22c55e"/>
+    </marker>
+    <marker id="arrowhead-blue" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#38bdf8"/>
+    </marker>
+    <marker id="arrowhead-purple" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#a855f7"/>
+    </marker>
+    <marker id="arrowhead-orange" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#fb923c"/>
+    </marker>
+    <marker id="arrowhead-teal" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#2dd4bf"/>
+    </marker>
+  </defs>
+
+  <!-- HA → Observer -->
+  <line x1="270" y1="170" x2="338" y2="170" stroke="#22c55e" stroke-width="2" marker-end="url(#arrowhead-green)"/>
+  <text x="304" y="163" text-anchor="middle" font-size="9" fill="#22c55e">polls</text>
+
+  <!-- Observer → events.jsonl -->
+  <line x1="450" y1="235" x2="450" y2="293" stroke="#38bdf8" stroke-width="2" marker-end="url(#arrowhead-blue)"/>
+  <text x="474" y="268" font-size="9" fill="#38bdf8">writes</text>
+
+  <!-- events.jsonl → Consumer (tails) -->
+  <path d="M 560 330 Q 610 330 640 200" fill="none" stroke="#a855f7" stroke-width="2" marker-end="url(#arrowhead-purple)"/>
+  <text x="615" y="295" text-anchor="middle" font-size="9" fill="#a855f7">tails</text>
+
+  <!-- Consumer → derived_events.jsonl -->
+  <line x1="750" y1="235" x2="750" y2="293" stroke="#38bdf8" stroke-width="2" marker-end="url(#arrowhead-blue)"/>
+  <text x="755" y="268" font-size="9" fill="#38bdf8">writes</text>
+
+  <!-- Consumer → state files -->
+  <line x1="750" y1="365" x2="750" y2="413" stroke="#fb923c" stroke-width="2" marker-end="url(#arrowhead-orange)"/>
+  <text x="755" y="393" font-size="9" fill="#fb923c">persists</text>
+
+  <!-- Consumer → Telegram -->
+  <path d="M 640 190 Q 500 190 340 450 Q 290 450 272 450" fill="none" stroke="#38bdf8" stroke-width="2" marker-end="url(#arrowhead-blue)"/>
+  <text x="400" y="228" text-anchor="middle" font-size="9" fill="#38bdf8">fires alert</text>
+
+  <!-- ==================== LEGEND ==================== -->
+  <rect x="40" y="510" width="920" height="55" rx="6" fill="#0d1520" stroke="#1e3a5f" stroke-width="1"/>
+  <text x="70" y="530" font-size="11" font-weight="bold" fill="#64748b">LEGEND:</text>
+  <line x1="130" y1="527" x2="160" y2="527" stroke="#22c55e" stroke-width="2" marker-end="url(#arrowhead-green)"/>
+  <text x="165" y="531" font-size="10" fill="#94a3b8">API poll (30s)</text>
+  <line x1="280" y1="527" x2="310" y2="527" stroke="#38bdf8" stroke-width="2" marker-end="url(#arrowhead-blue)"/>
+  <text x="315" y="531" font-size="10" fill="#94a3b8">File write / alert</text>
+  <line x1="430" y1="527" x2="460" y2="527" stroke="#a855f7" stroke-width="2" marker-end="url(#arrowhead-purple)"/>
+  <text x="465" y="531" font-size="10" fill="#94a3b8">File tail (select-loop)</text>
+  <line x1="600" y1="527" x2="630" y2="527" stroke="#fb923c" stroke-width="2" marker-end="url(#arrowhead-orange)"/>
+  <text x="635" y="531" font-size="10" fill="#94a3b8">State persistence</text>
+  <rect x="130" y="545" width="14" height="10" rx="2" fill="none" stroke="#22c55e" stroke-width="1.5"/>
+  <text x="150" y="554" font-size="10" fill="#94a3b8">Service</text>
+  <rect x="220" y="545" width="14" height="10" rx="2" fill="none" stroke="#38bdf8" stroke-width="1.5"/>
+  <text x="240" y="554" font-size="10" fill="#94a3b8">JSONL file</text>
+  <rect x="320" y="545" width="14" height="10" rx="2" fill="none" stroke="#fb923c" stroke-width="1.5"/>
+  <text x="340" y="554" font-size="10" fill="#94a3b8">State file</text>
+</svg>
