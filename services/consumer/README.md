@@ -34,6 +34,23 @@ The consumer reads the observer's raw `state_changed` events and produces semant
 
 ## Architecture
 
+
+### Module structure
+
+The consumer is split across seven focused files:
+
+| Module | Responsibility |
+|---|---|
+| `consumer.py` | Lean entry point: tail loop, event routing, signal handling, daily rollover |
+| `constants.py` | Entity ID maps, env-var defaults, shared configuration constants |
+| `utils.py` | `utc_ts`, `follow` (select-based tail generator), `append_jsonl`, `_parse_dt`, `_get_version` |
+| `state.py` | `last_furnace_on_since` bootstrap scan, `_load_state` / `_save_state` persistence, `_empty_daily_state` initialiser |
+| `processors.py` | `process_floor_event`, `process_furnace_event`, `process_climate_event`, `process_outdoor_temp_event` — pure event-to-derived-event transforms |
+| `alerts.py` | `check_floor_2_warning`, `check_floor_2_escalation`, `check_observer_silence`, `write_zone_temp_snapshot` — in-flight periodic checks |
+| `reporting.py` | `emit_daily_summary`, `format_daily_summary_message` — end-of-day summary generation and Telegram formatting |
+
+---
+
 ### Tail loop
 
 The consumer uses a non-blocking `follow()` generator backed by `select.select` to tail the observer log file. The generator yields:
