@@ -423,6 +423,8 @@ def _playback_phase(
                         for _anom in furnace_session_anomaly_rule.check_session(
                             _session_floor, _session_dur, _session_ts
                         ):
+                            # Override rule-generated ts to use the original observer event ts.
+                            _anom["ts"] = ts_str or _anom["ts"]
                             fresh_restart = _emit_derived(_anom, derived_log, fresh_restart)
                             _anom_data = _anom["data"]
                             if (
