@@ -26,6 +26,11 @@ class WeeklyStats:
     session_count: int = 0
     # Per-floor total runtime (seconds) across all days in the window
     floor_total_s: dict[str, int] = field(default_factory=dict)
+    # Outdoor temperature samples (one per day that has data)
+    outdoor_temp_avg_f_samples: list[float] = field(default_factory=list)
+    # Per-floor setpoint accumulation for computing weekly averages
+    per_floor_setpoint_sum: dict[str, float] = field(default_factory=dict)
+    per_floor_setpoint_count: dict[str, int] = field(default_factory=dict)
 
     @property
     def floor_avg_daily_s(self) -> dict[str, float]:
@@ -33,6 +38,24 @@ class WeeklyStats:
         if self.day_count == 0:
             return {}
         return {floor: total / self.day_count for floor, total in self.floor_total_s.items()}
+
+    @property
+    def outdoor_temp_avg_f(self) -> float | None:
+        """Average outdoor temperature across days in the window. None if no data."""
+        if not self.outdoor_temp_avg_f_samples:
+            return None
+        return round(sum(self.outdoor_temp_avg_f_samples) / len(self.outdoor_temp_avg_f_samples), 1)
+
+    @property
+    def per_floor_avg_setpoint_f(self) -> dict[str, float | None]:
+        """Average setpoint per floor across days in the window."""
+        result: dict[str, float | None] = {}
+        for floor in self.per_floor_setpoint_sum:
+            count = self.per_floor_setpoint_count.get(floor, 0)
+            result[floor] = (
+                round(self.per_floor_setpoint_sum[floor] / count, 1) if count > 0 else None
+            )
+        return result
 
 
 @dataclass
@@ -149,6 +172,19 @@ def compute_weekly_comparison(events: list[dict]) -> WeeklyComparison | None:
                 stats.floor_total_s[floor] = stats.floor_total_s.get(floor, 0) + per_floor.get(
                     floor, 0
                 )
+            # Outdoor temp
+            ot = data.get("outdoor_temp_avg_f")
+            if ot is not None:
+                stats.outdoor_temp_avg_f_samples.append(ot)
+            # Per-floor setpoints (may be absent in older events — handle gracefully)
+            for floor, sp in (data.get("per_floor_avg_setpoint_f") or {}).items():
+                if sp is not None:
+                    stats.per_floor_setpoint_sum[floor] = (
+                        stats.per_floor_setpoint_sum.get(floor, 0.0) + sp
+                    )
+                    stats.per_floor_setpoint_count[floor] = (
+                        stats.per_floor_setpoint_count.get(floor, 0) + 1
+                    )
         return stats
 
     return WeeklyComparison(
@@ -202,6 +238,18 @@ def format_weekly_comparison(result: WeeklyComparison) -> str:
         )
     lines.append("")
 
+    # --- Outdoor temperature ---
+    lw_ot = lw.outdoor_temp_avg_f
+    tw_ot = tw.outdoor_temp_avg_f
+    if lw_ot is not None or tw_ot is not None:
+        lw_ot_str = f"{round(lw_ot)}°F" if lw_ot is not None else "?°F"
+        tw_ot_str = f"{round(tw_ot)}°F" if tw_ot is not None else "?°F"
+        pct_ot = pct_change(lw_ot, tw_ot) if lw_ot is not None and tw_ot is not None else None
+        lines.append(
+            f"  Avg outdoor temp:       {lw_ot_str:<10}  →  {tw_ot_str:<10}  ({_fmt_pct(pct_ot)})"
+        )
+        lines.append("")
+
     # --- Total furnace runtime ---
     tw_rt = _fmt_hm(tw.total_furnace_s)
     lw_rt = _fmt_hm(lw.total_furnace_s)
@@ -220,6 +268,7 @@ def format_weekly_comparison(result: WeeklyComparison) -> str:
     # --- Per-floor avg daily runtime ---
     tw_floor = tw.floor_avg_daily_s
     lw_floor = lw.floor_avg_daily_s
+    tw_setpoints = tw.per_floor_avg_setpoint_f
 
     for floor in result.floors:
         label = _FLOOR_LABELS.get(floor, floor.replace("_", " ").title())
@@ -232,8 +281,11 @@ def format_weekly_comparison(result: WeeklyComparison) -> str:
         # Floor 2 is the overheating risk floor — flag any increase
         if floor == "floor_2" and pct_f is not None and pct_f > 0:
             flag = "  ← watch this ⚠️"
-        lines.append(
-            f"  {label} avg daily:      {lw_str:<10}  →  {tw_str:<10}  ({_fmt_pct(pct_f)}){flag}"
-        )
+        line = f"  {label} avg daily:      {lw_str:<10}  →  {tw_str:<10}  ({_fmt_pct(pct_f)}){flag}"
+        # Append setpoint annotation for this week if available
+        tw_sp = tw_setpoints.get(floor)
+        if tw_sp is not None:
+            line += f"  setpoint ~{round(tw_sp)}°F"
+        lines.append(line)
 
     return "\n".join(lines)

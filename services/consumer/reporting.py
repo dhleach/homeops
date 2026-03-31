@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from constants import _FLOOR_ENTITIES
+from constants import _FLOOR_ENTITIES, CLIMATE_ENTITIES
 from utils import utc_ts
 
 
@@ -35,6 +35,16 @@ def emit_daily_summary(daily_state: dict[str, Any], date_str: str) -> dict[str, 
             entity_id, 0
         )
 
+    per_floor_setpoint_samples: dict[str, list] = (
+        daily_state.get("per_floor_setpoint_samples") or {}
+    )
+    per_floor_avg_setpoint_f: dict[str, float | None] = {}
+    for entity_id, floor_name in CLIMATE_ENTITIES.items():
+        samples = per_floor_setpoint_samples.get(entity_id) or []
+        per_floor_avg_setpoint_f[floor_name] = (
+            round(sum(samples) / len(samples), 1) if samples else None
+        )
+
     warnings_triggered: dict[str, int] = dict(
         daily_state.get(
             "warnings_triggered",
@@ -62,6 +72,7 @@ def emit_daily_summary(daily_state: dict[str, Any], date_str: str) -> dict[str, 
             "outdoor_temp_max_f": outdoor_temp_max_f,
             "outdoor_temp_avg_f": outdoor_temp_avg_f,
             "per_floor_session_count": per_floor_session_count,
+            "per_floor_avg_setpoint_f": per_floor_avg_setpoint_f,
             "warnings_triggered": warnings_triggered,
         },
     }

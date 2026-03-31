@@ -416,6 +416,11 @@ def main() -> None:
                 current_temp = (attributes or {}).get("current_temperature")
                 if zone and current_temp is not None:
                     floor_no_response_rule.on_temp_updated(zone, current_temp)
+                # Accumulate setpoint sample for daily summary avg
+                sp = (climate_state.get(entity_id) or {}).get("setpoint")
+                if sp is not None:
+                    samples = daily_state.setdefault("per_floor_setpoint_samples", {})
+                    samples.setdefault(entity_id, []).append(sp)
                 _save_state(floor_on_since, furnace_on_since, climate_state, daily_state)
 
             # Whole-home heating sessions are derived from furnace on/off transitions.

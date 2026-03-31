@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from constants import _FLOOR_ENTITIES, STATE_FILE
+from constants import _FLOOR_ENTITIES, CLIMATE_ENTITIES, STATE_FILE
 from dateutil.parser import isoparse
 from utils import _parse_dt, utc_ts
 
@@ -61,6 +61,7 @@ def _empty_daily_state() -> dict[str, Any]:
         "per_floor_session_count": {eid: 0 for eid in _FLOOR_ENTITIES},
         "outdoor_temps": [],
         "last_outdoor_temp_f": None,
+        "per_floor_setpoint_samples": {eid: [] for eid in CLIMATE_ENTITIES},
         "warnings_triggered": {
             "floor_2_long_call": 0,
             "floor_2_escalation": 0,
