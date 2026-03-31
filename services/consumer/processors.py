@@ -1,5 +1,10 @@
 """Event processors for floor, furnace, climate, and outdoor temperature events."""
 
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Any
+
 from constants import (
     _FLOOR_ENTITIES,
     _ZONE_TO_FLOOR_ENTITY,
@@ -11,8 +16,14 @@ from utils import utc_ts
 
 
 def process_floor_event(
-    entity_id, old_state, new_state, ts, ts_str, floor_on_since, floor_2_warn_sent
-):
+    entity_id: str,
+    old_state: str | None,
+    new_state: str | None,
+    ts: datetime | None,
+    ts_str: str | None,
+    floor_on_since: dict[str, datetime | None],
+    floor_2_warn_sent: bool,
+) -> tuple[list[dict[str, Any]], dict[str, datetime | None], bool]:
     """
     Process a floor heating-call state change.
 
@@ -23,7 +34,7 @@ def process_floor_event(
     if floor_key is None:
         return [], floor_on_since, floor_2_warn_sent
 
-    events = []
+    events: list[dict[str, Any]] = []
     floor_on_since = dict(floor_on_since)  # avoid mutating caller's dict
 
     if old_state == "off" and new_state == "on":
@@ -44,7 +55,7 @@ def process_floor_event(
             floor_2_warn_sent = False
 
     if old_state == "on" and new_state == "off":
-        duration_s = None
+        duration_s: int | None = None
         started = floor_on_since.get(entity_id)
         if started and ts:
             duration_s = int((ts - started).total_seconds())
@@ -66,14 +77,21 @@ def process_floor_event(
     return events, floor_on_since, floor_2_warn_sent
 
 
-def process_furnace_event(entity_id, old_state, new_state, ts, ts_str, furnace_on_since):
+def process_furnace_event(
+    entity_id: str,
+    old_state: str | None,
+    new_state: str | None,
+    ts: datetime | None,
+    ts_str: str | None,
+    furnace_on_since: datetime | None,
+) -> tuple[list[dict[str, Any]], datetime | None]:
     """
     Process a furnace heating state change.
 
     Returns (events, updated_furnace_on_since).
     events is a list of derived event dicts (0 or 1 items).
     """
-    events = []
+    events: list[dict[str, Any]] = []
 
     if old_state == "off" and new_state == "on":
         furnace_on_since = ts
@@ -90,7 +108,7 @@ def process_furnace_event(entity_id, old_state, new_state, ts, ts_str, furnace_o
         )
 
     if old_state == "on" and new_state == "off":
-        duration_s = None
+        duration_s: int | None = None
         if furnace_on_since and ts:
             duration_s = int((ts - furnace_on_since).total_seconds())
         furnace_on_since = None
@@ -111,14 +129,14 @@ def process_furnace_event(entity_id, old_state, new_state, ts, ts_str, furnace_o
 
 
 def process_climate_event(
-    entity_id,
-    attributes,
-    ts_str,
-    climate_state,
-    new_state=None,
-    floor_on_since=None,
-    daily_state=None,
-):
+    entity_id: str,
+    attributes: dict[str, Any] | None,
+    ts_str: str | None,
+    climate_state: dict[str, Any],
+    new_state: str | None = None,
+    floor_on_since: dict[str, datetime | None] | None = None,
+    daily_state: dict[str, Any] | None = None,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """
     Process a climate entity state_changed event.
 
@@ -145,15 +163,15 @@ def process_climate_event(
     if daily_state is None:
         daily_state = {}
 
-    setpoint = attributes.get("temperature")
-    current_temp = attributes.get("current_temperature")
-    hvac_mode = new_state
-    hvac_action = attributes.get("hvac_action")
+    setpoint: float | None = attributes.get("temperature")
+    current_temp: float | None = attributes.get("current_temperature")
+    hvac_mode: str | None = new_state
+    hvac_action: str | None = attributes.get("hvac_action")
 
-    prev = climate_state.get(entity_id) or {}
-    events = []
+    prev: dict[str, Any] = climate_state.get(entity_id) or {}
+    events: list[dict[str, Any]] = []
 
-    common = {
+    common: dict[str, Any] = {
         "entity_id": entity_id,
         "zone": zone,
         "ts": ts_str,
@@ -164,26 +182,26 @@ def process_climate_event(
     }
 
     # Parse event timestamp for session duration tracking.
-    ts = None
+    ts: datetime | None = None
     if ts_str:
         try:
             ts = isoparse(ts_str)
         except Exception:
             pass
 
-    prev_hvac_action = prev.get("hvac_action")
-    prev_current_temp = prev.get("current_temp")
+    prev_hvac_action: str | None = prev.get("hvac_action")
+    prev_current_temp: float | None = prev.get("current_temp")
 
     # Load heating session state persisted from the previous call.
-    heating_start_temp = prev.get("heating_start_temp")
-    heating_start_ts = prev.get("heating_start_ts")
-    setpoint_reached_ts = prev.get("setpoint_reached_ts")
-    setpoint_reached_temp = prev.get("setpoint_reached_temp")
-    post_setpoint_temps = list(prev.get("post_setpoint_temps") or [])
-    heating_start_other_zones = prev.get("heating_start_other_zones")
-    setpoint_changed_during_heating = prev.get("setpoint_changed_during_heating", False)
-    session_temps = list(prev.get("session_temps") or [])
-    slow_to_heat_sent = prev.get("slow_to_heat_sent", False)
+    heating_start_temp: float | None = prev.get("heating_start_temp")
+    heating_start_ts: datetime | None = prev.get("heating_start_ts")
+    setpoint_reached_ts: datetime | None = prev.get("setpoint_reached_ts")
+    setpoint_reached_temp: float | None = prev.get("setpoint_reached_temp")
+    post_setpoint_temps: list[float] = list(prev.get("post_setpoint_temps") or [])
+    heating_start_other_zones: list[str] | None = prev.get("heating_start_other_zones")
+    setpoint_changed_during_heating: bool = prev.get("setpoint_changed_during_heating", False)
+    session_temps: list[float] = list(prev.get("session_temps") or [])
+    slow_to_heat_sent: bool = prev.get("slow_to_heat_sent", False)
 
     # Detect heating session start: hvac_action transitions TO "heating".
     if prev_hvac_action != "heating" and hvac_action == "heating":
@@ -441,7 +459,11 @@ def process_climate_event(
     return events, updated_state
 
 
-def process_outdoor_temp_event(entity_id, new_state, ts_str):
+def process_outdoor_temp_event(
+    entity_id: str,
+    new_state: str | None,
+    ts_str: str | None,
+) -> list[dict[str, Any]]:
     """
     Process an outdoor temperature state change.
 

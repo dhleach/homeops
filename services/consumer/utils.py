@@ -1,10 +1,14 @@
 """Shared utility functions for the HomeOps consumer service."""
 
+from __future__ import annotations
+
 import json
 import os
 import sys
+from collections.abc import Generator
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from dateutil.parser import isoparse
 
@@ -12,7 +16,7 @@ from dateutil.parser import isoparse
 sys.path.insert(0, str(Path(__file__).parent.parent / "insights"))
 
 
-def utc_ts():
+def utc_ts() -> str:
     return datetime.now(UTC).isoformat()
 
 
@@ -33,7 +37,7 @@ def _get_version() -> str:
         return "unknown"
 
 
-def follow(path: str, timeout_s: float = 60.0):
+def follow(path: str, timeout_s: float = 60.0) -> Generator[str | None, None, None]:
     """Yield new lines as they are appended to a file, or yield None on timeout."""
     import select as _select
 
@@ -50,7 +54,7 @@ def follow(path: str, timeout_s: float = 60.0):
                 yield None
 
 
-def append_jsonl(path: str, obj: dict):
+def append_jsonl(path: str, obj: dict[str, Any]) -> None:
     """Shared helper so all derived events are emitted in consistent JSONL format."""
     line = json.dumps(obj)
     Path(path).parent.mkdir(parents=True, exist_ok=True)
@@ -58,7 +62,7 @@ def append_jsonl(path: str, obj: dict):
         f.write(line + "\n")
 
 
-def _parse_dt(s: str | None):
+def _parse_dt(s: str | None) -> datetime | None:
     if s is None:
         return None
     try:

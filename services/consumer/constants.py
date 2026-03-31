@@ -1,27 +1,29 @@
 """Shared constants and entity mappings for the HomeOps consumer service."""
 
+from __future__ import annotations
+
 import os
 from pathlib import Path
 
 # State persistence
-STATE_FILE = Path("state/consumer/state.json")
+STATE_FILE: Path = Path("state/consumer/state.json")
 
 # Floor heating-call binary sensors → floor keys
-_FLOOR_ENTITIES = {
+_FLOOR_ENTITIES: dict[str, str] = {
     "binary_sensor.floor_1_heating_call": "floor_1",
     "binary_sensor.floor_2_heating_call": "floor_2",
     "binary_sensor.floor_3_heating_call": "floor_3",
 }
 
-_ZONE_TO_FLOOR_ENTITY = {v: k for k, v in _FLOOR_ENTITIES.items()}
+_ZONE_TO_FLOOR_ENTITY: dict[str, str] = {v: k for k, v in _FLOOR_ENTITIES.items()}
 
-_ZONE_TO_CLIMATE_ENTITY = {
+_ZONE_TO_CLIMATE_ENTITY: dict[str, str] = {
     "floor_1": "climate.floor_1_thermostat",
     "floor_2": "climate.floor_2_thermostat",
     "floor_3": "climate.floor_3_thermostat",
 }
 
-CLIMATE_ENTITIES = {
+CLIMATE_ENTITIES: dict[str, str] = {
     "climate.floor_1_thermostat": "floor_1",
     "climate.floor_2_thermostat": "floor_2",
     "climate.floor_3_thermostat": "floor_3",
@@ -36,5 +38,5 @@ SLOW_TO_HEAT_THRESHOLDS_S: dict[str, int] = {
 }
 
 # Zone temperature snapshot settings
-ZONE_TEMP_SNAPSHOT_INTERVAL_S = 300  # 5 minutes
-ZONE_TEMP_SNAPSHOT_LOG = "state/consumer/zone_temps.jsonl"
+ZONE_TEMP_SNAPSHOT_INTERVAL_S: int = 300  # 5 minutes
+ZONE_TEMP_SNAPSHOT_LOG: str = "state/consumer/zone_temps.jsonl"
