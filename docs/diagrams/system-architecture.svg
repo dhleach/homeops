@@ -49,7 +49,7 @@
   <!-- ==================== DERIVED EVENTS FILE ==================== -->
   <rect x="640" y="295" width="220" height="70" rx="6" fill="#1a2a3a" stroke="#38bdf8" stroke-width="1.5"/>
   <text x="750" y="320" text-anchor="middle" font-size="12" font-weight="bold" fill="#7dd3fc">state/consumer/</text>
-  <text x="750" y="338" text-anchor="middle" font-size="12" font-weight="bold" fill="#7dd3fc">derived_events.jsonl</text>
+  <text x="750" y="338" text-anchor="middle" font-size="12" font-weight="bold" fill="#7dd3fc">events.jsonl</text>
   <text x="750" y="355" text-anchor="middle" font-size="10" fill="#64748b" font-style="italic">derived events · schema-versioned</text>
 
   <!-- ==================== STATE FILES BOX ==================== -->
@@ -99,7 +99,7 @@
   <path d="M 560 330 Q 610 330 640 200" fill="none" stroke="#a855f7" stroke-width="2" marker-end="url(#arrowhead-purple)"/>
   <text x="615" y="295" text-anchor="middle" font-size="9" fill="#a855f7">tails</text>
 
-  <!-- Consumer → derived_events.jsonl -->
+  <!-- Consumer → events.jsonl -->
   <line x1="750" y1="235" x2="750" y2="293" stroke="#38bdf8" stroke-width="2" marker-end="url(#arrowhead-blue)"/>
   <text x="755" y="268" font-size="9" fill="#38bdf8">writes</text>
 

@@ -31,7 +31,7 @@ _The full system: Raspberry Pi host running Home Assistant, homeops-observer (po
 
 <img src="docs/diagrams/data-flow.svg" alt="Event Lifecycle and Data Flow" width="900">
 
-_Raw HA sensor readings → observer → events.jsonl (raw event types) → consumer rules engine → derived_events.jsonl (15 derived event types) → Telegram push alerts; bottom panel shows the floor-2 overheating event chain from call start to warning._
+_Raw HA sensor readings → observer → events.jsonl (raw event types) → consumer rules engine → events.jsonl (15 derived event types) → Telegram push alerts; bottom panel shows the floor-2 overheating event chain from call start to warning._
 
 ### HVAC Physical Entity Model
 
