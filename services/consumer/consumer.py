@@ -52,6 +52,7 @@ from state import (
     _save_state,
     last_furnace_on_since,
 )
+from telegram_commands import handle_telegram_commands
 from utils import _get_version, append_jsonl, follow, utc_ts
 
 _RESTART_CLEAR_SCHEMAS = frozenset(
@@ -538,6 +539,11 @@ def main() -> None:
     print(f"[{utc_ts()}] Observer silence threshold: {observer_silence_threshold_s}s", flush=True)
     telegram_bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
     telegram_chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
+    telegram_command_interval_s = int(os.environ.get("TELEGRAM_COMMAND_CHECK_INTERVAL_S", "30"))
+    print(
+        f"[{utc_ts()}] Telegram command check interval: {telegram_command_interval_s}s",
+        flush=True,
+    )
 
     _register_sigterm_handler()
 
@@ -600,6 +606,11 @@ def main() -> None:
 
     current_date = datetime.now(UTC).strftime("%Y-%m-%d")
     last_snapshot_ts: datetime | None = None
+    last_command_check_ts: datetime | None = None
+    # Restore last processed Telegram update_id so we don't re-process old commands.
+    telegram_last_update_id: int | None = (
+        saved.get("telegram_last_update_id") if saved is not None else None
+    )
 
     # Playback phase: catch up on missed observer events before entering live mode.
     playback_from_ts = _load_last_consumed_ts()
@@ -1175,6 +1186,34 @@ def main() -> None:
                 print(f"[{utc_ts()}] Zone temp snapshot written", flush=True)
             last_snapshot_ts = now
 
+        # Telegram command polling — check for /summary every ~30 s.
+        if telegram_bot_token and telegram_chat_id:
+            if (
+                last_command_check_ts is None
+                or (now - last_command_check_ts).total_seconds() >= telegram_command_interval_s
+            ):
+                new_update_id = handle_telegram_commands(
+                    bot_token=telegram_bot_token,
+                    chat_id=telegram_chat_id,
+                    last_update_id=telegram_last_update_id,
+                    furnace_on_since=furnace_on_since,
+                    floor_on_since=floor_on_since,
+                    climate_state=climate_state,
+                    daily_state=daily_state,
+                    now=now,
+                )
+                if new_update_id != telegram_last_update_id:
+                    telegram_last_update_id = new_update_id
+                    _save_state(
+                        floor_on_since,
+                        furnace_on_since,
+                        climate_state,
+                        daily_state,
+                        last_consumed_observer_ts=last_consumed_observer_ts,
+                        telegram_last_update_id=telegram_last_update_id,
+                    )
+                last_command_check_ts = now
+
 
 if __name__ == "__main__":
     main()
@@ -1213,4 +1252,6 @@ __all__ = [
     # reporting
     "emit_daily_summary",
     "format_daily_summary_message",
+    # telegram_commands
+    "handle_telegram_commands",
 ]
