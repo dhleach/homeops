@@ -1,0 +1,3 @@
+# Runtime state files
+state/
+*.jsonl

@@ -46,6 +46,7 @@ from reporting import emit_daily_summary, format_daily_summary_message
 from state import (
     STATE_FILE,
     _empty_daily_state,
+    _load_last_consumed_ts,
     _load_state,
     _parse_dt,
     _save_state,
@@ -59,6 +60,33 @@ _RESTART_CLEAR_SCHEMAS = frozenset(
         "homeops.consumer.zone_time_to_temp.v1",
     }
 )
+
+
+def _event_ts_suffix(processing_ts: str | None, wall_ts: datetime) -> str:
+    """
+    Return a Telegram message suffix showing the event timestamp.
+
+    Always appends ``Event time: HH:MM UTC``. If the event timestamp differs
+    from *wall_ts* by more than 5 minutes (e.g. during playback of old events)
+    an additional note clarifies when the alert was actually sent.
+    """
+    if not processing_ts:
+        return ""
+    try:
+        from dateutil.parser import isoparse as _isoparse
+
+        event_dt = _isoparse(processing_ts)
+        event_time_str = event_dt.strftime("%H:%M UTC")
+        diff_s = abs((wall_ts - event_dt).total_seconds())
+        if diff_s > 300:  # 5 min
+            sent_time_str = wall_ts.strftime("%H:%M UTC")
+            return (
+                f"\nEvent time: {event_time_str}"
+                f" (alert sent at {sent_time_str} — replayed from downtime)"
+            )
+        return f"\nEvent time: {event_time_str}"
+    except Exception:
+        return ""
 
 
 def _emit_derived(derived: dict[str, Any], derived_log: str, fresh_restart: bool) -> bool:
@@ -78,6 +106,390 @@ def _emit_derived(derived: dict[str, Any], derived_log: str, fresh_restart: bool
         )
         return False
     return fresh_restart
+
+
+def _send_telegram(bot_token: str, chat_id: str, msg: str) -> None:
+    """Fire-and-forget Telegram sendMessage; silently logs on failure."""
+    if not (bot_token and chat_id):
+        return
+    import urllib.parse as _parse
+    import urllib.request as _urllib
+
+    url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+    data = _parse.urlencode({"chat_id": chat_id, "text": msg}).encode()
+    try:
+        _urllib.urlopen(url, data=data, timeout=10)
+    except Exception as _e:
+        print(f"[{utc_ts()}] WARN: Telegram send failed: {_e}", flush=True)
+
+
+def _playback_phase(
+    observer_log: str,
+    last_consumed_ts: str,
+    *,
+    derived_log: str,
+    floor_on_since: dict[str, datetime | None],
+    furnace_on_since: datetime | None,
+    climate_state: dict[str, Any],
+    daily_state: dict[str, Any],
+    floor_2_warn_sent: bool,
+    fresh_restart: bool,
+    current_date: str | None,
+    floor_entities: dict[str, str],
+    floor_no_response_rule: Any,
+    furnace_session_anomaly_rule: Any,
+    telegram_bot_token: str = "",
+    telegram_chat_id: str = "",
+) -> dict[str, Any]:
+    """
+    Replay missed observer events from *last_consumed_ts* to EOF.
+
+    Reads the observer JSONL forward from the line whose ``ts`` field is
+    ``>=`` *last_consumed_ts*, processes each event through the consumer
+    state machine, emits derived events to *derived_log*, and sends Telegram
+    alerts with the original event timestamp.
+
+    Returns a dict of updated state keys:
+        floor_on_since, furnace_on_since, climate_state, daily_state,
+        floor_2_warn_sent, fresh_restart, current_date,
+        last_consumed_observer_ts
+    """
+    from dateutil.parser import isoparse as _isoparse
+
+    _LOG = "[PLAYBACK]"
+    last_consumed_observer_ts: str | None = last_consumed_ts
+
+    print(
+        f"[{utc_ts()}] {_LOG} Starting catch-up replay from ts={last_consumed_ts}",
+        flush=True,
+    )
+
+    try:
+        obs_file = open(observer_log, encoding="utf-8")  # noqa: SIM115
+    except FileNotFoundError:
+        print(f"[{utc_ts()}] {_LOG} Observer log not found, skipping playback", flush=True)
+        return {
+            "floor_on_since": floor_on_since,
+            "furnace_on_since": furnace_on_since,
+            "climate_state": climate_state,
+            "daily_state": daily_state,
+            "floor_2_warn_sent": floor_2_warn_sent,
+            "fresh_restart": fresh_restart,
+            "current_date": current_date,
+            "last_consumed_observer_ts": last_consumed_observer_ts,
+        }
+
+    event_count = 0
+
+    with obs_file:
+        # Seek forward until we find ts >= last_consumed_ts, then replay from there.
+        found_start = False
+        for raw_line in obs_file:
+            line = raw_line.rstrip("\n")
+            if not line:
+                continue
+            try:
+                evt = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+
+            schema = evt.get("schema")
+            if schema != "homeops.observer.state_changed.v1":
+                # Non-observer lines still count toward seek position but we
+                # need to check ts for the seek decision.
+                if not found_start:
+                    evt_ts_str = evt.get("ts", "")
+                    if evt_ts_str >= last_consumed_ts:
+                        found_start = True
+                continue  # skip non-observer events in all cases
+
+            if not found_start:
+                evt_ts_str = evt.get("ts", "")
+                if evt_ts_str < last_consumed_ts:
+                    continue
+                found_start = True
+
+            # --- process this observer event ---
+            ts_str: str | None = evt.get("ts")
+            if ts_str:
+                last_consumed_observer_ts = ts_str
+            data = evt.get("data", {})
+            entity_id: str = data.get("entity_id", "")
+            old_state: str | None = data.get("old_state")
+            new_state: str | None = data.get("new_state")
+            attributes: dict[str, Any] = data.get("attributes") or {}
+
+            print(
+                f"[{utc_ts()}] {_LOG} {ts_str} {schema} {entity_id}: {old_state} -> {new_state}",
+                flush=True,
+            )
+
+            ts: datetime | None = None
+            try:
+                ts = _isoparse(ts_str) if ts_str else None
+            except Exception:
+                pass
+
+            # Date rollover during playback
+            if ts is not None:
+                evt_date = ts.strftime("%Y-%m-%d")
+                if current_date is None:
+                    current_date = evt_date
+                elif evt_date != current_date:
+                    summary = emit_daily_summary(daily_state, current_date)
+                    print(f"[{utc_ts()}] {_LOG} date rollover → emitting daily summary", flush=True)
+                    print(json.dumps(summary), flush=True)
+                    append_jsonl(derived_log, summary)
+                    if telegram_bot_token and telegram_chat_id:
+                        from reporting import format_daily_summary_message  # noqa: PLC0415
+
+                        tg_msg = format_daily_summary_message(summary["data"])
+                        tg_msg += _event_ts_suffix(ts_str, datetime.now(UTC))
+                        _send_telegram(telegram_bot_token, telegram_chat_id, tg_msg)
+                    daily_state = _empty_daily_state()
+                    current_date = evt_date
+
+                    # Floor runtime anomaly check
+                    from rules.floor_runtime_anomaly import FloorRuntimeAnomalyRule  # noqa: PLC0415
+
+                    _prior_summaries: list[dict] = []
+                    _summary_date = summary["data"]["date"]
+                    if Path(derived_log).exists():
+                        try:
+                            with open(derived_log, encoding="utf-8") as _dlog:
+                                for _dline in _dlog:
+                                    _dline = _dline.strip()
+                                    if not _dline:
+                                        continue
+                                    try:
+                                        _devt = json.loads(_dline)
+                                    except json.JSONDecodeError:
+                                        continue
+                                    if (
+                                        _devt.get("schema")
+                                        == "homeops.consumer.furnace_daily_summary.v1"
+                                        and _devt.get("data", {}).get("date") != _summary_date
+                                    ):
+                                        _prior_summaries.append(_devt)
+                        except Exception:
+                            pass
+                    _runtime_anomaly_rule = FloorRuntimeAnomalyRule(history=_prior_summaries)
+                    _per_floor = summary["data"].get("per_floor_runtime_s", {})
+                    for _floor, _floor_runtime_s in _per_floor.items():
+                        for _anom_evt in _runtime_anomaly_rule.check_daily_runtime(
+                            _floor, _floor_runtime_s, summary["data"]["date"]
+                        ):
+                            print(json.dumps(_anom_evt), flush=True)
+                            append_jsonl(derived_log, _anom_evt)
+
+            state_saved = False
+
+            # Floor events
+            if entity_id in floor_entities:
+                derived_events, floor_on_since, floor_2_warn_sent = process_floor_event(
+                    entity_id,
+                    old_state,
+                    new_state,
+                    ts,
+                    ts_str,
+                    floor_on_since,
+                    floor_2_warn_sent,
+                    processing_ts=ts_str,
+                )
+                for derived in derived_events:
+                    fresh_restart = _emit_derived(derived, derived_log, fresh_restart)
+                    if derived["schema"] == "homeops.consumer.floor_call_started.v1":
+                        zone = derived["data"]["floor"]
+                        climate_eid = _ZONE_TO_CLIMATE_ENTITY.get(zone)
+                        start_temp = None
+                        if climate_eid:
+                            start_temp = (climate_state.get(climate_eid) or {}).get("current_temp")
+                        floor_no_response_rule.on_floor_call_started(
+                            zone, ts or datetime.now(UTC), start_temp
+                        )
+                    if derived["schema"] == "homeops.consumer.floor_call_ended.v1":
+                        d = derived["data"]
+                        floor_no_response_rule.on_floor_call_ended(d["floor"])
+                        eid = d["entity_id"]
+                        if d.get("duration_s") is not None:
+                            daily_state["floor_runtime_s"][eid] = (
+                                daily_state["floor_runtime_s"].get(eid, 0) + d["duration_s"]
+                            )
+                        daily_state["per_floor_session_count"][eid] = (
+                            daily_state["per_floor_session_count"].get(eid, 0) + 1
+                        )
+                _save_state(
+                    floor_on_since,
+                    furnace_on_since,
+                    climate_state,
+                    daily_state,
+                    last_consumed_observer_ts=last_consumed_observer_ts,
+                )
+                state_saved = True
+
+            # Outdoor temperature
+            if entity_id == "sensor.outdoor_temperature":
+                for derived in process_outdoor_temp_event(
+                    entity_id, new_state, ts_str, processing_ts=ts_str
+                ):
+                    fresh_restart = _emit_derived(derived, derived_log, fresh_restart)
+                    daily_state["outdoor_temps"].append(derived["data"]["temperature_f"])
+                    daily_state["last_outdoor_temp_f"] = derived["data"]["temperature_f"]
+                _save_state(
+                    floor_on_since,
+                    furnace_on_since,
+                    climate_state,
+                    daily_state,
+                    last_consumed_observer_ts=last_consumed_observer_ts,
+                )
+                state_saved = True
+
+            # Climate entities
+            if entity_id in CLIMATE_ENTITIES:
+                derived_events, climate_state = process_climate_event(
+                    entity_id,
+                    attributes,
+                    ts_str,
+                    climate_state,
+                    new_state,
+                    floor_on_since=floor_on_since,
+                    daily_state=daily_state,
+                    processing_ts=ts_str,
+                )
+                for derived in derived_events:
+                    fresh_restart = _emit_derived(derived, derived_log, fresh_restart)
+                    if derived["schema"] == "homeops.consumer.zone_slow_to_heat_warning.v1":
+                        daily_state["warnings_triggered"]["zone_slow_to_heat"] += 1
+                        d = derived["data"]
+                        zone_label = d["zone"].replace("_", " ").title()
+                        elapsed_min = d["elapsed_s"] // 60
+                        start_t = d["start_temp"]
+                        curr_t = d["current_temp"]
+                        sp = d["setpoint"]
+                        away = (
+                            round(sp - curr_t, 1) if sp is not None and curr_t is not None else None
+                        )
+                        away_str = f"{away}°" if away is not None else "?"
+                        msg = (
+                            f"⚠️ {zone_label} slow to heat!\n"
+                            f"Calling for {elapsed_min} min — setpoint not reached yet.\n"
+                            f"Start: {start_t}°F → Now: {curr_t}°F → Target: {sp}°F"
+                            f" ({away_str} away)" + _event_ts_suffix(ts_str, datetime.now(UTC))
+                        )
+                        outdoor_t = d.get("outdoor_temp_f")
+                        if outdoor_t is not None:
+                            msg += f"\nOutdoor temp: {round(outdoor_t)}°F"
+                        _send_telegram(telegram_bot_token, telegram_chat_id, msg)
+                    if derived["schema"] == "homeops.consumer.zone_setpoint_miss.v1":
+                        daily_state["warnings_triggered"]["setpoint_miss"] += 1
+                zone = CLIMATE_ENTITIES.get(entity_id)
+                current_temp = (attributes or {}).get("current_temperature")
+                if zone and current_temp is not None:
+                    floor_no_response_rule.on_temp_updated(zone, current_temp)
+                sp = (climate_state.get(entity_id) or {}).get("setpoint")
+                if sp is not None:
+                    samples = daily_state.setdefault("per_floor_setpoint_samples", {})
+                    samples.setdefault(entity_id, []).append(sp)
+                _save_state(
+                    floor_on_since,
+                    furnace_on_since,
+                    climate_state,
+                    daily_state,
+                    last_consumed_observer_ts=last_consumed_observer_ts,
+                )
+                state_saved = True
+
+            # Furnace events
+            if entity_id == "binary_sensor.furnace_heating":
+                derived_events, furnace_on_since = process_furnace_event(
+                    entity_id,
+                    old_state,
+                    new_state,
+                    ts,
+                    ts_str,
+                    furnace_on_since,
+                    processing_ts=ts_str,
+                )
+                for derived in derived_events:
+                    fresh_restart = _emit_derived(derived, derived_log, fresh_restart)
+                    if derived["schema"] == "homeops.consumer.heating_session_ended.v1":
+                        d = derived["data"]
+                        if d.get("duration_s") is not None:
+                            daily_state["furnace_runtime_s"] += d["duration_s"]
+                        daily_state["session_count"] += 1
+                        _session_floor = d.get("floor")
+                        _session_dur = d.get("duration_s")
+                        _session_ts = d.get("ended_at") or derived["ts"]
+                        for _anom in furnace_session_anomaly_rule.check_session(
+                            _session_floor, _session_dur, _session_ts
+                        ):
+                            # Override rule-generated ts to use the original observer event ts.
+                            _anom["ts"] = ts_str or _anom["ts"]
+                            fresh_restart = _emit_derived(_anom, derived_log, fresh_restart)
+                            _anom_data = _anom["data"]
+                            if (
+                                _anom["schema"]
+                                == "homeops.consumer.heating_short_session_warning.v1"
+                            ):
+                                _msg = (
+                                    f"⚡ Short furnace session on "
+                                    f"{_anom_data['floor'] or 'unknown'}:"
+                                    f" {_anom_data['duration_s']}s"
+                                    f" (threshold: {_anom_data['threshold_s']}s)"
+                                    " — possible short-cycling"
+                                    + _event_ts_suffix(ts_str, datetime.now(UTC))
+                                )
+                                _send_telegram(telegram_bot_token, telegram_chat_id, _msg)
+                            elif _anom[
+                                "schema"
+                            ] == "homeops.consumer.heating_long_session_warning.v1" and _anom_data[
+                                "floor"
+                            ] in ("floor_2", None):
+                                _msg = (
+                                    f"🔥 Long furnace session on "
+                                    f"{_anom_data['floor'] or 'unknown'}:"
+                                    f" {_anom_data['duration_s']}s"
+                                    f" (threshold: {_anom_data['threshold_s']}s)"
+                                    " — overheating risk"
+                                    + _event_ts_suffix(ts_str, datetime.now(UTC))
+                                )
+                                _send_telegram(telegram_bot_token, telegram_chat_id, _msg)
+                _save_state(
+                    floor_on_since,
+                    furnace_on_since,
+                    climate_state,
+                    daily_state,
+                    last_consumed_observer_ts=last_consumed_observer_ts,
+                )
+                state_saved = True
+
+            # Catch-all save for events that don't match any entity block.
+            if not state_saved and ts_str:
+                _save_state(
+                    floor_on_since,
+                    furnace_on_since,
+                    climate_state,
+                    daily_state,
+                    last_consumed_observer_ts=last_consumed_observer_ts,
+                )
+
+            event_count += 1
+
+    print(
+        f"[{utc_ts()}] {_LOG} Playback complete: replayed {event_count} observer events",
+        flush=True,
+    )
+
+    return {
+        "floor_on_since": floor_on_since,
+        "furnace_on_since": furnace_on_since,
+        "climate_state": climate_state,
+        "daily_state": daily_state,
+        "floor_2_warn_sent": floor_2_warn_sent,
+        "fresh_restart": fresh_restart,
+        "current_date": current_date,
+        "last_consumed_observer_ts": last_consumed_observer_ts,
+    }
 
 
 def _register_sigterm_handler(*, state_file: Path | None = None) -> None:
@@ -133,6 +545,7 @@ def main() -> None:
     floor_2_warn_sent = False  # reset each time floor 2 starts a new call
     last_observer_event_ts: datetime | None = None
     observer_silence_sent = False  # reset when a new event arrives after silence
+    last_consumed_observer_ts: str | None = None  # updated after each processed event
 
     # Floor-not-responding rule (temp-based: zone calling > threshold with no temp rise).
     from rules.floor_no_response import FloorNoResponseRule  # noqa: PLC0415
@@ -188,6 +601,39 @@ def main() -> None:
     current_date = datetime.now(UTC).strftime("%Y-%m-%d")
     last_snapshot_ts: datetime | None = None
 
+    # Playback phase: catch up on missed observer events before entering live mode.
+    playback_from_ts = _load_last_consumed_ts()
+    if playback_from_ts:
+        print(f"[{utc_ts()}] Found last_consumed_observer_ts={playback_from_ts}", flush=True)
+        _pb_result = _playback_phase(
+            path,
+            playback_from_ts,
+            derived_log=derived_log,
+            floor_on_since=floor_on_since,
+            furnace_on_since=furnace_on_since,
+            climate_state=climate_state,
+            daily_state=daily_state,
+            floor_2_warn_sent=floor_2_warn_sent,
+            fresh_restart=fresh_restart,
+            current_date=current_date,
+            floor_entities=floor_entities,
+            floor_no_response_rule=floor_no_response_rule,
+            furnace_session_anomaly_rule=furnace_session_anomaly_rule,
+            telegram_bot_token=telegram_bot_token,
+            telegram_chat_id=telegram_chat_id,
+        )
+        floor_on_since = _pb_result["floor_on_since"]
+        furnace_on_since = _pb_result["furnace_on_since"]
+        climate_state = _pb_result["climate_state"]
+        daily_state = _pb_result["daily_state"]
+        floor_2_warn_sent = _pb_result["floor_2_warn_sent"]
+        fresh_restart = _pb_result["fresh_restart"]
+        current_date = _pb_result["current_date"] or current_date
+        last_consumed_observer_ts = _pb_result["last_consumed_observer_ts"]
+        print(f"[{utc_ts()}] [LIVE] Entering live tail mode", flush=True)
+    else:
+        print(f"[{utc_ts()}] [LIVE] Cold-start — no playback state found", flush=True)
+
     # Main stream loop: consume observer events and emit higher-level derived events.
     for line in follow(path):
         if line is None:
@@ -212,6 +658,9 @@ def main() -> None:
                 observer_silence_sent = False
 
             ts_str = evt.get("ts")
+            # Update last-consumed pointer for every observer event we handle.
+            if ts_str:
+                last_consumed_observer_ts = ts_str
             data = evt.get("data", {})
             entity_id = data.get("entity_id")
             old_state = data.get("old_state")
@@ -305,7 +754,14 @@ def main() -> None:
             # Per-floor call sessions are derived from floor_* heating_call sensors.
             if entity_id in floor_entities:
                 derived_events, floor_on_since, floor_2_warn_sent = process_floor_event(
-                    entity_id, old_state, new_state, ts, ts_str, floor_on_since, floor_2_warn_sent
+                    entity_id,
+                    old_state,
+                    new_state,
+                    ts,
+                    ts_str,
+                    floor_on_since,
+                    floor_2_warn_sent,
+                    processing_ts=ts_str,
                 )
                 for derived in derived_events:
                     fresh_restart = _emit_derived(derived, derived_log, fresh_restart)
@@ -329,11 +785,19 @@ def main() -> None:
                         daily_state["per_floor_session_count"][eid] = (
                             daily_state["per_floor_session_count"].get(eid, 0) + 1
                         )
-                _save_state(floor_on_since, furnace_on_since, climate_state, daily_state)
+                _save_state(
+                    floor_on_since,
+                    furnace_on_since,
+                    climate_state,
+                    daily_state,
+                    last_consumed_observer_ts=last_consumed_observer_ts,
+                )
 
             # Outdoor temperature readings are passed through as-is from the sensor.
             if entity_id == "sensor.outdoor_temperature":
-                for derived in process_outdoor_temp_event(entity_id, new_state, ts_str):
+                for derived in process_outdoor_temp_event(
+                    entity_id, new_state, ts_str, processing_ts=ts_str
+                ):
                     fresh_restart = _emit_derived(derived, derived_log, fresh_restart)
                     daily_state["outdoor_temps"].append(derived["data"]["temperature_f"])
                     daily_state["last_outdoor_temp_f"] = derived["data"]["temperature_f"]
@@ -352,7 +816,13 @@ def main() -> None:
                             flush=True,
                         )
                 # Always save on outdoor_temp event — this is the 62-min heartbeat write.
-                _save_state(floor_on_since, furnace_on_since, climate_state, daily_state)
+                _save_state(
+                    floor_on_since,
+                    furnace_on_since,
+                    climate_state,
+                    daily_state,
+                    last_consumed_observer_ts=last_consumed_observer_ts,
+                )
 
             # Thermostat climate entities: setpoint, current temp, and mode changes.
             if entity_id in CLIMATE_ENTITIES:
@@ -364,6 +834,7 @@ def main() -> None:
                     new_state,
                     floor_on_since=floor_on_since,
                     daily_state=daily_state,
+                    processing_ts=ts_str,
                 )
                 for derived in derived_events:
                     fresh_restart = _emit_derived(derived, derived_log, fresh_restart)
@@ -388,6 +859,7 @@ def main() -> None:
                         outdoor_t = d.get("outdoor_temp_f")
                         if outdoor_t is not None:
                             msg += f"\nOutdoor temp: {round(outdoor_t)}°F"
+                        msg += _event_ts_suffix(ts_str, datetime.now(UTC))
                         if telegram_bot_token and telegram_chat_id:
                             import urllib.parse as _parse
                             import urllib.request as _urllib
@@ -421,12 +893,24 @@ def main() -> None:
                 if sp is not None:
                     samples = daily_state.setdefault("per_floor_setpoint_samples", {})
                     samples.setdefault(entity_id, []).append(sp)
-                _save_state(floor_on_since, furnace_on_since, climate_state, daily_state)
+                _save_state(
+                    floor_on_since,
+                    furnace_on_since,
+                    climate_state,
+                    daily_state,
+                    last_consumed_observer_ts=last_consumed_observer_ts,
+                )
 
             # Whole-home heating sessions are derived from furnace on/off transitions.
             if entity_id == "binary_sensor.furnace_heating":
                 derived_events, furnace_on_since = process_furnace_event(
-                    entity_id, old_state, new_state, ts, ts_str, furnace_on_since
+                    entity_id,
+                    old_state,
+                    new_state,
+                    ts,
+                    ts_str,
+                    furnace_on_since,
+                    processing_ts=ts_str,
                 )
                 for derived in derived_events:
                     fresh_restart = _emit_derived(derived, derived_log, fresh_restart)
@@ -455,6 +939,7 @@ def main() -> None:
                                     f"⚡ Short furnace session on {_anom_floor}:"
                                     f" {_anom_dur}s (threshold: {_anom_thr}s)"
                                     " — possible short-cycling"
+                                    + _event_ts_suffix(ts_str, datetime.now(UTC))
                                 )
                                 if telegram_bot_token and telegram_chat_id:
                                     import urllib.parse as _parse
@@ -493,6 +978,7 @@ def main() -> None:
                                     f"🔥 Long furnace session on {_anom_floor}:"
                                     f" {_anom_dur}s (threshold: {_anom_thr}s)"
                                     " — overheating risk"
+                                    + _event_ts_suffix(ts_str, datetime.now(UTC))
                                 )
                                 if telegram_bot_token and telegram_chat_id:
                                     import urllib.parse as _parse
@@ -519,7 +1005,13 @@ def main() -> None:
                                         " TELEGRAM_CHAT_ID not set, skipping long-session alert",
                                         flush=True,
                                     )
-                _save_state(floor_on_since, furnace_on_since, climate_state, daily_state)
+                _save_state(
+                    floor_on_since,
+                    furnace_on_since,
+                    climate_state,
+                    daily_state,
+                    last_consumed_observer_ts=last_consumed_observer_ts,
+                )
 
         # In-flight floor-2 long-call check (runs on every event and on timeouts)
         warn_event, floor_2_warn_sent = check_floor_2_warning(
@@ -545,11 +1037,13 @@ def main() -> None:
                     temp_line = (
                         f"Current temp: {current_temp}°F → Setpoint: {setpoint}°F ({delta}° away)\n"
                     )
+                _warn_ts = warn_event["data"].get("started_at") or warn_event.get("ts")
                 msg = (
                     f"⚠️ Floor 2 has been calling for {elapsed_s // 60} min!\n"
                     f"{temp_line}"
                     f"Risk of furnace overheating (Code 4/7 limit trip).\n"
                     f"Consider lowering floor 2 thermostat manually."
+                    + _event_ts_suffix(_warn_ts, datetime.now(UTC))
                 )
                 url = f"https://api.telegram.org/bot{telegram_bot_token}/sendMessage"
                 data = _parse.urlencode({"chat_id": telegram_chat_id, "text": msg}).encode()
@@ -618,7 +1112,7 @@ def main() -> None:
                     f"⚠️ Observer silence detected!\n"
                     f"No events received for {silence_min} min.\n"
                     f"Last event: {last_ts}\n"
-                    f"Check observer service on Pi."
+                    f"Check observer service on Pi." + _event_ts_suffix(last_ts, datetime.now(UTC))
                 )
                 url = f"https://api.telegram.org/bot{telegram_bot_token}/sendMessage"
                 data = _parse.urlencode({"chat_id": telegram_chat_id, "text": msg}).encode()
@@ -656,6 +1150,7 @@ def main() -> None:
                     f"Calling for {elapsed_m:.0f} min with no temperature increase.\n"
                     f"Start temp: {start_t}°F, Current: {curr_t}°F\n"
                     f"Check thermostat or vents."
+                    + _event_ts_suffix(last_consumed_observer_ts, datetime.now(UTC))
                 )
                 url = f"https://api.telegram.org/bot{telegram_bot_token}/sendMessage"
                 data = _parse.urlencode({"chat_id": telegram_chat_id, "text": msg}).encode()
@@ -695,9 +1190,12 @@ __all__ = [
     "ZONE_TEMP_SNAPSHOT_INTERVAL_S",
     # entry-point functions (defined here)
     "_emit_derived",
+    "_playback_phase",
     "_register_sigterm_handler",
+    "_send_telegram",
     # state
     "_empty_daily_state",
+    "_load_last_consumed_ts",
     "_load_state",
     "_parse_dt",
     "_save_state",
