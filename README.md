@@ -21,25 +21,22 @@ Home Assistant alone can't prevent this. It sees state changes; it doesn't reaso
 
 ## Architecture
 
-### System Architecture
-
-<img src="docs/diagrams/system-architecture.svg" alt="System Architecture" width="900">
-
-_The full system: Raspberry Pi host running Home Assistant, homeops-observer (polls HA State API every 30s, writes raw JSONL), homeops-consumer (tails events.jsonl, runs rules engine, emits derived events), and Telegram alert delivery._
-
-### Event Lifecycle & Data Flow
-
-<img src="docs/diagrams/data-flow.svg" alt="Event Lifecycle and Data Flow" width="900">
-
-_Raw HA sensor readings → observer → events.jsonl (raw event types) → consumer rules engine → derived_events.jsonl (15 derived event types) → Telegram push alerts; bottom panel shows the floor-2 overheating event chain from call start to warning._
-
-### HVAC Physical Entity Model
-
-<img src="docs/diagrams/hvac-entity-model.svg" alt="HVAC Physical Entity Model" width="900">
-
-_Physical HVAC layout: binary furnace with high-limit switch (Code 4 overheating → Code 7 three-hour lockout) → zone damper controller → 3 zones with 16 total vents (1 basement always-open, 5 floor 1, 3 floor 2, 7 floor 3); floor 2's limited vent count is the root cause of the overheating problem homeops solves._
-
----
+```
+Home Assistant
+  WebSocket API
+       │
+       ▼
+  observer.py  ──► state/observer/events.jsonl  (raw JSONL, append-only)
+                               │
+                               ▼
+                         consumer.py
+                               │
+                 ┌─────────────┼─────────────┐
+                 ▼             ▼             ▼
+        state/consumer/   stdout        Telegram alert
+        events.jsonl                  (floor-2 long call)
+       (derived events)
+```
 
 **Observer** connects to the Home Assistant WebSocket API, subscribes to `state_changed` events for configured entities, and writes one JSON line per event to a JSONL log. It reconnects automatically with exponential backoff.
 
