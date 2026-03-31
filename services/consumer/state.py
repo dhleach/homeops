@@ -80,6 +80,7 @@ def _save_state(
     daily_state: dict[str, Any],
     *,
     last_consumed_observer_ts: str | None = None,
+    telegram_last_update_id: int | None = None,
     state_file: Path | None = None,
 ) -> None:
     """Atomically persist consumer runtime state to disk."""
@@ -102,6 +103,7 @@ def _save_state(
         "climate_state": serialized_cs,
         "daily_state": daily_state,
         "last_consumed_observer_ts": last_consumed_observer_ts,
+        "telegram_last_update_id": telegram_last_update_id,
         "saved_at": utc_ts(),
     }
     sf = state_file or STATE_FILE
