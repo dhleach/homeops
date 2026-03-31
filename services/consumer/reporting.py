@@ -1,10 +1,14 @@
 """Daily summary generation and formatting for the HomeOps consumer service."""
 
+from __future__ import annotations
+
+from typing import Any
+
 from constants import _FLOOR_ENTITIES
 from utils import utc_ts
 
 
-def emit_daily_summary(daily_state: dict, date_str: str) -> dict:
+def emit_daily_summary(daily_state: dict[str, Any], date_str: str) -> dict[str, Any]:
     """
     Build a furnace_daily_summary.v1 event from accumulated daily state.
     daily_state keys:
@@ -16,22 +20,22 @@ def emit_daily_summary(daily_state: dict, date_str: str) -> dict:
       - warnings_triggered: dict {warning_type: int}
     Returns the event dict.
     """
-    outdoor_temps = daily_state.get("outdoor_temps") or []
-    outdoor_temp_min_f = min(outdoor_temps) if outdoor_temps else None
-    outdoor_temp_max_f = max(outdoor_temps) if outdoor_temps else None
-    outdoor_temp_avg_f = (
+    outdoor_temps: list[float] = daily_state.get("outdoor_temps") or []
+    outdoor_temp_min_f: float | None = min(outdoor_temps) if outdoor_temps else None
+    outdoor_temp_max_f: float | None = max(outdoor_temps) if outdoor_temps else None
+    outdoor_temp_avg_f: float | None = (
         round(sum(outdoor_temps) / len(outdoor_temps), 1) if outdoor_temps else None
     )
 
-    per_floor_runtime_s = {}
-    per_floor_session_count = {}
+    per_floor_runtime_s: dict[str, int] = {}
+    per_floor_session_count: dict[str, int] = {}
     for entity_id, floor_name in _FLOOR_ENTITIES.items():
         per_floor_runtime_s[floor_name] = daily_state.get("floor_runtime_s", {}).get(entity_id, 0)
         per_floor_session_count[floor_name] = daily_state.get("per_floor_session_count", {}).get(
             entity_id, 0
         )
 
-    warnings_triggered = dict(
+    warnings_triggered: dict[str, int] = dict(
         daily_state.get(
             "warnings_triggered",
             {
@@ -63,7 +67,7 @@ def emit_daily_summary(daily_state: dict, date_str: str) -> dict:
     }
 
 
-def format_daily_summary_message(data: dict) -> str:
+def format_daily_summary_message(data: dict[str, Any]) -> str:
     """
     Format a furnace_daily_summary.v1 event data dict as a human-readable Telegram message.
 
@@ -74,12 +78,12 @@ def format_daily_summary_message(data: dict) -> str:
         A multi-line string suitable for sending via Telegram sendMessage.
     """
     date = data.get("date", "unknown")
-    lines = [f"📊 Daily Heating Summary — {date}"]
+    lines: list[str] = [f"📊 Daily Heating Summary — {date}"]
 
     # Outdoor temperature line (omit entirely if all None)
-    t_min = data.get("outdoor_temp_min_f")
-    t_max = data.get("outdoor_temp_max_f")
-    t_avg = data.get("outdoor_temp_avg_f")
+    t_min: float | None = data.get("outdoor_temp_min_f")
+    t_max: float | None = data.get("outdoor_temp_max_f")
+    t_avg: float | None = data.get("outdoor_temp_avg_f")
     if t_min is not None or t_max is not None or t_avg is not None:
         min_str = f"{round(t_min)}°F" if t_min is not None else "?°F"
         max_str = f"{round(t_max)}°F" if t_max is not None else "?°F"
@@ -89,18 +93,18 @@ def format_daily_summary_message(data: dict) -> str:
     lines.append("")
 
     # Total furnace runtime
-    total_s = data.get("total_furnace_runtime_s", 0)
+    total_s: int = data.get("total_furnace_runtime_s", 0)
     total_h = total_s // 3600
     total_m = (total_s % 3600) // 60
     lines.append(f"⏱️ Total furnace runtime: {total_h}h {total_m}m")
 
     # Heating sessions
-    total_sessions = data.get("session_count", 0)
+    total_sessions: int = data.get("session_count", 0)
     lines.append(f"🔥 Heating sessions: {total_sessions} total")
 
-    per_floor_runtime = data.get("per_floor_runtime_s", {})
-    per_floor_sessions = data.get("per_floor_session_count", {})
-    floor_display_order = [
+    per_floor_runtime: dict[str, int] = data.get("per_floor_runtime_s", {})
+    per_floor_sessions: dict[str, int] = data.get("per_floor_session_count", {})
+    floor_display_order: list[tuple[str, str]] = [
         ("floor_1", "Floor 1"),
         ("floor_2", "Floor 2"),
         ("floor_3", "Floor 3"),
@@ -119,13 +123,13 @@ def format_daily_summary_message(data: dict) -> str:
     lines.append("")
 
     # Warnings section
-    warnings = data.get("warnings_triggered", {})
+    warnings: dict[str, int] = data.get("warnings_triggered", {})
     total_warnings = sum(warnings.values())
     if total_warnings == 0:
         lines.append("⚠️ Warnings today: None ✅")
     else:
         lines.append(f"⚠️ Warnings today: {total_warnings}")
-        warning_display = [
+        warning_display: list[tuple[str, str]] = [
             ("floor_2_long_call", "Floor-2 long call"),
             ("floor_2_escalation", "Floor-2 escalation 🚨"),
             ("floor_no_response", "Floor no-response"),

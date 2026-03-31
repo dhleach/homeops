@@ -1,15 +1,18 @@
 """State persistence and initialization for the HomeOps consumer service."""
 
+from __future__ import annotations
+
 import json
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from constants import _FLOOR_ENTITIES, STATE_FILE
 from dateutil.parser import isoparse
 from utils import _parse_dt, utc_ts
 
 
-def last_furnace_on_since(path: str):
+def last_furnace_on_since(path: str) -> datetime | None:
     """
     Look back through the observer log to recover whether the furnace is currently 'on'
     and when that 'on' session started (based on the last off->on event).
@@ -50,7 +53,7 @@ def last_furnace_on_since(path: str):
     return None
 
 
-def _empty_daily_state() -> dict:
+def _empty_daily_state() -> dict[str, Any]:
     return {
         "furnace_runtime_s": 0,
         "session_count": 0,
@@ -70,28 +73,28 @@ def _empty_daily_state() -> dict:
 
 
 def _save_state(
-    floor_on_since: dict,
-    furnace_on_since,
-    climate_state: dict,
-    daily_state: dict,
+    floor_on_since: dict[str, datetime | None],
+    furnace_on_since: datetime | None,
+    climate_state: dict[str, Any],
+    daily_state: dict[str, Any],
     *,
     state_file: Path | None = None,
 ) -> None:
     """Atomically persist consumer runtime state to disk."""
 
-    def _dt(dt):
+    def _dt(dt: datetime | None) -> str | None:
         return dt.isoformat() if dt is not None else None
 
-    serialized_fos = {k: _dt(v) for k, v in floor_on_since.items()}
+    serialized_fos: dict[str, str | None] = {k: _dt(v) for k, v in floor_on_since.items()}
 
-    serialized_cs: dict = {}
+    serialized_cs: dict[str, Any] = {}
     for eid, es in climate_state.items():
         s = dict(es)
         s["heating_start_ts"] = _dt(s.get("heating_start_ts"))
         s["setpoint_reached_ts"] = _dt(s.get("setpoint_reached_ts"))
         serialized_cs[eid] = s
 
-    payload = {
+    payload: dict[str, Any] = {
         "floor_on_since": serialized_fos,
         "furnace_on_since": _dt(furnace_on_since),
         "climate_state": serialized_cs,
@@ -105,7 +108,7 @@ def _save_state(
     tmp.rename(sf)
 
 
-def _load_state(*, state_file: Path | None = None) -> dict | None:
+def _load_state(*, state_file: Path | None = None) -> dict[str, Any] | None:
     """
     Load persisted consumer state from disk.
 

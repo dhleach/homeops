@@ -1,14 +1,21 @@
 """Alert checks for floor-2 long-call, escalation, observer silence, and zone temp snapshots."""
 
+from __future__ import annotations
+
 from datetime import datetime
+from typing import Any
 
 from constants import ZONE_TEMP_SNAPSHOT_LOG
 from utils import append_jsonl, utc_ts
 
 
 def check_floor_2_warning(
-    floor_on_since, floor_2_warn_sent, floor_2_warn_threshold_s, now_ts, climate_state=None
-):
+    floor_on_since: dict[str, datetime | None],
+    floor_2_warn_sent: bool,
+    floor_2_warn_threshold_s: int,
+    now_ts: datetime,
+    climate_state: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any] | None, bool]:
     """
     Check whether the floor-2 long-call warning should fire.
 
@@ -30,7 +37,7 @@ def check_floor_2_warning(
     current_temp = f2_climate.get("current_temp")
     setpoint = f2_climate.get("setpoint")
 
-    warn_event = {
+    warn_event: dict[str, Any] = {
         "schema": "homeops.consumer.floor_2_long_call_warning.v1",
         "source": "consumer.v1",
         "ts": utc_ts(),
@@ -49,8 +56,8 @@ def check_floor_2_warning(
 def check_floor_2_escalation(
     long_call_count_today: int,
     floor_2_warn_threshold_s: int,
-    climate_state: dict | None = None,
-) -> dict | None:
+    climate_state: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
     """
     Return a floor_2_long_call_escalation.v1 event if today's long-call count has
     reached the escalation threshold (>= 2), otherwise return None.
@@ -90,7 +97,7 @@ def check_observer_silence(
     observer_silence_sent: bool,
     threshold_s: int,
     now_ts: datetime,
-) -> tuple[dict | None, bool]:
+) -> tuple[dict[str, Any] | None, bool]:
     """
     Check whether the observer has been silent longer than threshold_s.
 
@@ -107,7 +114,7 @@ def check_observer_silence(
     if silence_s < threshold_s:
         return None, observer_silence_sent
 
-    warn_event = {
+    warn_event: dict[str, Any] = {
         "schema": "homeops.consumer.observer_silence_warning.v1",
         "source": "consumer.v1",
         "ts": utc_ts(),
@@ -121,8 +128,8 @@ def check_observer_silence(
 
 
 def write_zone_temp_snapshot(
-    climate_state: dict,
-    daily_state: dict,
+    climate_state: dict[str, Any],
+    daily_state: dict[str, Any],
     snapshot_log: str = ZONE_TEMP_SNAPSHOT_LOG,
 ) -> bool:
     """Write a zone_temp_snapshot.v1 record if climate_state has at least one zone.
@@ -132,7 +139,7 @@ def write_zone_temp_snapshot(
     if not climate_state:
         return False
 
-    zones: dict = {}
+    zones: dict[str, Any] = {}
     for _eid, zone_data in climate_state.items():
         zone_name = zone_data.get("zone")
         if not zone_name:
@@ -149,7 +156,7 @@ def write_zone_temp_snapshot(
     if not zones:
         return False
 
-    record = {
+    record: dict[str, Any] = {
         "schema": "homeops.consumer.zone_temp_snapshot.v1",
         "source": "consumer.v1",
         "ts": utc_ts(),

@@ -13,12 +13,15 @@ Business logic lives in focused modules:
   - reporting.py   emit_daily_summary, format_daily_summary_message
 """
 
+from __future__ import annotations
+
 import json
 import os
 import signal
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from alerts import (
     check_floor_2_escalation,
@@ -58,7 +61,7 @@ _RESTART_CLEAR_SCHEMAS = frozenset(
 )
 
 
-def _emit_derived(derived: dict, derived_log: str, fresh_restart: bool) -> bool:
+def _emit_derived(derived: dict[str, Any], derived_log: str, fresh_restart: bool) -> bool:
     """
     Print + append a derived event; tag with across_restart when applicable.
 
@@ -98,7 +101,7 @@ def _register_sigterm_handler(*, state_file: Path | None = None) -> None:
     signal.signal(signal.SIGTERM, _handler)
 
 
-def main():
+def main() -> None:
     """Tail observer events and emit derived floor/furnace session events."""
     path = os.environ.get("EVENT_LOG", "state/observer/events.jsonl")
     derived_log = os.environ.get("DERIVED_EVENT_LOG", "state/consumer/events.jsonl")
