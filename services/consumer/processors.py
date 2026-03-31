@@ -23,6 +23,7 @@ def process_floor_event(
     ts_str: str | None,
     floor_on_since: dict[str, datetime | None],
     floor_2_warn_sent: bool,
+    processing_ts: str | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, datetime | None], bool]:
     """
     Process a floor heating-call state change.
@@ -37,13 +38,15 @@ def process_floor_event(
     events: list[dict[str, Any]] = []
     floor_on_since = dict(floor_on_since)  # avoid mutating caller's dict
 
+    _evt_ts = processing_ts or utc_ts()
+
     if old_state == "off" and new_state == "on":
         floor_on_since[entity_id] = ts
         events.append(
             {
                 "schema": "homeops.consumer.floor_call_started.v1",
                 "source": "consumer.v1",
-                "ts": utc_ts(),
+                "ts": _evt_ts,
                 "data": {
                     "floor": floor_key,
                     "started_at": ts_str,
@@ -64,7 +67,7 @@ def process_floor_event(
             {
                 "schema": "homeops.consumer.floor_call_ended.v1",
                 "source": "consumer.v1",
-                "ts": utc_ts(),
+                "ts": _evt_ts,
                 "data": {
                     "floor": floor_key,
                     "ended_at": ts_str,
@@ -84,6 +87,7 @@ def process_furnace_event(
     ts: datetime | None,
     ts_str: str | None,
     furnace_on_since: datetime | None,
+    processing_ts: str | None = None,
 ) -> tuple[list[dict[str, Any]], datetime | None]:
     """
     Process a furnace heating state change.
@@ -92,6 +96,7 @@ def process_furnace_event(
     events is a list of derived event dicts (0 or 1 items).
     """
     events: list[dict[str, Any]] = []
+    _evt_ts = processing_ts or utc_ts()
 
     if old_state == "off" and new_state == "on":
         furnace_on_since = ts
@@ -99,7 +104,7 @@ def process_furnace_event(
             {
                 "schema": "homeops.consumer.heating_session_started.v1",
                 "source": "consumer.v1",
-                "ts": utc_ts(),
+                "ts": _evt_ts,
                 "data": {
                     "started_at": ts_str,
                     "entity_id": entity_id,
@@ -116,7 +121,7 @@ def process_furnace_event(
             {
                 "schema": "homeops.consumer.heating_session_ended.v1",
                 "source": "consumer.v1",
-                "ts": utc_ts(),
+                "ts": _evt_ts,
                 "data": {
                     "ended_at": ts_str,
                     "entity_id": entity_id,
@@ -136,6 +141,7 @@ def process_climate_event(
     new_state: str | None = None,
     floor_on_since: dict[str, datetime | None] | None = None,
     daily_state: dict[str, Any] | None = None,
+    processing_ts: str | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """
     Process a climate entity state_changed event.
@@ -162,6 +168,8 @@ def process_climate_event(
         floor_on_since = {}
     if daily_state is None:
         daily_state = {}
+
+    _evt_ts = processing_ts or utc_ts()
 
     setpoint: float | None = attributes.get("temperature")
     current_temp: float | None = attributes.get("current_temperature")
@@ -223,7 +231,7 @@ def process_climate_event(
             {
                 "schema": "homeops.consumer.thermostat_setpoint_changed.v1",
                 "source": "consumer.v1",
-                "ts": utc_ts(),
+                "ts": _evt_ts,
                 "data": common,
             }
         )
@@ -235,7 +243,7 @@ def process_climate_event(
             {
                 "schema": "homeops.consumer.thermostat_current_temp_updated.v1",
                 "source": "consumer.v1",
-                "ts": utc_ts(),
+                "ts": _evt_ts,
                 "data": common,
             }
         )
@@ -250,7 +258,7 @@ def process_climate_event(
             {
                 "schema": "homeops.consumer.thermostat_mode_changed.v1",
                 "source": "consumer.v1",
-                "ts": utc_ts(),
+                "ts": _evt_ts,
                 "data": common,
             }
         )
@@ -270,7 +278,7 @@ def process_climate_event(
             {
                 "schema": "homeops.consumer.thermostat_setpoint_reached.v1",
                 "source": "consumer.v1",
-                "ts": utc_ts(),
+                "ts": _evt_ts,
                 "data": common,
             }
         )
@@ -290,7 +298,7 @@ def process_climate_event(
                 {
                     "schema": "homeops.consumer.zone_time_to_temp.v1",
                     "source": "consumer.v1",
-                    "ts": utc_ts(),
+                    "ts": _evt_ts,
                     "data": {
                         "entity_id": entity_id,
                         "zone": zone,
@@ -333,7 +341,7 @@ def process_climate_event(
                 {
                     "schema": "homeops.consumer.zone_overshoot.v1",
                     "source": "consumer.v1",
-                    "ts": utc_ts(),
+                    "ts": _evt_ts,
                     "data": {
                         "entity_id": entity_id,
                         "zone": zone,
@@ -367,7 +375,7 @@ def process_climate_event(
                         {
                             "schema": "homeops.consumer.zone_setpoint_miss.v1",
                             "source": "consumer.v1",
-                            "ts": utc_ts(),
+                            "ts": _evt_ts,
                             "data": {
                                 "entity_id": entity_id,
                                 "zone": zone,
@@ -414,7 +422,7 @@ def process_climate_event(
                 {
                     "schema": "homeops.consumer.zone_slow_to_heat_warning.v1",
                     "source": "consumer.v1",
-                    "ts": utc_ts(),
+                    "ts": _evt_ts,
                     "data": {
                         "zone": zone,
                         "entity_id": entity_id,
@@ -463,6 +471,7 @@ def process_outdoor_temp_event(
     entity_id: str,
     new_state: str | None,
     ts_str: str | None,
+    processing_ts: str | None = None,
 ) -> list[dict[str, Any]]:
     """
     Process an outdoor temperature state change.
@@ -475,11 +484,12 @@ def process_outdoor_temp_event(
         temp_f = float(new_state)
     except (ValueError, TypeError):
         return []
+    _evt_ts = processing_ts or utc_ts()
     return [
         {
             "schema": "homeops.consumer.outdoor_temp_updated.v1",
             "source": "consumer.v1",
-            "ts": utc_ts(),
+            "ts": _evt_ts,
             "data": {
                 "entity_id": entity_id,
                 "temperature_f": temp_f,

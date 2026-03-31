@@ -62,6 +62,33 @@ _RESTART_CLEAR_SCHEMAS = frozenset(
 )
 
 
+def _event_ts_suffix(processing_ts: str | None, wall_ts: datetime) -> str:
+    """
+    Return a Telegram message suffix showing the event timestamp.
+
+    Always appends ``Event time: HH:MM UTC``. If the event timestamp differs
+    from *wall_ts* by more than 5 minutes (e.g. during playback of old events)
+    an additional note clarifies when the alert was actually sent.
+    """
+    if not processing_ts:
+        return ""
+    try:
+        from dateutil.parser import isoparse as _isoparse
+
+        event_dt = _isoparse(processing_ts)
+        event_time_str = event_dt.strftime("%H:%M UTC")
+        diff_s = abs((wall_ts - event_dt).total_seconds())
+        if diff_s > 300:  # 5 min
+            sent_time_str = wall_ts.strftime("%H:%M UTC")
+            return (
+                f"\nEvent time: {event_time_str}"
+                f" (alert sent at {sent_time_str} — replayed from downtime)"
+            )
+        return f"\nEvent time: {event_time_str}"
+    except Exception:
+        return ""
+
+
 def _emit_derived(derived: dict[str, Any], derived_log: str, fresh_restart: bool) -> bool:
     """
     Print + append a derived event; tag with across_restart when applicable.
@@ -310,7 +337,14 @@ def main() -> None:
             # Per-floor call sessions are derived from floor_* heating_call sensors.
             if entity_id in floor_entities:
                 derived_events, floor_on_since, floor_2_warn_sent = process_floor_event(
-                    entity_id, old_state, new_state, ts, ts_str, floor_on_since, floor_2_warn_sent
+                    entity_id,
+                    old_state,
+                    new_state,
+                    ts,
+                    ts_str,
+                    floor_on_since,
+                    floor_2_warn_sent,
+                    processing_ts=ts_str,
                 )
                 for derived in derived_events:
                     fresh_restart = _emit_derived(derived, derived_log, fresh_restart)
@@ -344,7 +378,9 @@ def main() -> None:
 
             # Outdoor temperature readings are passed through as-is from the sensor.
             if entity_id == "sensor.outdoor_temperature":
-                for derived in process_outdoor_temp_event(entity_id, new_state, ts_str):
+                for derived in process_outdoor_temp_event(
+                    entity_id, new_state, ts_str, processing_ts=ts_str
+                ):
                     fresh_restart = _emit_derived(derived, derived_log, fresh_restart)
                     daily_state["outdoor_temps"].append(derived["data"]["temperature_f"])
                     daily_state["last_outdoor_temp_f"] = derived["data"]["temperature_f"]
@@ -381,6 +417,7 @@ def main() -> None:
                     new_state,
                     floor_on_since=floor_on_since,
                     daily_state=daily_state,
+                    processing_ts=ts_str,
                 )
                 for derived in derived_events:
                     fresh_restart = _emit_derived(derived, derived_log, fresh_restart)
@@ -405,6 +442,7 @@ def main() -> None:
                         outdoor_t = d.get("outdoor_temp_f")
                         if outdoor_t is not None:
                             msg += f"\nOutdoor temp: {round(outdoor_t)}°F"
+                        msg += _event_ts_suffix(ts_str, datetime.now(UTC))
                         if telegram_bot_token and telegram_chat_id:
                             import urllib.parse as _parse
                             import urllib.request as _urllib
@@ -449,7 +487,13 @@ def main() -> None:
             # Whole-home heating sessions are derived from furnace on/off transitions.
             if entity_id == "binary_sensor.furnace_heating":
                 derived_events, furnace_on_since = process_furnace_event(
-                    entity_id, old_state, new_state, ts, ts_str, furnace_on_since
+                    entity_id,
+                    old_state,
+                    new_state,
+                    ts,
+                    ts_str,
+                    furnace_on_since,
+                    processing_ts=ts_str,
                 )
                 for derived in derived_events:
                     fresh_restart = _emit_derived(derived, derived_log, fresh_restart)
@@ -478,6 +522,7 @@ def main() -> None:
                                     f"⚡ Short furnace session on {_anom_floor}:"
                                     f" {_anom_dur}s (threshold: {_anom_thr}s)"
                                     " — possible short-cycling"
+                                    + _event_ts_suffix(ts_str, datetime.now(UTC))
                                 )
                                 if telegram_bot_token and telegram_chat_id:
                                     import urllib.parse as _parse
@@ -516,6 +561,7 @@ def main() -> None:
                                     f"🔥 Long furnace session on {_anom_floor}:"
                                     f" {_anom_dur}s (threshold: {_anom_thr}s)"
                                     " — overheating risk"
+                                    + _event_ts_suffix(ts_str, datetime.now(UTC))
                                 )
                                 if telegram_bot_token and telegram_chat_id:
                                     import urllib.parse as _parse
@@ -574,11 +620,13 @@ def main() -> None:
                     temp_line = (
                         f"Current temp: {current_temp}°F → Setpoint: {setpoint}°F ({delta}° away)\n"
                     )
+                _warn_ts = warn_event["data"].get("started_at") or warn_event.get("ts")
                 msg = (
                     f"⚠️ Floor 2 has been calling for {elapsed_s // 60} min!\n"
                     f"{temp_line}"
                     f"Risk of furnace overheating (Code 4/7 limit trip).\n"
                     f"Consider lowering floor 2 thermostat manually."
+                    + _event_ts_suffix(_warn_ts, datetime.now(UTC))
                 )
                 url = f"https://api.telegram.org/bot{telegram_bot_token}/sendMessage"
                 data = _parse.urlencode({"chat_id": telegram_chat_id, "text": msg}).encode()
@@ -647,7 +695,7 @@ def main() -> None:
                     f"⚠️ Observer silence detected!\n"
                     f"No events received for {silence_min} min.\n"
                     f"Last event: {last_ts}\n"
-                    f"Check observer service on Pi."
+                    f"Check observer service on Pi." + _event_ts_suffix(last_ts, datetime.now(UTC))
                 )
                 url = f"https://api.telegram.org/bot{telegram_bot_token}/sendMessage"
                 data = _parse.urlencode({"chat_id": telegram_chat_id, "text": msg}).encode()
@@ -685,6 +733,7 @@ def main() -> None:
                     f"Calling for {elapsed_m:.0f} min with no temperature increase.\n"
                     f"Start temp: {start_t}°F, Current: {curr_t}°F\n"
                     f"Check thermostat or vents."
+                    + _event_ts_suffix(last_consumed_observer_ts, datetime.now(UTC))
                 )
                 url = f"https://api.telegram.org/bot{telegram_bot_token}/sendMessage"
                 data = _parse.urlencode({"chat_id": telegram_chat_id, "text": msg}).encode()
