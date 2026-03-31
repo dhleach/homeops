@@ -79,6 +79,7 @@ def _save_state(
     climate_state: dict[str, Any],
     daily_state: dict[str, Any],
     *,
+    last_consumed_observer_ts: str | None = None,
     state_file: Path | None = None,
 ) -> None:
     """Atomically persist consumer runtime state to disk."""
@@ -100,6 +101,7 @@ def _save_state(
         "furnace_on_since": _dt(furnace_on_since),
         "climate_state": serialized_cs,
         "daily_state": daily_state,
+        "last_consumed_observer_ts": last_consumed_observer_ts,
         "saved_at": utc_ts(),
     }
     sf = state_file or STATE_FILE
@@ -135,11 +137,30 @@ def _load_state(*, state_file: Path | None = None) -> dict[str, Any] | None:
     return data
 
 
+def _load_last_consumed_ts(*, state_file: Path | None = None) -> str | None:
+    """
+    Read ``last_consumed_observer_ts`` from the state file regardless of file age.
+
+    Returns None if the file is missing, unreadable, or the field is absent.
+    This is intentionally separate from ``_load_state`` (which rejects stale files)
+    so that the playback start point is always available even after long downtime.
+    """
+    sf = state_file or STATE_FILE
+    if not sf.exists():
+        return None
+    try:
+        data = json.loads(sf.read_text(encoding="utf-8"))
+        return data.get("last_consumed_observer_ts")
+    except Exception:
+        return None
+
+
 __all__ = [
     "last_furnace_on_since",
     "_empty_daily_state",
     "_save_state",
     "_load_state",
+    "_load_last_consumed_ts",
     "_parse_dt",
     "STATE_FILE",
 ]

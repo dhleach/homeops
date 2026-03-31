@@ -46,6 +46,7 @@ from reporting import emit_daily_summary, format_daily_summary_message
 from state import (
     STATE_FILE,
     _empty_daily_state,
+    _load_last_consumed_ts,
     _load_state,
     _parse_dt,
     _save_state,
@@ -133,6 +134,7 @@ def main() -> None:
     floor_2_warn_sent = False  # reset each time floor 2 starts a new call
     last_observer_event_ts: datetime | None = None
     observer_silence_sent = False  # reset when a new event arrives after silence
+    last_consumed_observer_ts: str | None = None  # updated after each processed event
 
     # Floor-not-responding rule (temp-based: zone calling > threshold with no temp rise).
     from rules.floor_no_response import FloorNoResponseRule  # noqa: PLC0415
@@ -212,6 +214,9 @@ def main() -> None:
                 observer_silence_sent = False
 
             ts_str = evt.get("ts")
+            # Update last-consumed pointer for every observer event we handle.
+            if ts_str:
+                last_consumed_observer_ts = ts_str
             data = evt.get("data", {})
             entity_id = data.get("entity_id")
             old_state = data.get("old_state")
@@ -329,7 +334,13 @@ def main() -> None:
                         daily_state["per_floor_session_count"][eid] = (
                             daily_state["per_floor_session_count"].get(eid, 0) + 1
                         )
-                _save_state(floor_on_since, furnace_on_since, climate_state, daily_state)
+                _save_state(
+                    floor_on_since,
+                    furnace_on_since,
+                    climate_state,
+                    daily_state,
+                    last_consumed_observer_ts=last_consumed_observer_ts,
+                )
 
             # Outdoor temperature readings are passed through as-is from the sensor.
             if entity_id == "sensor.outdoor_temperature":
@@ -352,7 +363,13 @@ def main() -> None:
                             flush=True,
                         )
                 # Always save on outdoor_temp event — this is the 62-min heartbeat write.
-                _save_state(floor_on_since, furnace_on_since, climate_state, daily_state)
+                _save_state(
+                    floor_on_since,
+                    furnace_on_since,
+                    climate_state,
+                    daily_state,
+                    last_consumed_observer_ts=last_consumed_observer_ts,
+                )
 
             # Thermostat climate entities: setpoint, current temp, and mode changes.
             if entity_id in CLIMATE_ENTITIES:
@@ -421,7 +438,13 @@ def main() -> None:
                 if sp is not None:
                     samples = daily_state.setdefault("per_floor_setpoint_samples", {})
                     samples.setdefault(entity_id, []).append(sp)
-                _save_state(floor_on_since, furnace_on_since, climate_state, daily_state)
+                _save_state(
+                    floor_on_since,
+                    furnace_on_since,
+                    climate_state,
+                    daily_state,
+                    last_consumed_observer_ts=last_consumed_observer_ts,
+                )
 
             # Whole-home heating sessions are derived from furnace on/off transitions.
             if entity_id == "binary_sensor.furnace_heating":
@@ -519,7 +542,13 @@ def main() -> None:
                                         " TELEGRAM_CHAT_ID not set, skipping long-session alert",
                                         flush=True,
                                     )
-                _save_state(floor_on_since, furnace_on_since, climate_state, daily_state)
+                _save_state(
+                    floor_on_since,
+                    furnace_on_since,
+                    climate_state,
+                    daily_state,
+                    last_consumed_observer_ts=last_consumed_observer_ts,
+                )
 
         # In-flight floor-2 long-call check (runs on every event and on timeouts)
         warn_event, floor_2_warn_sent = check_floor_2_warning(
@@ -698,6 +727,7 @@ __all__ = [
     "_register_sigterm_handler",
     # state
     "_empty_daily_state",
+    "_load_last_consumed_ts",
     "_load_state",
     "_parse_dt",
     "_save_state",
