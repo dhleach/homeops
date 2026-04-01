@@ -3,8 +3,8 @@
     # Rotate once per day
     daily
 
-    # Keep 30 days of history
-    rotate 30
+    # Keep 90 days of history
+    rotate 90
 
     # Gzip rotated files to save space
     compress
