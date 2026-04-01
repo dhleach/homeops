@@ -17,7 +17,7 @@ Home Assistant alone can't prevent this. It sees state changes; it doesn't reaso
 - **Event-driven pipeline** — observer writes raw `state_changed` events to JSONL; consumer tails that file and emits semantically rich derived events downstream
 - **Schema-versioned events** — every event carries a `schema` field (e.g. `homeops.consumer.floor_2_long_call_warning.v1`) for safe downstream evolution
 - **Production-grade operations** — runs as `systemd` services on the Pi, log rotation via `logrotate`, exponential-backoff reconnects on the WebSocket
-- **415 pytest tests**, GitHub Actions CI, Ruff lint/format enforcement on every PR
+- **442 pytest tests**, GitHub Actions CI, Ruff lint/format enforcement on every PR
 
 ## Architecture
 
@@ -120,6 +120,8 @@ homeops/
 │       ├── reporting.py          # daily summary generation and formatting
 │       ├── requirements.txt
 │       └── README.md             # full consumer reference
+├── scripts/
+│   └── query_floor_runtime.py    # CLI: per-floor runtime summary for a date range
 ├── docs/
 │   └── event-schemas/
 │       └── consumer-events.md    # authoritative event schema reference
@@ -251,7 +253,7 @@ cd services
 ../services/observer/.venv/bin/python -m pytest
 ```
 
-415 tests cover observer reconnect logic, consumer event derivation, floor-2 long-call warning and escalation, thermostat tracking, heating cycle analytics, and consumer state persistence.
+442 tests cover observer reconnect logic, consumer event derivation, floor-2 long-call warning and escalation, thermostat tracking, heating cycle analytics, and consumer state persistence.
 
 ### CI
 
@@ -265,6 +267,34 @@ GitHub Actions runs Ruff lint and format checks on every PR and push to `master`
 - `docs/<short-description>` — documentation
 
 All commits must pass Ruff checks (enforced by `.githooks/pre-commit` and CI).
+
+## Query Scripts
+
+### `scripts/query_floor_runtime.py`
+
+Query per-floor heating runtime from `floor_daily_summary.v1` events:
+
+```bash
+# Summary for January 2026
+python3 scripts/query_floor_runtime.py --start 2026-01-01 --end 2026-01-31
+
+# Filter to floor 2 only
+python3 scripts/query_floor_runtime.py --start 2026-01-01 --end 2026-01-31 --floor floor_2
+
+# Custom log path
+DERIVED_EVENT_LOG=/path/to/events.jsonl python3 scripts/query_floor_runtime.py ...
+```
+
+Output:
+```
+Floor runtime summary: 2026-01-01 → 2026-01-31
+
+Floor       |  Days |  Total Runtime |       Avg Daily |  Max Single Day
+------------------------------------------------------------------------
+floor_1     |    28 |       45h 12m  |         1h 37m  |         3h 10m
+floor_2     |    22 |       38h 44m  |         1h 46m  |         4h 22m
+floor_3     |    31 |       28h 05m  |           54m   |         1h 45m
+```
 
 ## Security Notes
 
