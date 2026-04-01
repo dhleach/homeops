@@ -92,6 +92,33 @@ def check_floor_2_escalation(
     }
 
 
+def is_floor_2_telegram_rate_limited(
+    last_sent_ts: datetime | None,
+    rate_limit_s: int,
+    now_ts: datetime,
+) -> bool:
+    """
+    Return True if a floor-2 Telegram alert should be suppressed due to rate limiting.
+
+    A Telegram alert is suppressed when ``last_sent_ts`` is set and
+    ``(now_ts - last_sent_ts).total_seconds() < rate_limit_s``.
+
+    Args:
+        last_sent_ts: Timestamp of the most recent floor-2 Telegram that was sent.
+            ``None`` means no alert has been sent yet (not rate-limited).
+        rate_limit_s: Minimum seconds between floor-2 Telegram alerts.
+        now_ts: Current time (UTC).
+
+    Returns:
+        True  → suppress this alert (within rate-limit window).
+        False → allow this alert (window expired or no prior alert).
+    """
+    if last_sent_ts is None:
+        return False
+    elapsed = (now_ts - last_sent_ts).total_seconds()
+    return elapsed < rate_limit_s
+
+
 def check_observer_silence(
     last_event_ts: datetime | None,
     observer_silence_sent: bool,

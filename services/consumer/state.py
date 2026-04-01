@@ -71,6 +71,7 @@ def _empty_daily_state() -> dict[str, Any]:
             "observer_silence": 0,
             "setpoint_miss": 0,
         },
+        "floor_2_telegram_suppressed_count": 0,
     }
 
 
@@ -82,6 +83,7 @@ def _save_state(
     *,
     last_consumed_observer_ts: str | None = None,
     telegram_last_update_id: int | None = None,
+    floor_2_telegram_last_sent_ts: datetime | None = None,
     state_file: Path | None = None,
 ) -> None:
     """Atomically persist consumer runtime state to disk."""
@@ -105,6 +107,7 @@ def _save_state(
         "daily_state": daily_state,
         "last_consumed_observer_ts": last_consumed_observer_ts,
         "telegram_last_update_id": telegram_last_update_id,
+        "floor_2_telegram_last_sent_ts": _dt(floor_2_telegram_last_sent_ts),
         "saved_at": utc_ts(),
     }
     sf = state_file or STATE_FILE
