@@ -27,6 +27,7 @@ from alerts import (
     check_floor_2_escalation,
     check_floor_2_warning,
     check_observer_silence,
+    is_floor_2_telegram_rate_limited,
     write_zone_temp_snapshot,
 )
 from constants import (
@@ -535,7 +536,11 @@ def main() -> None:
     print(f"[{utc_ts()}] Consumer following: {path}", flush=True)
 
     floor_2_warn_threshold_s = int(os.environ.get("FLOOR_2_WARN_THRESHOLD_S", "2700"))  # 45 min
+    floor_2_telegram_rate_limit_s = int(
+        os.environ.get("FLOOR_2_TELEGRAM_RATE_LIMIT_S", "3600")
+    )  # 1 hour
     print(f"[{utc_ts()}] Floor-2 warning threshold: {floor_2_warn_threshold_s}s", flush=True)
+    print(f"[{utc_ts()}] Floor-2 Telegram rate limit: {floor_2_telegram_rate_limit_s}s", flush=True)
     print(
         f"[{utc_ts()}] Slow-to-heat thresholds: "
         + ", ".join(f"{z}={t}s" for z, t in SLOW_TO_HEAT_THRESHOLDS_S.items()),
@@ -619,6 +624,11 @@ def main() -> None:
     telegram_last_update_id: int | None = (
         saved.get("telegram_last_update_id") if saved is not None else None
     )
+    # Restore floor-2 Telegram rate-limit timestamp (survives restarts).
+    _f2_ts_raw: str | None = (
+        saved.get("floor_2_telegram_last_sent_ts") if saved is not None else None
+    )
+    floor_2_telegram_last_sent_ts: datetime | None = _parse_dt(_f2_ts_raw) if _f2_ts_raw else None
 
     # Playback phase: catch up on missed observer events before entering live mode.
     playback_from_ts = _load_last_consumed_ts()
@@ -818,6 +828,7 @@ def main() -> None:
                     climate_state,
                     daily_state,
                     last_consumed_observer_ts=last_consumed_observer_ts,
+                    floor_2_telegram_last_sent_ts=floor_2_telegram_last_sent_ts,
                 )
 
             # Outdoor temperature readings are passed through as-is from the sensor.
@@ -849,6 +860,7 @@ def main() -> None:
                     climate_state,
                     daily_state,
                     last_consumed_observer_ts=last_consumed_observer_ts,
+                    floor_2_telegram_last_sent_ts=floor_2_telegram_last_sent_ts,
                 )
 
             # Thermostat climate entities: setpoint, current temp, and mode changes.
@@ -926,6 +938,7 @@ def main() -> None:
                     climate_state,
                     daily_state,
                     last_consumed_observer_ts=last_consumed_observer_ts,
+                    floor_2_telegram_last_sent_ts=floor_2_telegram_last_sent_ts,
                 )
 
             # Whole-home heating sessions are derived from furnace on/off transitions.
@@ -1038,6 +1051,7 @@ def main() -> None:
                     climate_state,
                     daily_state,
                     last_consumed_observer_ts=last_consumed_observer_ts,
+                    floor_2_telegram_last_sent_ts=floor_2_telegram_last_sent_ts,
                 )
 
         # In-flight floor-2 long-call check (runs on every event and on timeouts)
@@ -1051,7 +1065,20 @@ def main() -> None:
         if warn_event:
             daily_state["warnings_triggered"]["floor_2_long_call"] += 1
             fresh_restart = _emit_derived(warn_event, derived_log, fresh_restart)
-            if telegram_bot_token and telegram_chat_id:
+            _now_for_rl = datetime.now(UTC)
+            if is_floor_2_telegram_rate_limited(
+                floor_2_telegram_last_sent_ts, floor_2_telegram_rate_limit_s, _now_for_rl
+            ):
+                daily_state["floor_2_telegram_suppressed_count"] = (
+                    daily_state.get("floor_2_telegram_suppressed_count", 0) + 1
+                )
+                print(
+                    f"[{utc_ts()}] Floor-2 Telegram suppressed (rate limit"
+                    f" {floor_2_telegram_rate_limit_s}s); suppressed_count="
+                    f"{daily_state['floor_2_telegram_suppressed_count']}",
+                    flush=True,
+                )
+            elif telegram_bot_token and telegram_chat_id:
                 import urllib.parse as _parse
                 import urllib.request as _urllib
 
@@ -1064,18 +1091,28 @@ def main() -> None:
                     temp_line = (
                         f"Current temp: {current_temp}°F → Setpoint: {setpoint}°F ({delta}° away)\n"
                     )
+                suppressed = daily_state.get("floor_2_telegram_suppressed_count", 0)
+                suppressed_line = (
+                    f"({suppressed} previous alert(s) suppressed in the last"
+                    f" {floor_2_telegram_rate_limit_s // 60} min)\n"
+                    if suppressed > 0
+                    else ""
+                )
                 _warn_ts = warn_event["data"].get("started_at") or warn_event.get("ts")
                 msg = (
                     f"⚠️ Floor 2 has been calling for {elapsed_s // 60} min!\n"
                     f"{temp_line}"
+                    f"{suppressed_line}"
                     f"Risk of furnace overheating (Code 4/7 limit trip).\n"
                     f"Consider lowering floor 2 thermostat manually."
-                    + _event_ts_suffix(_warn_ts, datetime.now(UTC))
+                    + _event_ts_suffix(_warn_ts, _now_for_rl)
                 )
                 url = f"https://api.telegram.org/bot{telegram_bot_token}/sendMessage"
                 data = _parse.urlencode({"chat_id": telegram_chat_id, "text": msg}).encode()
                 try:
                     _urllib.urlopen(url, data=data, timeout=10)
+                    floor_2_telegram_last_sent_ts = _now_for_rl
+                    daily_state["floor_2_telegram_suppressed_count"] = 0
                 except Exception as e:
                     print(f"[{utc_ts()}] WARN: Telegram alert failed: {e}", flush=True)
             else:
@@ -1092,12 +1129,32 @@ def main() -> None:
             if escalation_event:
                 daily_state["warnings_triggered"]["floor_2_escalation"] += 1
                 fresh_restart = _emit_derived(escalation_event, derived_log, fresh_restart)
-                if telegram_bot_token and telegram_chat_id:
+                _esc_now = datetime.now(UTC)
+                if is_floor_2_telegram_rate_limited(
+                    floor_2_telegram_last_sent_ts, floor_2_telegram_rate_limit_s, _esc_now
+                ):
+                    daily_state["floor_2_telegram_suppressed_count"] = (
+                        daily_state.get("floor_2_telegram_suppressed_count", 0) + 1
+                    )
+                    print(
+                        f"[{utc_ts()}] Floor-2 escalation Telegram suppressed (rate limit); "
+                        f"suppressed_count={daily_state['floor_2_telegram_suppressed_count']}",
+                        flush=True,
+                    )
+                elif telegram_bot_token and telegram_chat_id:
                     import urllib.parse as _parse
                     import urllib.request as _urllib
 
+                    suppressed = daily_state.get("floor_2_telegram_suppressed_count", 0)
+                    suppressed_line = (
+                        f"({suppressed} previous alert(s) suppressed in the last"
+                        f" {floor_2_telegram_rate_limit_s // 60} min)\n"
+                        if suppressed > 0
+                        else ""
+                    )
                     esc_msg = (
                         f"🚨 Floor 2 long-call escalation: {long_call_count} long calls today"
+                        f"\n{suppressed_line}"
                         " — furnace may be struggling. Check HVAC."
                     )
                     _url = f"https://api.telegram.org/bot{telegram_bot_token}/sendMessage"
@@ -1106,6 +1163,8 @@ def main() -> None:
                     ).encode()
                     try:
                         _urllib.urlopen(_url, _tdata, timeout=10)
+                        floor_2_telegram_last_sent_ts = _esc_now
+                        daily_state["floor_2_telegram_suppressed_count"] = 0
                     except Exception as _esc_e:
                         print(
                             f"[{utc_ts()}] WARN: Telegram escalation alert failed: {_esc_e}",
@@ -1227,6 +1286,7 @@ def main() -> None:
                         daily_state,
                         last_consumed_observer_ts=last_consumed_observer_ts,
                         telegram_last_update_id=telegram_last_update_id,
+                        floor_2_telegram_last_sent_ts=floor_2_telegram_last_sent_ts,
                     )
                 last_command_check_ts = now
 
@@ -1263,6 +1323,7 @@ __all__ = [
     # alerts
     "check_floor_2_escalation",
     "check_floor_2_warning",
+    "is_floor_2_telegram_rate_limited",
     "check_observer_silence",
     "write_zone_temp_snapshot",
     # reporting

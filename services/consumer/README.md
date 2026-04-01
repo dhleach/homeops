@@ -649,6 +649,7 @@ All configuration is via environment variables.
 | `EVENT_LOG` | `state/observer/events.jsonl` | Path to the observer's output JSONL file to tail |
 | `DERIVED_EVENT_LOG` | `state/consumer/events.jsonl` | Path to write derived events (created if absent) |
 | `FLOOR_2_WARN_THRESHOLD_S` | `2700` | Seconds a floor-2 call must be active before a warning is emitted (default: 45 min) |
+| `FLOOR_2_TELEGRAM_RATE_LIMIT_S` | `3600` | Minimum seconds between floor-2 Telegram alerts. Suppresses duplicate Telegram messages within the window; events always emit to JSONL. (default: 1 hour) |
 | `OBSERVER_SILENCE_THRESHOLD_S` | `600` | Seconds of no observer events before a silence warning is emitted (default: 10 min) |
 | `TELEGRAM_BOT_TOKEN` | _(unset)_ | Telegram Bot API token for overheating alerts |
 | `TELEGRAM_CHAT_ID` | _(unset)_ | Telegram chat ID to receive overheating alerts |
