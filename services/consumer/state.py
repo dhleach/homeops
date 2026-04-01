@@ -59,6 +59,7 @@ def _empty_daily_state() -> dict[str, Any]:
         "session_count": 0,
         "floor_runtime_s": {},
         "per_floor_session_count": {eid: 0 for eid in _FLOOR_ENTITIES},
+        "per_floor_max_call_s": {eid: None for eid in _FLOOR_ENTITIES},
         "outdoor_temps": [],
         "last_outdoor_temp_f": None,
         "per_floor_setpoint_samples": {eid: [] for eid in CLIMATE_ENTITIES},

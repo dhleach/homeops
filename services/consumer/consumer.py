@@ -10,7 +10,7 @@ Business logic lives in focused modules:
                    process_outdoor_temp_event
   - alerts.py      check_floor_2_warning, check_floor_2_escalation, check_observer_silence,
                    write_zone_temp_snapshot
-  - reporting.py   emit_daily_summary, format_daily_summary_message
+  - reporting.py   emit_daily_summary, emit_floor_daily_summaries, format_daily_summary_message
 """
 
 from __future__ import annotations
@@ -42,7 +42,7 @@ from processors import (
     process_furnace_event,
     process_outdoor_temp_event,
 )
-from reporting import emit_daily_summary, format_daily_summary_message
+from reporting import emit_daily_summary, emit_floor_daily_summaries, format_daily_summary_message
 from state import (
     STATE_FILE,
     _empty_daily_state,
@@ -241,6 +241,9 @@ def _playback_phase(
                     print(f"[{utc_ts()}] {_LOG} date rollover → emitting daily summary", flush=True)
                     print(json.dumps(summary), flush=True)
                     append_jsonl(derived_log, summary)
+                    for _floor_evt in emit_floor_daily_summaries(daily_state, current_date):
+                        print(json.dumps(_floor_evt), flush=True)
+                        append_jsonl(derived_log, _floor_evt)
                     if telegram_bot_token and telegram_chat_id:
                         from reporting import format_daily_summary_message  # noqa: PLC0415
 
@@ -316,6 +319,11 @@ def _playback_phase(
                             daily_state["floor_runtime_s"][eid] = (
                                 daily_state["floor_runtime_s"].get(eid, 0) + d["duration_s"]
                             )
+                            prev_max = daily_state.get("per_floor_max_call_s", {}).get(eid)
+                            if prev_max is None or d["duration_s"] > prev_max:
+                                daily_state.setdefault("per_floor_max_call_s", {})[eid] = d[
+                                    "duration_s"
+                                ]
                         daily_state["per_floor_session_count"][eid] = (
                             daily_state["per_floor_session_count"].get(eid, 0) + 1
                         )
@@ -698,6 +706,9 @@ def main() -> None:
                     summary = emit_daily_summary(daily_state, current_date)
                     print(json.dumps(summary), flush=True)
                     append_jsonl(derived_log, summary)
+                    for _floor_evt in emit_floor_daily_summaries(daily_state, current_date):
+                        print(json.dumps(_floor_evt), flush=True)
+                        append_jsonl(derived_log, _floor_evt)
                     if telegram_bot_token and telegram_chat_id:
                         import urllib.parse as _parse
                         import urllib.request as _urllib
@@ -793,6 +804,11 @@ def main() -> None:
                             daily_state["floor_runtime_s"][eid] = (
                                 daily_state["floor_runtime_s"].get(eid, 0) + d["duration_s"]
                             )
+                            prev_max = daily_state.get("per_floor_max_call_s", {}).get(eid)
+                            if prev_max is None or d["duration_s"] > prev_max:
+                                daily_state.setdefault("per_floor_max_call_s", {})[eid] = d[
+                                    "duration_s"
+                                ]
                         daily_state["per_floor_session_count"][eid] = (
                             daily_state["per_floor_session_count"].get(eid, 0) + 1
                         )
@@ -1251,6 +1267,7 @@ __all__ = [
     "write_zone_temp_snapshot",
     # reporting
     "emit_daily_summary",
+    "emit_floor_daily_summaries",
     "format_daily_summary_message",
     # telegram_commands
     "handle_telegram_commands",

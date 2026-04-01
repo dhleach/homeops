@@ -75,7 +75,7 @@ The consumer filters for `schema == "homeops.observer.state_changed.v1"` and ign
 | `climate.floor_2_thermostat` | `thermostat_setpoint_changed.v1`, `thermostat_current_temp_updated.v1`, `thermostat_mode_changed.v1`, `thermostat_setpoint_reached.v1`, `zone_time_to_temp.v1`, `zone_overshoot.v1`, `zone_undershoot.v1` |
 | `climate.floor_3_thermostat` | `thermostat_setpoint_changed.v1`, `thermostat_current_temp_updated.v1`, `thermostat_mode_changed.v1`, `thermostat_setpoint_reached.v1`, `zone_time_to_temp.v1`, `zone_overshoot.v1`, `zone_undershoot.v1` |
 
-Additionally, `furnace_daily_summary.v1` is emitted once per UTC calendar day at the first event after midnight.
+Additionally, `furnace_daily_summary.v1` is emitted once per UTC calendar day at the first event after midnight, followed immediately by three `floor_daily_summary.v1` events (one per floor).
 
 ### Derived event emission
 
@@ -90,9 +90,9 @@ Every derived event is:
 
 > **Full authoritative schema reference:** [`docs/event-schemas/consumer-events.md`](../../docs/event-schemas/consumer-events.md)
 >
-> That document contains complete field tables with source/rationale columns, design notes, and planned (not-yet-implemented) events. The sections below are the working reference for the 15 currently implemented event types.
+> That document contains complete field tables with source/rationale columns, design notes, and planned (not-yet-implemented) events. The sections below are the working reference for the 16 currently implemented event types.
 
-The consumer emits fourteen derived event types. All share a common envelope.
+The consumer emits fifteen derived event types. All share a common envelope.
 
 ### Common envelope
 
@@ -567,6 +567,41 @@ Emitted once per UTC calendar day at the first observer event with a new date (i
     },
     "outdoor_temp_min_f": 22.1,
     "outdoor_temp_max_f": 38.6
+  }
+}
+```
+
+---
+
+### `homeops.consumer.floor_daily_summary.v1`
+
+Emitted three times per UTC calendar day rollover (once per floor: `floor_1`, `floor_2`, `floor_3`), immediately after `furnace_daily_summary.v1`. Summarises each floor's heating call activity for the previous day.
+
+| Field | Type | Description |
+|---|---|---|
+| `data.floor` | string | Floor name: `"floor_1"`, `"floor_2"`, or `"floor_3"` |
+| `data.date` | string (`YYYY-MM-DD`) | The day being summarised |
+| `data.total_calls` | integer | Number of completed heating calls for this floor |
+| `data.total_runtime_s` | integer | Sum of all call durations in seconds |
+| `data.avg_duration_s` | float \| null | Mean call duration in seconds; `null` if no calls |
+| `data.max_duration_s` | integer \| null | Longest single call duration in seconds; `null` if no calls |
+| `data.outdoor_temp_avg_f` | float \| null | Average outdoor temperature for the day; `null` if no readings received |
+
+**Example:**
+
+```json
+{
+  "schema": "homeops.consumer.floor_daily_summary.v1",
+  "source": "consumer.v1",
+  "ts": "2026-01-16T00:00:04.882100+00:00",
+  "data": {
+    "floor": "floor_2",
+    "date": "2026-01-15",
+    "total_calls": 3,
+    "total_runtime_s": 7200,
+    "avg_duration_s": 2400.0,
+    "max_duration_s": 2900,
+    "outdoor_temp_avg_f": 30.4
   }
 }
 ```
