@@ -44,6 +44,9 @@ from processors import (
     process_outdoor_temp_event,
 )
 from reporting import emit_daily_summary, emit_floor_daily_summaries, format_daily_summary_message
+from telegram_commands import handle_telegram_commands
+from utils import _get_version, append_jsonl, follow, utc_ts
+
 from state import (
     STATE_FILE,
     _empty_daily_state,
@@ -53,8 +56,6 @@ from state import (
     _save_state,
     last_furnace_on_since,
 )
-from telegram_commands import handle_telegram_commands
-from utils import _get_version, append_jsonl, follow, utc_ts
 
 _RESTART_CLEAR_SCHEMAS = frozenset(
     {
