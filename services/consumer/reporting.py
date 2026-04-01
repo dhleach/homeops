@@ -78,6 +78,52 @@ def emit_daily_summary(daily_state: dict[str, Any], date_str: str) -> dict[str, 
     }
 
 
+def emit_floor_daily_summaries(daily_state: dict[str, Any], date_str: str) -> list[dict[str, Any]]:
+    """
+    Build a list of floor_daily_summary.v1 events — one per floor — from accumulated daily state.
+
+    Each event summarises completed floor heating calls for the day:
+    - total_calls: number of completed floor_call_ended.v1 events
+    - total_runtime_s: sum of all call durations in seconds
+    - avg_duration_s: mean call duration (null if no calls)
+    - max_duration_s: longest single call duration (null if no calls)
+    - outdoor_temp_avg_f: day's average outdoor temperature (from daily_state; null if no readings)
+
+    Returns a list of 3 event dicts (floor_1, floor_2, floor_3), even for floors with zero calls.
+    """
+    outdoor_temps: list[float] = daily_state.get("outdoor_temps") or []
+    outdoor_temp_avg_f: float | None = (
+        round(sum(outdoor_temps) / len(outdoor_temps), 1) if outdoor_temps else None
+    )
+
+    events: list[dict[str, Any]] = []
+    for entity_id, floor_name in _FLOOR_ENTITIES.items():
+        total_calls: int = daily_state.get("per_floor_session_count", {}).get(entity_id, 0)
+        total_runtime_s: int = daily_state.get("floor_runtime_s", {}).get(entity_id, 0)
+        avg_duration_s: float | None = (
+            round(total_runtime_s / total_calls, 1) if total_calls > 0 else None
+        )
+        max_duration_s: int | None = daily_state.get("per_floor_max_call_s", {}).get(entity_id)
+
+        events.append(
+            {
+                "schema": "homeops.consumer.floor_daily_summary.v1",
+                "source": "consumer.v1",
+                "ts": utc_ts(),
+                "data": {
+                    "floor": floor_name,
+                    "date": date_str,
+                    "total_calls": total_calls,
+                    "total_runtime_s": total_runtime_s,
+                    "avg_duration_s": avg_duration_s,
+                    "max_duration_s": max_duration_s,
+                    "outdoor_temp_avg_f": outdoor_temp_avg_f,
+                },
+            }
+        )
+    return events
+
+
 def format_daily_summary_message(data: dict[str, Any]) -> str:
     """
     Format a furnace_daily_summary.v1 event data dict as a human-readable Telegram message.

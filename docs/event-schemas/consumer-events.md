@@ -1,7 +1,7 @@
 # Consumer Event Schemas
 
 This document is the reference for all consumer events emitted by
-`services/consumer/consumer.py` into `state/consumer/events.jsonl`. It covers **11 implemented
+`services/consumer/consumer.py` into `state/consumer/events.jsonl`. It covers **12 implemented
 events** and **3 planned events** (not yet implemented). All events are derived from raw
 `homeops.observer.state_changed.v1` records and represent higher-level state transitions
 (floor calls, furnace sessions, thermostat changes, outdoor temperature readings, daily
@@ -382,6 +382,47 @@ accumulated in `daily_state`.
       "observer_silence": 0,
       "setpoint_miss": 0
     }
+  }
+}
+```
+
+---
+
+## Event: `homeops.consumer.floor_daily_summary.v1`
+
+Fires three times per calendar day rollover (once per floor: `floor_1`, `floor_2`, `floor_3`),
+emitted immediately after `furnace_daily_summary.v1` when the first observer event with a new
+UTC date is processed. Summarises each floor's heating call activity for the day.
+
+### Field Table
+
+| Field | Type | Source | Rationale |
+|---|---|---|---|
+| `schema` | string | hardcoded | Event type identifier. |
+| `ts` | ISO 8601 string | `utc_ts()` at emission | Wall-clock time of emission. |
+| `floor` | string | `_FLOOR_ENTITIES[entity_id]` (e.g. `"floor_2"`) | Floor being summarised. |
+| `date` | string (`YYYY-MM-DD`) | `current_date` at rollover | The date being summarised (the day that just ended). |
+| `total_calls` | int | Count of `floor_call_ended.v1` events for this floor on this date | Number of completed heating calls. Zero on idle days. |
+| `total_runtime_s` | int | Sum of `duration_s` from `floor_call_ended.v1` events for this floor | Total zone on-time in seconds. |
+| `avg_duration_s` | float \| null | `total_runtime_s / total_calls`, rounded to 1 dp | Mean call duration. `null` if no completed calls. |
+| `max_duration_s` | int \| null | Max `duration_s` across all calls for this floor on this date | Longest single call. `null` if no completed calls; useful for detecting sustained floor-2 calls. |
+| `outdoor_temp_avg_f` | float \| null | `mean(outdoor_temps)` from `daily_state`, rounded to 1 dp | Average outdoor temperature for the day, shared across all three floor events. `null` if no outdoor readings. |
+
+### JSON Example
+
+```json
+{
+  "schema": "homeops.consumer.floor_daily_summary.v1",
+  "source": "consumer.v1",
+  "ts": "2026-01-16T00:00:04.882100+00:00",
+  "data": {
+    "floor": "floor_2",
+    "date": "2026-01-15",
+    "total_calls": 3,
+    "total_runtime_s": 7200,
+    "avg_duration_s": 2400.0,
+    "max_duration_s": 2900,
+    "outdoor_temp_avg_f": 30.4
   }
 }
 ```
