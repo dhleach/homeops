@@ -13,8 +13,11 @@ import urllib.parse as _parse
 import urllib.request as _urllib
 from datetime import UTC, datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from constants import _FLOOR_ENTITIES
+
+_EASTERN = ZoneInfo("America/New_York")
 
 # ---------------------------------------------------------------------------
 # Telegram API helpers
@@ -103,8 +106,9 @@ def format_status_summary(
     if now is None:
         now = datetime.now(UTC)
 
-    # Header
-    time_str = now.strftime("%-I:%M %p").lstrip("0") if now else "–"
+    # Header — display in Eastern time
+    now_eastern = now.astimezone(_EASTERN)
+    time_str = now_eastern.strftime("%-I:%M %p") if now else "–"
     lines: list[str] = [f"🏠 HomeOps Status — {time_str}"]
     lines.append("")
 

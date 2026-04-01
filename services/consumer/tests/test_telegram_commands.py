@@ -99,7 +99,7 @@ class TestFormatStatusSummary:
             now=_NOW,
         )
         assert "HomeOps Status" in msg
-        assert "8:45 PM" in msg
+        assert "4:45 PM" in msg  # _NOW is 20:45 UTC = 4:45 PM EDT
 
     def test_furnace_off(self) -> None:
         msg = format_status_summary(
