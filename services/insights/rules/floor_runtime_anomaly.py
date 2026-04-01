@@ -12,6 +12,10 @@ Guards:
 
 from __future__ import annotations
 
+import math
+
+from rules.confidence import compute_confidence, severity_label
+
 _DAILY_SUMMARY_SCHEMA = "homeops.consumer.furnace_daily_summary.v1"
 _ANOMALY_SCHEMA = "homeops.consumer.floor_runtime_anomaly.v1"
 
@@ -81,6 +85,19 @@ class FloorRuntimeAnomalyRule:
         if runtime_s <= threshold_s:
             return []
 
+        # --- Confidence scoring ---
+        n = len(prior_runtimes)
+        variance = sum((r - mean_s) ** 2 for r in prior_runtimes) / n
+        stddev_s = math.sqrt(variance)
+
+        if stddev_s == 0:
+            confidence = 0.5
+            sev = "medium"
+        else:
+            z = (runtime_s - mean_s) / stddev_s
+            confidence = compute_confidence(abs(z))
+            sev = severity_label(confidence)
+
         return [
             {
                 "schema": _ANOMALY_SCHEMA,
@@ -90,11 +107,14 @@ class FloorRuntimeAnomalyRule:
                     "floor": floor,
                     "runtime_s": runtime_s,
                     "baseline_mean_s": mean_s,
+                    "baseline_stddev_s": stddev_s,
                     "threshold_multiplier": self._threshold_multiplier,
                     "threshold_s": threshold_s,
                     "lookback_days": self._lookback_days,
                     "history_count": len(prior_runtimes),
                     "date": date_str,
+                    "confidence": confidence,
+                    "severity": sev,
                 },
             }
         ]

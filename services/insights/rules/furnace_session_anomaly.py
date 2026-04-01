@@ -15,6 +15,8 @@ check_session() and act on the returned list of derived event dicts.
 
 from __future__ import annotations
 
+from rules.confidence import compute_confidence, severity_label
+
 SHORT_SESSION_THRESHOLD_S: int = 90  # seconds — below this = short-cycle risk
 
 # Per-floor absolute fallback long-session thresholds (seconds).
@@ -82,6 +84,8 @@ class FurnaceSessionAnomalyRule:
                         "threshold_s": SHORT_SESSION_THRESHOLD_S,
                         "likely_cause": "short_cycle",
                         "session_ts": ts_str,
+                        "confidence": 1.0,
+                        "severity": "high",
                     },
                 }
             ]
@@ -100,6 +104,11 @@ class FurnaceSessionAnomalyRule:
             threshold_s = float(abs_fallback)
 
         if duration_s > threshold_s:
+            # Proxy z-score: how far past the threshold (in units of threshold_s).
+            z_proxy = (duration_s - threshold_s) / threshold_s
+            confidence = compute_confidence(z_proxy)
+            sev = severity_label(confidence)
+
             return [
                 {
                     "schema": "homeops.consumer.heating_long_session_warning.v1",
@@ -112,6 +121,8 @@ class FurnaceSessionAnomalyRule:
                         "baseline_p95_s": baseline_p95,
                         "likely_cause": "overheating_risk",
                         "session_ts": ts_str,
+                        "confidence": confidence,
+                        "severity": sev,
                     },
                 }
             ]
