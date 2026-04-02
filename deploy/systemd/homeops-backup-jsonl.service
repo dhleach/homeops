@@ -1,0 +1,16 @@
+[Unit]
+Description=HomeOps JSONL Log Backup
+Documentation=https://github.com/dhleach/homeops/blob/master/deploy/backup/backup-jsonl-logs.sh
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/home/leachd/repos/homeops/deploy/backup/backup-jsonl-logs.sh
+StandardOutput=journal
+StandardError=journal
+User=leachd
+Group=leachd
+
+# Reasonable defaults for log backup task
+TimeoutStartSec=300
+SyslogIdentifier=homeops-backup-jsonl
