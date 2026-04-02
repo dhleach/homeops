@@ -48,6 +48,7 @@ The consumer is split across seven focused files:
 | `processors.py` | `process_floor_event`, `process_furnace_event`, `process_climate_event`, `process_outdoor_temp_event` — pure event-to-derived-event transforms |
 | `alerts.py` | `check_floor_2_warning`, `check_floor_2_escalation`, `check_observer_silence`, `write_zone_temp_snapshot` — in-flight periodic checks |
 | `reporting.py` | `emit_daily_summary`, `format_daily_summary_message` — end-of-day summary generation and Telegram formatting |
+| `metrics.py` | `HvacMetrics` — Prometheus gauge definitions, update helpers, and HTTP server (port 8001); foundation for the homeops.now public dashboard data pipeline |
 
 ---
 
@@ -637,6 +638,24 @@ When the consumer starts it calls `last_furnace_on_since()` to scan the observer
 - `None` if the most recent furnace event was an `on → off` transition, or if the log is empty or unreadable.
 
 Floor call start times are **not** bootstrapped — if the consumer restarts mid-call, `duration_s` for that call will be `null` in the `floor_call_ended` event.
+
+---
+
+## Prometheus Metrics (`/metrics`)
+
+The consumer exposes live HVAC telemetry in Prometheus exposition format at `GET http://localhost:8001/metrics`. This is the data pipeline source for the [homeops.now](https://homeops.now) public dashboard.
+
+| Metric | Type | Labels | Description |
+|---|---|---|---|
+| `furnace_heating_active` | Gauge | — | 1 if furnace is currently in a heating session, 0 if idle |
+| `heating_session_duration_seconds` | Gauge | — | Duration of the most recently completed heating session |
+| `floor_temperature_fahrenheit` | Gauge | `floor` | Latest thermostat current temperature per floor (°F) |
+| `outdoor_temperature_fahrenheit` | Gauge | — | Latest outdoor temperature reading (°F) |
+| `floor_call_active` | Gauge | `floor` | 1 if the floor is currently calling for heat |
+| `zone_runtime_today_seconds` | Gauge | `floor` | Accumulated floor heating call runtime today (seconds) |
+| `floor_runtime_anomaly_total` | Counter | `floor` | Cumulative count of `floor_runtime_anomaly.v1` events |
+
+Configure the port via `METRICS_PORT` env var (default: `8001`).
 
 ---
 
