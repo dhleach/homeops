@@ -253,7 +253,7 @@ cd services
 ../services/observer/.venv/bin/python -m pytest
 ```
 
-442 tests cover observer reconnect logic, consumer event derivation, floor-2 long-call warning and escalation, thermostat tracking, heating cycle analytics, and consumer state persistence.
+440 tests cover observer reconnect logic, consumer event derivation, floor-2 long-call warning and escalation, thermostat tracking, heating cycle analytics, and consumer state persistence.
 
 ### CI
 
