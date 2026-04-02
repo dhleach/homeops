@@ -23,6 +23,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from metrics import HvacMetrics
+
 from alerts import (
     check_floor_2_escalation,
     check_floor_2_warning,
@@ -56,6 +58,11 @@ from state import (
 )
 from telegram_commands import handle_telegram_commands
 from utils import _get_version, append_jsonl, follow, utc_ts
+
+# Module-level metrics singleton — set to an HvacMetrics instance in main() when the
+# METRICS_PORT env var is present (or always).  None during unit tests that don't want
+# a live HTTP server.
+_metrics: HvacMetrics | None = None
 
 _RESTART_CLEAR_SCHEMAS = frozenset(
     {
@@ -102,6 +109,8 @@ def _emit_derived(derived: dict[str, Any], derived_log: str, fresh_restart: bool
         derived["data"]["across_restart"] = True
     print(json.dumps(derived), flush=True)
     append_jsonl(derived_log, derived)
+    if _metrics is not None:
+        _metrics.update_from_event(derived.get("schema", ""), derived.get("data", {}))
     if fresh_restart and derived.get("schema") in _RESTART_CLEAR_SCHEMAS:
         print(
             f"[{utc_ts()}] Cleared fresh_restart after first full heating session",
@@ -623,6 +632,11 @@ def main() -> None:
     with open("state/consumer/version.txt", "w", encoding="utf-8") as _vf:
         _vf.write(version + "\n")
     print(f"[{utc_ts()}] Consumer following: {path}", flush=True)
+
+    global _metrics
+    metrics_port = int(os.environ.get("METRICS_PORT", "8001"))
+    _metrics = HvacMetrics(port=metrics_port)
+    _metrics.start()
 
     furnace_short_call_threshold_s = int(
         os.environ.get("FURNACE_SHORT_CALL_THRESHOLD_S", "120")
