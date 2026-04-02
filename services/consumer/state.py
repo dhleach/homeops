@@ -9,7 +9,7 @@ from typing import Any
 
 from dateutil.parser import isoparse
 
-from constants import _FLOOR_ENTITIES, CLIMATE_ENTITIES, STATE_FILE
+from constants import _FLOOR_ENTITIES, CLIMATE_ENTITIES, OUTDOOR_TEMP_STALE_S, STATE_FILE
 from utils import _parse_dt, utc_ts
 
 
@@ -63,6 +63,7 @@ def _empty_daily_state() -> dict[str, Any]:
         "per_floor_max_call_s": {eid: None for eid in _FLOOR_ENTITIES},
         "outdoor_temps": [],
         "last_outdoor_temp_f": None,
+        "last_outdoor_temp_recorded_at": None,
         "per_floor_setpoint_samples": {eid: [] for eid in CLIMATE_ENTITIES},
         "warnings_triggered": {
             "floor_2_long_call": 0,
@@ -162,12 +163,48 @@ def _load_last_consumed_ts(*, state_file: Path | None = None) -> str | None:
         return None
 
 
+def _load_last_outdoor_temp(
+    *, state_file: Path | None = None, stale_s: int = OUTDOOR_TEMP_STALE_S
+) -> float | None:
+    """
+    Return the last saved outdoor temperature if it is fresh enough to trust.
+
+    Reads the state file regardless of its overall age (unlike ``_load_state``,
+    which rejects files older than 62 min).  Returns the saved ``last_outdoor_temp_f``
+    value only when ``last_outdoor_temp_recorded_at`` is present and the reading is
+    no older than *stale_s* seconds (default: 3 hours / ``OUTDOOR_TEMP_STALE_S``).
+
+    Returns ``None`` when the file is missing, unreadable, the field is absent, or
+    the reading is too old.
+    """
+    sf = state_file or STATE_FILE
+    if not sf.exists():
+        return None
+    try:
+        data = json.loads(sf.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    daily = data.get("daily_state") or {}
+    temp_f = daily.get("last_outdoor_temp_f")
+    recorded_at_str = daily.get("last_outdoor_temp_recorded_at")
+    if temp_f is None or recorded_at_str is None:
+        return None
+    try:
+        age_s = (datetime.now(UTC) - isoparse(recorded_at_str)).total_seconds()
+    except Exception:
+        return None
+    if age_s > stale_s:
+        return None
+    return float(temp_f)
+
+
 __all__ = [
     "last_furnace_on_since",
     "_empty_daily_state",
     "_save_state",
     "_load_state",
     "_load_last_consumed_ts",
+    "_load_last_outdoor_temp",
     "_parse_dt",
     "STATE_FILE",
 ]
