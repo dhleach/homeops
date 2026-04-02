@@ -3,6 +3,7 @@
 from datetime import UTC, datetime, timedelta
 
 from alerts import is_floor_2_telegram_rate_limited
+
 from state import _empty_daily_state
 
 RATE_LIMIT_S = 3600  # 1 hour
