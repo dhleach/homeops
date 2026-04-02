@@ -103,6 +103,19 @@ Consumer service detail: [`services/consumer/README.md`](services/consumer/READM
 
 ```text
 homeops/
+├── infra/                        # Terraform — AWS infrastructure for homeops.now
+│   ├── main.tf                   # provider config
+│   ├── variables.tf              # input variables
+│   ├── networking.tf             # VPC, security groups
+│   ├── ec2.tf                    # EC2 instance, EBS, Elastic IP, SSH key
+│   ├── s3.tf                     # S3 frontend bucket, OAC
+│   ├── cloudfront.tf             # CloudFront distribution, SPA router function
+│   ├── dns_cert.tf               # Route53 hosted zone, ACM cert, DNS records
+│   ├── iam.tf                    # EC2 IAM role + instance profile
+│   └── outputs.tf                # EC2 IP, CF distribution ID, S3 bucket name
+├── dashboard/
+│   ├── backend/                  # FastAPI — /api/current-temps, auth, recruiter mgmt
+│   └── frontend/                 # React + Tailwind — homeops.now public site
 ├── compose/
 │   └── docker-compose.yml        # Home Assistant container
 ├── services/
