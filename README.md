@@ -122,7 +122,8 @@ homeops/
 │       └── README.md             # full consumer reference
 ├── scripts/
 │   ├── query_floor_runtime.py    # CLI: per-floor runtime summary for a date range
-│   └── furnace_duty_cycle.py      # CLI: furnace duty cycle % for any time window
+│   └── floor_runtime_trend.py    # CLI: day-by-day runtime trend table (last N days)
+│   └── furnace_duty_cycle.py     # CLI: furnace duty cycle % for any time window
 ├── docs/
 │   └── event-schemas/
 │       └── consumer-events.md    # authoritative event schema reference
@@ -295,6 +296,40 @@ Floor       |  Days |  Total Runtime |       Avg Daily |  Max Single Day
 floor_1     |    28 |       45h 12m  |         1h 37m  |         3h 10m
 floor_2     |    22 |       38h 44m  |         1h 46m  |         4h 22m
 floor_3     |    31 |       28h 05m  |           54m   |         1h 45m
+```
+
+### `scripts/floor_runtime_trend.py`
+
+Day-by-day floor runtime trend table from `floor_daily_summary.v1` events:
+
+```bash
+# All floors, last 30 days (default)
+python3 scripts/floor_runtime_trend.py
+
+# Last 14 days
+python3 scripts/floor_runtime_trend.py --days 14
+
+# Detailed view for floor 2 only
+python3 scripts/floor_runtime_trend.py --floor floor_2 --days 14
+
+# Custom log path
+DERIVED_EVENT_LOG=/path/to/events.jsonl python3 scripts/floor_runtime_trend.py
+```
+
+Output (all floors):
+```
+Date          Floor 1      Floor 2      Floor 3      Outdoor
+------------------------------------------------------------
+2026-03-31     2h 14m       4h 33m       1h 20m       42°F
+2026-03-30     1h 50m       3h 10m          55m       45°F
+```
+
+Output (`--floor floor_2`):
+```
+Floor 2 — 14-day trend
+Date           Runtime    Calls   Avg Call   Max Call    Outdoor
+---------------------------------------------------------------
+2026-03-31      4h 33m        8    34m        1h 22m      42°F
 ```
 
 ## Security Notes
