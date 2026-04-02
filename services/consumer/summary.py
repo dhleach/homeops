@@ -10,8 +10,12 @@ Show day summary for a specific date:
 Show week-over-week comparison (reads events from Pi via SSH):
   python3 summary.py --week
 
+Monthly aggregate for January 2026:
+  python3 summary.py --month 2026-01
+
 Read from a local JSONL file instead of the default Pi path:
   python3 summary.py --week --events-file /path/to/events.jsonl
+  python3 summary.py --month 2026-01 --events-file /path/to/events.jsonl
   python3 summary.py --day 2026-01-15 --events-file /path/to/events.jsonl
 """
 
@@ -22,6 +26,12 @@ import sys
 import tempfile
 from datetime import UTC, date, datetime
 from pathlib import Path
+
+from monthly import (
+    compute_monthly_summary,
+    format_monthly_summary,
+    load_daily_summaries as load_monthly_summaries,
+)
 
 from reporting import format_daily_summary_message
 from weekly import compute_weekly_comparison, format_weekly_comparison, load_daily_summaries
@@ -244,6 +254,15 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--month",
+        metavar="YYYY-MM",
+        default=None,
+        help=(
+            "Show monthly aggregate for the given month (e.g. 2026-01). "
+            "Sums runtime, sessions, per-floor breakdown, outdoor temp, and warnings."
+        ),
+    )
+    parser.add_argument(
         "--events-file",
         metavar="PATH",
         default=None,
@@ -321,6 +340,63 @@ def cmd_week(args: argparse.Namespace) -> int:
                 pass
 
 
+def cmd_month(args: argparse.Namespace) -> int:
+    """Handle --month flag. Returns exit code."""
+    _tmp_to_delete: str | None = None
+
+    # Validate month format
+    month = args.month
+    try:
+        parts = month.split("-")
+        if len(parts) != 2 or len(parts[0]) != 4 or len(parts[1]) != 2:
+            raise ValueError
+        int(parts[0])
+        int(parts[1])
+    except (ValueError, AttributeError):
+        print(f"Error: --month must be in YYYY-MM format (got {month!r})", file=sys.stderr)
+        return 1
+
+    if args.events_file:
+        events_file = args.events_file
+        if not Path(events_file).exists():
+            print(f"Error: events file not found: {events_file}", file=sys.stderr)
+            return 1
+    else:
+        print(f"Fetching events from Pi ({args.ssh_host}:{args.remote_events}) …")
+        try:
+            events_file = _fetch_events_via_ssh(
+                remote_path=args.remote_events,
+                ssh_key=args.ssh_key,
+                ssh_host=args.ssh_host,
+            )
+            _tmp_to_delete = events_file
+        except RuntimeError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            return 1
+
+    try:
+        summaries = load_monthly_summaries(events_file)
+        stats = compute_monthly_summary(summaries, month)
+
+        if stats.day_count == 0:
+            print(f"No furnace_daily_summary.v1 data found for {month}.")
+            return 0
+
+        print()
+        print(format_monthly_summary(stats))
+        print()
+        return 0
+    except ValueError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+    finally:
+        if _tmp_to_delete:
+            try:
+                Path(_tmp_to_delete).unlink()
+            except OSError:
+                pass
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -330,6 +406,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.week:
         return cmd_week(args)
+
+    if args.month:
+        return cmd_month(args)
 
     # No subcommand — show help
     parser.print_help()
