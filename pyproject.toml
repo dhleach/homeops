@@ -10,6 +10,17 @@ select = [
   "UP",  # pyupgrade
 ]
 
+[tool.ruff.lint.isort]
+known-first-party = [
+  "alerts",
+  "constants",
+  "processors",
+  "reporting",
+  "state",
+  "telegram_commands",
+  "utils",
+]
+
 [tool.ruff.format]
 quote-style = "double"
 indent-style = "space"
