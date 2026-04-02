@@ -154,6 +154,9 @@ def _format_furnace_short_call_message(data: dict) -> str:
         f"Session ended in {duration_s}s (threshold: {threshold_s}s).\n"
         f"Rapid cycling is a precursor to lockout and equipment stress.\n"
         f"Check thermostat setpoints and HVAC filter."
+    )
+
+
 def _format_floor_anomaly_message(data: dict) -> str:
     """Format a Telegram alert message for a floor_runtime_anomaly.v1 event."""
     floor = data.get("floor", "unknown")
