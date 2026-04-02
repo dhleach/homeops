@@ -40,3 +40,9 @@ SLOW_TO_HEAT_THRESHOLDS_S: dict[str, int] = {
 # Zone temperature snapshot settings
 ZONE_TEMP_SNAPSHOT_INTERVAL_S: int = 300  # 5 minutes
 ZONE_TEMP_SNAPSHOT_LOG: str = "state/consumer/zone_temps.jsonl"
+
+# Outdoor temperature staleness threshold.
+# A saved outdoor_temp_f reading is considered usable if it is no older than this.
+# Outdoor temperature changes slowly; 3 hours is a reasonable window for seeding
+# daily_state after a restart when a live reading has not yet arrived.
+OUTDOOR_TEMP_STALE_S: int = 10800  # 3 hours

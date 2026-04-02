@@ -48,6 +48,7 @@ from state import (
     STATE_FILE,
     _empty_daily_state,
     _load_last_consumed_ts,
+    _load_last_outdoor_temp,
     _load_state,
     _parse_dt,
     _save_state,
@@ -409,6 +410,7 @@ def _playback_phase(
                     fresh_restart = _emit_derived(derived, derived_log, fresh_restart)
                     daily_state["outdoor_temps"].append(derived["data"]["temperature_f"])
                     daily_state["last_outdoor_temp_f"] = derived["data"]["temperature_f"]
+                    daily_state["last_outdoor_temp_recorded_at"] = utc_ts()
                 _save_state(
                     floor_on_since,
                     furnace_on_since,
@@ -483,6 +485,7 @@ def _playback_phase(
                     ts_str,
                     furnace_on_since,
                     processing_ts=ts_str,
+                    last_outdoor_temp_f=daily_state.get("last_outdoor_temp_f"),
                 )
                 for derived in derived_events:
                     fresh_restart = _emit_derived(derived, derived_log, fresh_restart)
@@ -709,6 +712,16 @@ def main() -> None:
         floor_on_since = {key: None for key in floor_entities.keys()}
         climate_state = {}
         daily_state = _empty_daily_state()
+        # Seed outdoor temp from saved state if the reading is fresh enough (≤3 h).
+        # This prevents the first post-restart heating session from having a null
+        # outdoor_temp_f when a recent reading exists on disk.
+        seeded_temp = _load_last_outdoor_temp()
+        if seeded_temp is not None:
+            daily_state["last_outdoor_temp_f"] = seeded_temp
+            print(
+                f"[{utc_ts()}] Seeded last_outdoor_temp_f={seeded_temp} from saved state",
+                flush=True,
+            )
 
     current_date = datetime.now(UTC).strftime("%Y-%m-%d")
     last_snapshot_ts: datetime | None = None
@@ -936,6 +949,7 @@ def main() -> None:
                     fresh_restart = _emit_derived(derived, derived_log, fresh_restart)
                     daily_state["outdoor_temps"].append(derived["data"]["temperature_f"])
                     daily_state["last_outdoor_temp_f"] = derived["data"]["temperature_f"]
+                    daily_state["last_outdoor_temp_recorded_at"] = utc_ts()
                 if new_state in (None, "unavailable", "unknown", ""):
                     print(
                         f"[{utc_ts()}] WARN: outdoor_temperature state unavailable, skipping",
@@ -1048,6 +1062,7 @@ def main() -> None:
                     ts_str,
                     furnace_on_since,
                     processing_ts=ts_str,
+                    last_outdoor_temp_f=daily_state.get("last_outdoor_temp_f"),
                 )
                 for derived in derived_events:
                     fresh_restart = _emit_derived(derived, derived_log, fresh_restart)

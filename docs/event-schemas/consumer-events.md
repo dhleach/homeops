@@ -119,6 +119,7 @@ heating run).
 | `ended_at` | ISO 8601 string | `ts` field from the observer event | Timestamp of the HA state change. |
 | `entity_id` | string | `"binary_sensor.furnace_heating"` | Raw log linkage. |
 | `duration_s` | int \| null | `(ts_ended - ts_started).total_seconds()` | Session run time in seconds. `null` if the consumer did not observe the matching `heating_session_started` event (e.g. restart mid-session; also recovered from observer log on startup). |
+| `outdoor_temp_f` | float \| null | `daily_state["last_outdoor_temp_f"]` at session end | Most recent outdoor temperature reading at the time the session ended. `null` if no outdoor temp event has been received yet (e.g. early startup before the first 62-min heartbeat). |
 
 ### JSON Example
 
@@ -130,7 +131,8 @@ heating run).
   "data": {
     "ended_at": "2026-01-15T07:04:52.800000+00:00",
     "entity_id": "binary_sensor.furnace_heating",
-    "duration_s": 3168
+    "duration_s": 3168,
+    "outdoor_temp_f": 28.4
   }
 }
 ```
