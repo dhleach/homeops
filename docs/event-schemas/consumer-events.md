@@ -766,6 +766,10 @@ Fires at end-of-day when a floor's daily heating runtime significantly exceeds i
 historical baseline. Evaluated after `furnace_daily_summary.v1` is written, once per floor
 per day.
 
+**Telegram alert:** A Telegram message is sent when this event fires (once per floor per
+day at rollover). Message includes floor label, date, runtime vs. baseline, and severity.
+Fires in both the live main loop and the playback phase.
+
 **Guards:**
 - Requires at least **3 prior data points** in the lookback window — skips if history is
   insufficient (new install, data gap, etc.).

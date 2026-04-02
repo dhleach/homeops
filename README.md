@@ -17,7 +17,7 @@ Home Assistant alone can't prevent this. It sees state changes; it doesn't reaso
 - **Event-driven pipeline** — observer writes raw `state_changed` events to JSONL; consumer tails that file and emits semantically rich derived events downstream
 - **Schema-versioned events** — every event carries a `schema` field (e.g. `homeops.consumer.floor_2_long_call_warning.v1`) for safe downstream evolution
 - **Production-grade operations** — runs as `systemd` services on the Pi, log rotation via `logrotate`, exponential-backoff reconnects on the WebSocket
-- **442 pytest tests**, GitHub Actions CI, Ruff lint/format enforcement on every PR
+- **469 pytest tests**, GitHub Actions CI, Ruff lint/format enforcement on every PR
 
 ## Architecture
 
@@ -121,7 +121,9 @@ homeops/
 │       ├── requirements.txt
 │       └── README.md             # full consumer reference
 ├── scripts/
-│   └── query_floor_runtime.py    # CLI: per-floor runtime summary for a date range
+│   ├── query_floor_runtime.py    # CLI: per-floor runtime summary for a date range
+│   └── floor_runtime_trend.py    # CLI: day-by-day runtime trend table (last N days)
+│   └── furnace_duty_cycle.py     # CLI: furnace duty cycle % for any time window
 ├── docs/
 │   └── event-schemas/
 │       └── consumer-events.md    # authoritative event schema reference
@@ -253,7 +255,7 @@ cd services
 ../services/observer/.venv/bin/python -m pytest
 ```
 
-441 tests cover observer reconnect logic, consumer event derivation, floor-2 long-call warning and escalation, thermostat tracking, heating cycle analytics, and consumer state persistence.
+469 tests cover observer reconnect logic, consumer event derivation, floor-2 long-call warning and escalation, thermostat tracking, heating cycle analytics, and consumer state persistence.
 
 ### CI
 
@@ -294,6 +296,40 @@ Floor       |  Days |  Total Runtime |       Avg Daily |  Max Single Day
 floor_1     |    28 |       45h 12m  |         1h 37m  |         3h 10m
 floor_2     |    22 |       38h 44m  |         1h 46m  |         4h 22m
 floor_3     |    31 |       28h 05m  |           54m   |         1h 45m
+```
+
+### `scripts/floor_runtime_trend.py`
+
+Day-by-day floor runtime trend table from `floor_daily_summary.v1` events:
+
+```bash
+# All floors, last 30 days (default)
+python3 scripts/floor_runtime_trend.py
+
+# Last 14 days
+python3 scripts/floor_runtime_trend.py --days 14
+
+# Detailed view for floor 2 only
+python3 scripts/floor_runtime_trend.py --floor floor_2 --days 14
+
+# Custom log path
+DERIVED_EVENT_LOG=/path/to/events.jsonl python3 scripts/floor_runtime_trend.py
+```
+
+Output (all floors):
+```
+Date          Floor 1      Floor 2      Floor 3      Outdoor
+------------------------------------------------------------
+2026-03-31     2h 14m       4h 33m       1h 20m       42°F
+2026-03-30     1h 50m       3h 10m          55m       45°F
+```
+
+Output (`--floor floor_2`):
+```
+Floor 2 — 14-day trend
+Date           Runtime    Calls   Avg Call   Max Call    Outdoor
+---------------------------------------------------------------
+2026-03-31      4h 33m        8    34m        1h 22m      42°F
 ```
 
 ## Security Notes
