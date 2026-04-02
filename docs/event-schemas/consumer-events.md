@@ -766,6 +766,10 @@ Fires at end-of-day when a floor's daily heating runtime significantly exceeds i
 historical baseline. Evaluated after `furnace_daily_summary.v1` is written, once per floor
 per day.
 
+**Telegram alert:** A Telegram message is sent when this event fires (once per floor per
+day at rollover). Message includes floor label, date, runtime vs. baseline, and severity.
+Fires in both the live main loop and the playback phase.
+
 **Guards:**
 - Requires at least **3 prior data points** in the lookback window — skips if history is
   insufficient (new install, data gap, etc.).
@@ -851,6 +855,47 @@ on the 2nd warning and every warning after).
     "threshold_s": 2700,
     "current_temp": 65.5,
     "setpoint": 68.0
+  }
+}
+```
+
+---
+
+## Event: `homeops.consumer.furnace_short_call_warning.v1`
+
+Fires when a furnace heating session ends in under a configurable threshold. Rapid cycling
+(the furnace starting and stopping in quick succession) is a precursor to equipment stress
+and lockout conditions.
+
+**Trigger:** `heating_session_ended.v1` where `duration_s < FURNACE_SHORT_CALL_THRESHOLD_S`
+and `duration_s > 0`.
+
+**Env var:** `FURNACE_SHORT_CALL_THRESHOLD_S` (default: `120` seconds / 2 minutes).
+
+**Telegram alert:** Sent immediately when the event fires (in both live loop and playback phase).
+
+### Field Table
+
+| Field | Type | Source | Rationale |
+|---|---|---|---|
+| `schema` | string | hardcoded | Event type identifier. |
+| `source` | string | hardcoded `"consumer.v1"` | Emitting service. |
+| `ts` | ISO 8601 string | observer event ts | Processing timestamp. |
+| `data.duration_s` | int | `heating_session_ended.v1.data.duration_s` | Session duration that triggered the warning. |
+| `data.threshold_s` | int | `FURNACE_SHORT_CALL_THRESHOLD_S` env var | The threshold the session duration was below. |
+| `data.ended_at` | ISO 8601 string \| null | `heating_session_ended.v1.data.ended_at` | When the session ended. |
+
+### JSON Example
+
+```json
+{
+  "schema": "homeops.consumer.furnace_short_call_warning.v1",
+  "source": "consumer.v1",
+  "ts": "2026-04-01T14:23:01.000000+00:00",
+  "data": {
+    "duration_s": 45,
+    "threshold_s": 120,
+    "ended_at": "2026-04-01T14:23:00+00:00"
   }
 }
 ```

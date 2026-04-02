@@ -125,6 +125,66 @@ def _send_telegram(bot_token: str, chat_id: str, msg: str) -> None:
         print(f"[{utc_ts()}] WARN: Telegram send failed: {_e}", flush=True)
 
 
+def _make_furnace_short_call_event(
+    duration_s: int,
+    threshold_s: int,
+    ended_at: str | None,
+    processing_ts: str | None = None,
+) -> dict[str, Any]:
+    """Build a furnace_short_call_warning.v1 event dict."""
+    return {
+        "schema": "homeops.consumer.furnace_short_call_warning.v1",
+        "source": "consumer.v1",
+        "ts": processing_ts or utc_ts(),
+        "data": {
+            "duration_s": duration_s,
+            "threshold_s": threshold_s,
+            "ended_at": ended_at,
+        },
+    }
+
+
+def _format_furnace_short_call_message(data: dict) -> str:
+    """Format a Telegram alert for a furnace_short_call_warning.v1 event."""
+    duration_s = data.get("duration_s", 0)
+    threshold_s = data.get("threshold_s", 120)
+    return (
+        f"⚡ Furnace short-call warning!\n"
+        f"Session ended in {duration_s}s (threshold: {threshold_s}s).\n"
+        f"Rapid cycling is a precursor to lockout and equipment stress.\n"
+        f"Check thermostat setpoints and HVAC filter."
+    )
+
+
+def _format_floor_anomaly_message(data: dict) -> str:
+    """Format a Telegram alert message for a floor_runtime_anomaly.v1 event."""
+    floor = data.get("floor", "unknown")
+    floor_label = floor.replace("_", " ").title()
+    date = data.get("date", "unknown")
+    runtime_s = data.get("runtime_s", 0)
+    baseline_mean_s = data.get("baseline_mean_s", 0.0)
+    history_count = data.get("history_count", 0)
+    severity = data.get("severity", "unknown")
+    confidence = data.get("confidence", 0.0)
+
+    runtime_h = round(runtime_s / 3600, 1)
+    baseline_h = round(float(baseline_mean_s) / 3600, 1)
+    if baseline_mean_s and baseline_mean_s > 0:
+        multiplier = round(runtime_s / float(baseline_mean_s), 1)
+    else:
+        multiplier = 0.0
+
+    severity_emoji = {"high": "🚨", "medium": "⚠️", "low": "📊"}.get(severity, "📊")
+
+    return (
+        f"{severity_emoji} {floor_label} runtime anomaly!\n"
+        f"Date: {date}\n"
+        f"Runtime: {runtime_s:,}s ({runtime_h}h) — {multiplier}× above baseline\n"
+        f"Baseline: {baseline_mean_s:,.0f}s ({baseline_h}h avg over {history_count} days)\n"
+        f"Severity: {severity} | Confidence: {round(confidence, 2)}"
+    )
+
+
 def _playback_phase(
     observer_log: str,
     last_consumed_ts: str,
@@ -140,6 +200,7 @@ def _playback_phase(
     floor_entities: dict[str, str],
     floor_no_response_rule: Any,
     furnace_session_anomaly_rule: Any,
+    furnace_short_call_threshold_s: int = 120,
     telegram_bot_token: str = "",
     telegram_chat_id: str = "",
 ) -> dict[str, Any]:
@@ -286,6 +347,9 @@ def _playback_phase(
                         ):
                             print(json.dumps(_anom_evt), flush=True)
                             append_jsonl(derived_log, _anom_evt)
+                            if telegram_bot_token and telegram_chat_id:
+                                _anom_msg = _format_floor_anomaly_message(_anom_evt["data"])
+                                _send_telegram(telegram_bot_token, telegram_chat_id, _anom_msg)
 
             state_saved = False
 
@@ -464,6 +528,28 @@ def _playback_phase(
                                     + _event_ts_suffix(ts_str, datetime.now(UTC))
                                 )
                                 _send_telegram(telegram_bot_token, telegram_chat_id, _msg)
+                        # Short-call warning: rapid cycling detection
+                        if (
+                            _session_dur is not None
+                            and _session_dur < furnace_short_call_threshold_s
+                            and _session_dur > 0
+                        ):
+                            _sc_evt = _make_furnace_short_call_event(
+                                _session_dur,
+                                furnace_short_call_threshold_s,
+                                _session_ts,
+                                processing_ts=ts_str,
+                            )
+                            fresh_restart = _emit_derived(_sc_evt, derived_log, fresh_restart)
+                            daily_state.setdefault("warnings_triggered", {})
+                            daily_state["warnings_triggered"]["furnace_short_call"] = (
+                                daily_state["warnings_triggered"].get("furnace_short_call", 0) + 1
+                            )
+                            if telegram_bot_token and telegram_chat_id:
+                                _sc_msg = _format_furnace_short_call_message(
+                                    _sc_evt["data"]
+                                ) + _event_ts_suffix(ts_str, datetime.now(UTC))
+                                _send_telegram(telegram_bot_token, telegram_chat_id, _sc_msg)
                 _save_state(
                     floor_on_since,
                     furnace_on_since,
@@ -535,6 +621,13 @@ def main() -> None:
         _vf.write(version + "\n")
     print(f"[{utc_ts()}] Consumer following: {path}", flush=True)
 
+    furnace_short_call_threshold_s = int(
+        os.environ.get("FURNACE_SHORT_CALL_THRESHOLD_S", "120")
+    )  # 2 min
+    print(
+        f"[{utc_ts()}] Furnace short-call threshold: {furnace_short_call_threshold_s}s",
+        flush=True,
+    )
     floor_2_warn_threshold_s = int(os.environ.get("FLOOR_2_WARN_THRESHOLD_S", "2700"))  # 45 min
     floor_2_telegram_rate_limit_s = int(
         os.environ.get("FLOOR_2_TELEGRAM_RATE_LIMIT_S", "3600")
@@ -648,6 +741,7 @@ def main() -> None:
             floor_entities=floor_entities,
             floor_no_response_rule=floor_no_response_rule,
             furnace_session_anomaly_rule=furnace_session_anomaly_rule,
+            furnace_short_call_threshold_s=furnace_short_call_threshold_s,
             telegram_bot_token=telegram_bot_token,
             telegram_chat_id=telegram_chat_id,
         )
@@ -782,6 +876,9 @@ def main() -> None:
                         ):
                             print(json.dumps(_anom_evt), flush=True)
                             append_jsonl(derived_log, _anom_evt)
+                            if telegram_bot_token and telegram_chat_id:
+                                _anom_msg = _format_floor_anomaly_message(_anom_evt["data"])
+                                _send_telegram(telegram_bot_token, telegram_chat_id, _anom_msg)
 
             # Per-floor call sessions are derived from floor_* heating_call sensors.
             if entity_id in floor_entities:
@@ -1045,6 +1142,34 @@ def main() -> None:
                                         " TELEGRAM_CHAT_ID not set, skipping long-session alert",
                                         flush=True,
                                     )
+                        # Short-call warning: rapid cycling detection
+                        if (
+                            _session_dur is not None
+                            and _session_dur < furnace_short_call_threshold_s
+                            and _session_dur > 0
+                        ):
+                            _sc_evt = _make_furnace_short_call_event(
+                                _session_dur,
+                                furnace_short_call_threshold_s,
+                                _session_ts,
+                                processing_ts=ts_str,
+                            )
+                            fresh_restart = _emit_derived(_sc_evt, derived_log, fresh_restart)
+                            daily_state.setdefault("warnings_triggered", {})
+                            daily_state["warnings_triggered"]["furnace_short_call"] = (
+                                daily_state["warnings_triggered"].get("furnace_short_call", 0) + 1
+                            )
+                            if telegram_bot_token and telegram_chat_id:
+                                _sc_msg = _format_furnace_short_call_message(
+                                    _sc_evt["data"]
+                                ) + _event_ts_suffix(ts_str, datetime.now(UTC))
+                                _send_telegram(telegram_bot_token, telegram_chat_id, _sc_msg)
+                            else:
+                                print(
+                                    f"[{utc_ts()}] WARN: TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID"
+                                    " not set, skipping short-call alert",
+                                    flush=True,
+                                )
                 _save_state(
                     floor_on_since,
                     furnace_on_since,
@@ -1305,6 +1430,9 @@ __all__ = [
     "ZONE_TEMP_SNAPSHOT_INTERVAL_S",
     # entry-point functions (defined here)
     "_emit_derived",
+    "_format_furnace_short_call_message",
+    "_make_furnace_short_call_event",
+    "_format_floor_anomaly_message",
     "_playback_phase",
     "_register_sigterm_handler",
     "_send_telegram",
