@@ -154,6 +154,32 @@ def _format_furnace_short_call_message(data: dict) -> str:
         f"Session ended in {duration_s}s (threshold: {threshold_s}s).\n"
         f"Rapid cycling is a precursor to lockout and equipment stress.\n"
         f"Check thermostat setpoints and HVAC filter."
+def _format_floor_anomaly_message(data: dict) -> str:
+    """Format a Telegram alert message for a floor_runtime_anomaly.v1 event."""
+    floor = data.get("floor", "unknown")
+    floor_label = floor.replace("_", " ").title()
+    date = data.get("date", "unknown")
+    runtime_s = data.get("runtime_s", 0)
+    baseline_mean_s = data.get("baseline_mean_s", 0.0)
+    history_count = data.get("history_count", 0)
+    severity = data.get("severity", "unknown")
+    confidence = data.get("confidence", 0.0)
+
+    runtime_h = round(runtime_s / 3600, 1)
+    baseline_h = round(float(baseline_mean_s) / 3600, 1)
+    if baseline_mean_s and baseline_mean_s > 0:
+        multiplier = round(runtime_s / float(baseline_mean_s), 1)
+    else:
+        multiplier = 0.0
+
+    severity_emoji = {"high": "🚨", "medium": "⚠️", "low": "📊"}.get(severity, "📊")
+
+    return (
+        f"{severity_emoji} {floor_label} runtime anomaly!\n"
+        f"Date: {date}\n"
+        f"Runtime: {runtime_s:,}s ({runtime_h}h) — {multiplier}× above baseline\n"
+        f"Baseline: {baseline_mean_s:,.0f}s ({baseline_h}h avg over {history_count} days)\n"
+        f"Severity: {severity} | Confidence: {round(confidence, 2)}"
     )
 
 
@@ -319,6 +345,9 @@ def _playback_phase(
                         ):
                             print(json.dumps(_anom_evt), flush=True)
                             append_jsonl(derived_log, _anom_evt)
+                            if telegram_bot_token and telegram_chat_id:
+                                _anom_msg = _format_floor_anomaly_message(_anom_evt["data"])
+                                _send_telegram(telegram_bot_token, telegram_chat_id, _anom_msg)
 
             state_saved = False
 
@@ -845,6 +874,9 @@ def main() -> None:
                         ):
                             print(json.dumps(_anom_evt), flush=True)
                             append_jsonl(derived_log, _anom_evt)
+                            if telegram_bot_token and telegram_chat_id:
+                                _anom_msg = _format_floor_anomaly_message(_anom_evt["data"])
+                                _send_telegram(telegram_bot_token, telegram_chat_id, _anom_msg)
 
             # Per-floor call sessions are derived from floor_* heating_call sensors.
             if entity_id in floor_entities:
@@ -1398,6 +1430,7 @@ __all__ = [
     "_emit_derived",
     "_format_furnace_short_call_message",
     "_make_furnace_short_call_event",
+    "_format_floor_anomaly_message",
     "_playback_phase",
     "_register_sigterm_handler",
     "_send_telegram",
