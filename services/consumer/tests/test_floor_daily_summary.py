@@ -1,6 +1,7 @@
 """Unit tests for emit_floor_daily_summaries() and per_floor_max_call_s tracking."""
 
 from consumer import emit_floor_daily_summaries
+
 from state import _empty_daily_state
 
 FLOOR_1 = "binary_sensor.floor_1_heating_call"

@@ -5,13 +5,14 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
+from dateutil.parser import isoparse
+
 from constants import (
     _FLOOR_ENTITIES,
     _ZONE_TO_FLOOR_ENTITY,
     CLIMATE_ENTITIES,
     SLOW_TO_HEAT_THRESHOLDS_S,
 )
-from dateutil.parser import isoparse
 from utils import utc_ts
 
 
@@ -88,12 +89,17 @@ def process_furnace_event(
     ts_str: str | None,
     furnace_on_since: datetime | None,
     processing_ts: str | None = None,
+    last_outdoor_temp_f: float | None = None,
 ) -> tuple[list[dict[str, Any]], datetime | None]:
     """
     Process a furnace heating state change.
 
     Returns (events, updated_furnace_on_since).
     events is a list of derived event dicts (0 or 1 items).
+
+    last_outdoor_temp_f is the most recent outdoor temperature reading from daily_state;
+    it is included in heating_session_ended.v1 so downstream consumers have thermal
+    context without needing a separate lookup.
     """
     events: list[dict[str, Any]] = []
     _evt_ts = processing_ts or utc_ts()
@@ -126,6 +132,7 @@ def process_furnace_event(
                     "ended_at": ts_str,
                     "entity_id": entity_id,
                     "duration_s": duration_s,
+                    "outdoor_temp_f": last_outdoor_temp_f,
                 },
             }
         )

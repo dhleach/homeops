@@ -34,8 +34,9 @@ from monthly import (
 from monthly import (
     load_daily_summaries as load_monthly_summaries,
 )
-from reporting import format_daily_summary_message
 from weekly import compute_weekly_comparison, format_weekly_comparison, load_daily_summaries
+
+from reporting import format_daily_summary_message
 
 # ---------------------------------------------------------------------------
 # Default paths / SSH config

@@ -483,6 +483,7 @@ def _playback_phase(
                     ts_str,
                     furnace_on_since,
                     processing_ts=ts_str,
+                    last_outdoor_temp_f=daily_state.get("last_outdoor_temp_f"),
                 )
                 for derived in derived_events:
                     fresh_restart = _emit_derived(derived, derived_log, fresh_restart)
@@ -1048,6 +1049,7 @@ def main() -> None:
                     ts_str,
                     furnace_on_since,
                     processing_ts=ts_str,
+                    last_outdoor_temp_f=daily_state.get("last_outdoor_temp_f"),
                 )
                 for derived in derived_events:
                     fresh_restart = _emit_derived(derived, derived_log, fresh_restart)
