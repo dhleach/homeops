@@ -18,6 +18,9 @@ jobs:
           tags: tag:ci
           version: latest
 
+      - name: Wait for Tailscale
+        run: sleep 5
+
       - name: Write SSH key
         run: |
           echo "${{ secrets.DEPLOY_SSH_KEY }}" > ${{ runner.temp }}/deploy_key
@@ -26,6 +29,7 @@ jobs:
       - name: Deploy to Pi
         run: |
           ssh -i ${{ runner.temp }}/deploy_key \
+            -o ConnectTimeout=30 \
             -o StrictHostKeyChecking=no \
             -o UserKnownHostsFile=/dev/null \
             github-deploy@100.115.21.72 \
