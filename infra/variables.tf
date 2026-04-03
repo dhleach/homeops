@@ -40,3 +40,14 @@ variable "ssh_public_key" {
   # Set via: export TF_VAR_ssh_public_key="$(cat ~/.ssh/id_ed25519.pub)"
   # or in terraform.tfvars
 }
+
+variable "agent_ip" {
+  description = "Bob agent container public IP for SSH access"
+  type        = string
+}
+
+variable "tailscale_authkey" {
+  description = "Tailscale auth key for EC2 to join Tailnet"
+  type        = string
+  sensitive   = true
+}

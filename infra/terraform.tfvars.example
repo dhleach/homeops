@@ -11,3 +11,9 @@ ebs_volume_size_gb = 20
 # Your SSH public key — paste the contents of ~/.ssh/id_ed25519.pub
 # or whichever key you want for EC2 access
 ssh_public_key = "ssh-ed25519 AAAA... your-key-here"
+
+# Bob agent container public IP — SSH SG rule allows this IP
+agent_ip = "YOUR_AGENT_IP"
+
+# Tailscale auth key for EC2 to join Tailnet (generate at https://login.tailscale.com/admin/settings/keys)
+tailscale_authkey = "tskey-auth-..."
