@@ -4,6 +4,38 @@ services:
     # network_mode: host lets the container reach localhost:9090 (Prometheus)
     # on the EC2 host without extra networking config.
     network_mode: host
-    ports:
-      - "8000:8000"
     restart: always
+
+  prometheus:
+    image: prom/prometheus:v3.2.1
+    network_mode: host
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=30d"
+      - "--web.listen-address=0.0.0.0:9090"
+    restart: always
+
+  grafana:
+    image: grafana/grafana:11.5.2
+    network_mode: host
+    environment:
+      - GF_SERVER_HTTP_PORT=3000
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer
+      - GF_AUTH_DISABLE_LOGIN_FORM=false
+      - GF_SECURITY_ALLOW_EMBEDDING=true
+      - GF_SERVER_ROOT_URL=https://api.homeops.now/grafana
+      - GF_SERVER_SERVE_FROM_SUB_PATH=true
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    restart: always
+
+volumes:
+  prometheus_data:
+  grafana_data:
