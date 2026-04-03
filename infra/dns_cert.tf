@@ -5,7 +5,7 @@
 
 resource "aws_route53_zone" "homeops" {
   name    = var.domain
-  comment = "HomeOps dashboard — homeops.now"
+  comment = "HomeOps dashboard - homeops.now"
 
   tags = {
     Name        = var.domain
