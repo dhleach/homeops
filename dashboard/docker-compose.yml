@@ -17,6 +17,8 @@ services:
       - "--storage.tsdb.path=/prometheus"
       - "--storage.tsdb.retention.time=30d"
       - "--web.listen-address=0.0.0.0:9090"
+      - "--web.external-url=/prometheus"
+      - "--web.route-prefix=/"
     restart: always
 
   grafana:
