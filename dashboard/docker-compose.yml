@@ -1,0 +1,9 @@
+services:
+  backend:
+    build: ./backend
+    # network_mode: host lets the container reach localhost:9090 (Prometheus)
+    # on the EC2 host without extra networking config.
+    network_mode: host
+    ports:
+      - "8000:8000"
+    restart: always
