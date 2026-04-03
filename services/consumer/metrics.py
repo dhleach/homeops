@@ -155,8 +155,9 @@ class HvacMetrics:
             self.set_heating_session_duration(data.get("duration_s"))
 
         elif schema == "homeops.consumer.thermostat_current_temp_updated.v1":
-            floor = data.get("floor")
-            temp_f = data.get("temperature_f")
+            # Event data uses "zone" and "current_temp" (not "floor"/"temperature_f")
+            floor = data.get("zone", data.get("floor"))
+            temp_f = data.get("current_temp", data.get("temperature_f"))
             if floor and temp_f is not None:
                 self.set_floor_temperature(floor, float(temp_f))
 
