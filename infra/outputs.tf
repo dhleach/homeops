@@ -35,5 +35,5 @@ output "acm_certificate_arn" {
 
 output "ssh_connect" {
   description = "SSH command to connect to EC2"
-  value       = "ssh -i ~/.ssh/homeops-ec2.pem ubuntu@${aws_eip.homeops.public_ip}"
+  value       = "ssh -i ~/.ssh/id_ed25519 ubuntu@${aws_eip.homeops.public_ip}"
 }

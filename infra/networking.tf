@@ -39,13 +39,13 @@ resource "aws_security_group" "homeops_ec2" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 
-  # SSH — Tailscale IP only (Pi + Bob's container)
+  # SSH — Bob agent container public IP (Derek accesses via Tailscale, no SG rule needed)
   ingress {
-    description = "SSH from Tailscale"
+    description = "SSH from Bob agent container (public IP — Derek uses Tailscale)"
     from_port   = 22
     to_port     = 22
     protocol    = "tcp"
-    cidr_blocks = ["${var.tailscale_ip}/32"]
+    cidr_blocks = ["${var.agent_ip}/32"]
   }
 
   # Prometheus remote_write from Pi (Tailscale only)

@@ -55,7 +55,7 @@ resource "aws_instance" "homeops" {
     }
   }
 
-  # Bootstrap: install Docker, Docker Compose, Nginx, clone homeops repo
+  # Bootstrap: install Docker, Docker Compose, Nginx, clone homeops repo, bake SSH keys, join Tailscale
   user_data = <<-EOF
     #!/bin/bash
     set -e
@@ -72,6 +72,22 @@ resource "aws_instance" "homeops" {
     # Clone homeops repo
     git clone https://github.com/dhleach/homeops.git /home/ubuntu/homeops
     chown -R ubuntu:ubuntu /home/ubuntu/homeops
+
+    # Bake authorized SSH keys — survives instance replacement
+    mkdir -p /home/ubuntu/.ssh
+    chmod 700 /home/ubuntu/.ssh
+    cat >> /home/ubuntu/.ssh/authorized_keys << 'SSHKEYS'
+ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIK4NwtPsdoheR2mUazj1QydrJXYp/qtWbEUDmgQiWES3 homeops-production
+ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHeD3GdgQoCeFJNsimj5MzcUZDHG/pFemcScU0qRg5Tz bobclawbot@openclaw
+ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIF0AyrnOaA5cfz8vA3JcP+eeWiXavnts2KDj1Byl5Kfx dhlea@LAPTOP-DH9TGJI8
+ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIK4NwtPsdoheR2mUazj1QydrJXYp/qtWbEUDmgQiWES3 leachd@pi-homeops
+SSHKEYS
+    chmod 600 /home/ubuntu/.ssh/authorized_keys
+    chown -R ubuntu:ubuntu /home/ubuntu/.ssh
+
+    # Install and join Tailscale
+    curl -fsSL https://tailscale.com/install.sh | sh
+    tailscale up --authkey="${var.tailscale_authkey}" --hostname="homeops-ec2" --accept-routes
 
     echo "Bootstrap complete" > /var/log/homeops-bootstrap.log
   EOF
