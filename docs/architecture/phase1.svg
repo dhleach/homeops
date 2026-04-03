@@ -1,0 +1,185 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 620" width="960" height="620" font-family="'Segoe UI', -apple-system, Arial, sans-serif">
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#64748b"/>
+    </marker>
+    <marker id="arrow-blue" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#3b82f6"/>
+    </marker>
+    <marker id="arrow-green" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#10b981"/>
+    </marker>
+  </defs>
+
+  <!-- Background -->
+  <rect width="960" height="620" fill="#0f172a" rx="12"/>
+
+  <!-- Title -->
+  <text x="480" y="38" text-anchor="middle" fill="#f1f5f9" font-size="18" font-weight="700">HomeOps — Phase 1 Architecture</text>
+
+  <!-- === Raspberry Pi box === -->
+  <rect x="30" y="70" width="200" height="220" rx="10" fill="#1e293b" stroke="#334155" stroke-width="1.5"/>
+  <rect x="30" y="70" width="200" height="32" rx="10" fill="#7c3aed"/>
+  <rect x="30" y="90" width="200" height="12" fill="#7c3aed"/>
+  <text x="130" y="91" text-anchor="middle" fill="white" font-size="12" font-weight="700">Raspberry Pi</text>
+  <text x="130" y="107" text-anchor="middle" fill="#c4b5fd" font-size="10">systemd services</text>
+
+  <rect x="50" y="120" width="160" height="40" rx="6" fill="#2d1b69"/>
+  <text x="130" y="136" text-anchor="middle" fill="#e2e8f0" font-size="11" font-weight="600">Observer Service</text>
+  <text x="130" y="152" text-anchor="middle" fill="#94a3b8" font-size="10">HVAC event stream</text>
+
+  <rect x="50" y="170" width="160" height="40" rx="6" fill="#2d1b69"/>
+  <text x="130" y="186" text-anchor="middle" fill="#e2e8f0" font-size="11" font-weight="600">Consumer Service</text>
+  <text x="130" y="202" text-anchor="middle" fill="#94a3b8" font-size="10">event processing + rules</text>
+
+  <rect x="50" y="220" width="160" height="34" rx="6" fill="#2d1b69"/>
+  <text x="130" y="236" text-anchor="middle" fill="#e2e8f0" font-size="11" font-weight="600">Prometheus /metrics</text>
+  <text x="130" y="250" text-anchor="middle" fill="#94a3b8" font-size="10">:8001 · 7 gauges/counters</text>
+
+  <!-- Pi sensors note -->
+  <text x="130" y="305" text-anchor="middle" fill="#64748b" font-size="10">16 vents · 3 zones · 1 furnace</text>
+
+  <!-- === Tailscale cloud === -->
+  <rect x="30" y="330" width="200" height="60" rx="10" fill="#1e293b" stroke="#334155" stroke-width="1.5"/>
+  <rect x="30" y="330" width="200" height="28" rx="10" fill="#0891b2"/>
+  <rect x="30" y="348" width="200" height="10" fill="#0891b2"/>
+  <text x="130" y="349" text-anchor="middle" fill="white" font-size="12" font-weight="700">Tailscale VPN</text>
+  <text x="130" y="374" text-anchor="middle" fill="#94a3b8" font-size="10">Pi: 100.115.21.72 · EC2: 100.125.111.71</text>
+
+  <!-- === EC2 box === -->
+  <rect x="280" y="70" width="220" height="300" rx="10" fill="#1e293b" stroke="#334155" stroke-width="1.5"/>
+  <rect x="280" y="70" width="220" height="32" rx="10" fill="#f97316"/>
+  <rect x="280" y="90" width="220" height="12" fill="#f97316"/>
+  <text x="390" y="91" text-anchor="middle" fill="white" font-size="12" font-weight="700">EC2 (t4g.micro · ARM64)</text>
+  <text x="390" y="107" text-anchor="middle" fill="#fed7aa" font-size="10">Ubuntu · Docker Compose · us-east-1</text>
+
+  <rect x="300" y="120" width="180" height="40" rx="6" fill="#431407"/>
+  <text x="390" y="136" text-anchor="middle" fill="#e2e8f0" font-size="11" font-weight="600">Nginx (reverse proxy)</text>
+  <text x="390" y="152" text-anchor="middle" fill="#94a3b8" font-size="10">homeops.now → S3/CF · api.* → :8000</text>
+
+  <rect x="300" y="170" width="180" height="40" rx="6" fill="#431407"/>
+  <text x="390" y="186" text-anchor="middle" fill="#e2e8f0" font-size="11" font-weight="600">FastAPI Backend</text>
+  <text x="390" y="202" text-anchor="middle" fill="#94a3b8" font-size="10">:8000 · /api/current-temps · /health</text>
+
+  <rect x="300" y="220" width="180" height="34" rx="6" fill="#431407"/>
+  <text x="390" y="236" text-anchor="middle" fill="#e2e8f0" font-size="11" font-weight="600">Let's Encrypt (certbot)</text>
+  <text x="390" y="250" text-anchor="middle" fill="#94a3b8" font-size="10">api.homeops.now · auto-renewal</text>
+
+  <rect x="300" y="264" width="180" height="34" rx="6" fill="#431407"/>
+  <text x="390" y="280" text-anchor="middle" fill="#e2e8f0" font-size="11" font-weight="600">Elastic IP: 32.194.69.77</text>
+  <text x="390" y="296" text-anchor="middle" fill="#94a3b8" font-size="10">SSH locked to Tailscale + agent IPs</text>
+
+  <!-- === AWS Services box === -->
+  <rect x="550" y="70" width="360" height="300" rx="10" fill="#1e293b" stroke="#334155" stroke-width="1.5"/>
+  <rect x="550" y="70" width="360" height="32" rx="10" fill="#ea580c"/>
+  <rect x="550" y="90" width="360" height="12" fill="#ea580c"/>
+  <text x="730" y="91" text-anchor="middle" fill="white" font-size="12" font-weight="700">AWS (us-east-1)</text>
+  <text x="730" y="107" text-anchor="middle" fill="#fed7aa" font-size="10">all infrastructure as Terraform code</text>
+
+  <rect x="570" y="120" width="150" height="50" rx="6" fill="#431407"/>
+  <text x="645" y="140" text-anchor="middle" fill="#e2e8f0" font-size="11" font-weight="600">CloudFront CDN</text>
+  <text x="645" y="155" text-anchor="middle" fill="#94a3b8" font-size="10">E2AOYUC5QNBP7C</text>
+  <text x="645" y="167" text-anchor="middle" fill="#94a3b8" font-size="9">homeops.now → S3</text>
+
+  <rect x="740" y="120" width="150" height="50" rx="6" fill="#431407"/>
+  <text x="815" y="140" text-anchor="middle" fill="#e2e8f0" font-size="11" font-weight="600">S3 Bucket</text>
+  <text x="815" y="155" text-anchor="middle" fill="#94a3b8" font-size="10">homeops-frontend-production</text>
+  <text x="815" y="167" text-anchor="middle" fill="#94a3b8" font-size="9">React build artifacts</text>
+
+  <rect x="570" y="185" width="150" height="50" rx="6" fill="#431407"/>
+  <text x="645" y="205" text-anchor="middle" fill="#e2e8f0" font-size="11" font-weight="600">Route 53</text>
+  <text x="645" y="220" text-anchor="middle" fill="#94a3b8" font-size="10">homeops.now zone</text>
+  <text x="645" y="232" text-anchor="middle" fill="#94a3b8" font-size="9">A + CNAME records</text>
+
+  <rect x="740" y="185" width="150" height="50" rx="6" fill="#431407"/>
+  <text x="815" y="205" text-anchor="middle" fill="#e2e8f0" font-size="11" font-weight="600">ACM Certificate</text>
+  <text x="815" y="220" text-anchor="middle" fill="#94a3b8" font-size="10">*.homeops.now</text>
+  <text x="815" y="232" text-anchor="middle" fill="#94a3b8" font-size="9">DNS-validated · auto-renew</text>
+
+  <rect x="570" y="250" width="320" height="40" rx="6" fill="#431407"/>
+  <text x="730" y="266" text-anchor="middle" fill="#e2e8f0" font-size="11" font-weight="600">IAM — homeops-deploy</text>
+  <text x="730" y="280" text-anchor="middle" fill="#94a3b8" font-size="10">scoped policy: EC2, S3, CF, Route53, ACM · GitHub Actions credentials</text>
+
+  <rect x="570" y="305" width="320" height="34" rx="6" fill="#431407"/>
+  <text x="730" y="320" text-anchor="middle" fill="#e2e8f0" font-size="11" font-weight="600">EBS Volume (20GB gp3)</text>
+  <text x="730" y="334" text-anchor="middle" fill="#94a3b8" font-size="10">persists across EC2 stop/start</text>
+
+  <!-- === GitHub box === -->
+  <rect x="280" y="400" width="220" height="120" rx="10" fill="#1e293b" stroke="#334155" stroke-width="1.5"/>
+  <rect x="280" y="400" width="220" height="32" rx="10" fill="#1f2937"/>
+  <rect x="280" y="420" width="220" height="12" fill="#1f2937"/>
+  <text x="390" y="421" text-anchor="middle" fill="white" font-size="12" font-weight="700">GitHub</text>
+  <text x="390" y="437" text-anchor="middle" fill="#9ca3af" font-size="10">dhleach/homeops · monorepo</text>
+
+  <rect x="300" y="445" width="180" height="34" rx="6" fill="#111827"/>
+  <text x="390" y="460" text-anchor="middle" fill="#e2e8f0" font-size="11" font-weight="600">Actions CI/CD</text>
+  <text x="390" y="474" text-anchor="middle" fill="#94a3b8" font-size="10">push master → npm build → S3 sync → CF invalidate</text>
+
+  <rect x="300" y="488" width="180" height="24" rx="6" fill="#111827"/>
+  <text x="390" y="504" text-anchor="middle" fill="#94a3b8" font-size="10">path filter: dashboard/frontend/**</text>
+
+  <!-- === User browser === -->
+  <rect x="550" y="420" width="360" height="90" rx="10" fill="#1e293b" stroke="#334155" stroke-width="1.5"/>
+  <rect x="550" y="420" width="360" height="28" rx="10" fill="#0f766e"/>
+  <rect x="550" y="438" width="360" height="10" fill="#0f766e"/>
+  <text x="730" y="438" text-anchor="middle" fill="white" font-size="12" font-weight="700">User / Recruiter Browser</text>
+  <text x="730" y="462" text-anchor="middle" fill="#e2e8f0" font-size="13" font-weight="600">homeops.now</text>
+  <text x="730" y="480" text-anchor="middle" fill="#94a3b8" font-size="10">React · live temps (Phase 2: real data) · HTTPS via CloudFront</text>
+  <text x="730" y="498" text-anchor="middle" fill="#94a3b8" font-size="10">api.homeops.now/health ✅ · /api/current-temps (nulls until Phase 2)</text>
+
+  <!-- === Arrows === -->
+
+  <!-- Pi consumer → Pi /metrics (internal, dashed vertical) -->
+
+  <!-- Pi /metrics → EC2 FastAPI (via Tailscale, Phase 2) — dashed -->
+  <line x1="210" y1="237" x2="299" y2="237" stroke="#3b82f6" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#arrow-blue)"/>
+  <text x="254" y="230" text-anchor="middle" fill="#3b82f6" font-size="9">Phase 2</text>
+
+  <!-- Pi → Tailscale -->
+  <line x1="130" y1="290" x2="130" y2="329" stroke="#0891b2" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- EC2 → Tailscale -->
+  <line x1="310" y1="370" x2="220" y2="370" stroke="#0891b2" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- EC2 → CloudFront (Nginx routes homeops.now) — actually CF routes to S3 -->
+  <!-- EC2 FastAPI → user (api requests) -->
+  <line x1="500" y1="186" x2="549" y2="210" stroke="#64748b" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#arrow)"/>
+  <text x="524" y="195" text-anchor="middle" fill="#64748b" font-size="9">Phase 2</text>
+
+  <!-- CloudFront → S3 (origin) -->
+  <line x1="720" y1="145" x2="741" y2="145" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- Route53 → CloudFront -->
+  <line x1="720" y1="200" x2="720" y2="170" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- ACM → CloudFront -->
+  <line x1="740" y1="210" x2="720" y2="170" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- GitHub Actions → S3 -->
+  <line x1="480" y1="450" x2="549" y2="160" stroke="#10b981" stroke-width="1.5" marker-end="url(#arrow-green)"/>
+  <text x="520" y="370" text-anchor="middle" fill="#10b981" font-size="9" transform="rotate(-75, 520, 370)">npm build → S3 sync</text>
+
+  <!-- GitHub Actions → CloudFront invalidate -->
+  <!-- (same arrow essentially) -->
+
+  <!-- Browser → CloudFront -->
+  <line x1="730" y1="420" x2="700" y2="370" stroke="#0f766e" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- Browser → EC2 API -->
+  <line x1="600" y1="420" x2="450" y2="210" stroke="#0f766e" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#arrow)"/>
+  <text x="510" y="330" text-anchor="middle" fill="#0f766e" font-size="9" transform="rotate(-60, 510, 330)">api.homeops.now</text>
+
+  <!-- Legend -->
+  <rect x="30" y="550" width="900" height="55" rx="8" fill="#1e293b" stroke="#334155" stroke-width="1"/>
+  <text x="50" y="568" fill="#94a3b8" font-size="10" font-weight="600">LEGEND:</text>
+  <line x1="110" y1="565" x2="140" y2="565" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <text x="145" y="568" fill="#94a3b8" font-size="10">data flow</text>
+  <line x1="200" y1="565" x2="230" y2="565" stroke="#3b82f6" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#arrow-blue)"/>
+  <text x="235" y="568" fill="#3b82f6" font-size="10">Phase 2 (Prometheus scrape)</text>
+  <line x1="390" y1="565" x2="420" y2="565" stroke="#10b981" stroke-width="1.5" marker-end="url(#arrow-green)"/>
+  <text x="425" y="568" fill="#10b981" font-size="10">CI/CD deploy path</text>
+  <line x1="530" y1="565" x2="560" y2="565" stroke="#0891b2" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <text x="565" y="568" fill="#0891b2" font-size="10">Tailscale VPN</text>
+
+  <text x="50" y="592" fill="#64748b" font-size="10">Stack: Raspberry Pi (systemd) · FastAPI · Docker Compose · Nginx · React/Vite · Tailwind · Terraform · CloudFront/S3/Route53/ACM · GitHub Actions · Tailscale</text>
+</svg>
