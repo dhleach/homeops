@@ -89,6 +89,45 @@ SSHKEYS
     curl -fsSL https://tailscale.com/install.sh | sh
     tailscale up --authkey="${var.tailscale_authkey}" --hostname="homeops-ec2" --accept-routes
 
+    # Install certbot for Let's Encrypt
+    apt-get install -y certbot python3-certbot-nginx
+
+    # Deploy Nginx config for api.homeops.now -> FastAPI
+    mkdir -p /var/www/certbot
+    cp /home/ubuntu/homeops/dashboard/nginx/api.homeops.now.conf /etc/nginx/sites-available/api.homeops.now
+    ln -sf /etc/nginx/sites-available/api.homeops.now /etc/nginx/sites-enabled/api.homeops.now
+    rm -f /etc/nginx/sites-enabled/default
+
+    # Install HTTP-only config first so certbot challenge can succeed
+    cat > /etc/nginx/sites-available/api.homeops.now << 'NGINXEOF'
+server {
+    listen 80;
+    listen [::]:80;
+    server_name api.homeops.now;
+    location /.well-known/acme-challenge/ { root /var/www/certbot; }
+    location / { proxy_pass http://localhost:8000; }
+}
+NGINXEOF
+    nginx -t && systemctl reload nginx
+
+    # Obtain Let's Encrypt cert with retry (DNS may not resolve immediately after EIP assignment)
+    for i in 1 2 3 4 5; do
+      if certbot --nginx -d api.homeops.now --non-interactive --agree-tos -m admin@homeops.now; then
+        echo "certbot succeeded on attempt $i" >> /var/log/homeops-bootstrap.log
+        break
+      fi
+      echo "certbot attempt $i failed, retrying in 60s..." >> /var/log/homeops-bootstrap.log
+      sleep 60
+    done
+
+    # Install full config with SSL paths (certbot may have already modified the file; overwrite cleanly)
+    cp /home/ubuntu/homeops/dashboard/nginx/api.homeops.now.conf /etc/nginx/sites-available/api.homeops.now
+    nginx -t && systemctl reload nginx
+
+    # Enable certbot auto-renewal
+    systemctl enable certbot.timer
+    systemctl start certbot.timer || true
+
     echo "Bootstrap complete" > /var/log/homeops-bootstrap.log
   EOF
 
