@@ -16,3 +16,5 @@ __pycache__/
 # Core dumps (from bundled tools like ripgrep in Claude Code)
 core
 core.*
+dashboard/frontend/dist/
+dashboard/frontend/node_modules/
