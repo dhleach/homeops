@@ -41,7 +41,7 @@ resource "aws_security_group" "homeops_ec2" {
 
   # SSH — Bob agent container public IP (Derek accesses via Tailscale, no SG rule needed)
   ingress {
-    description = "SSH from Bob agent container (public IP — Derek uses Tailscale)"
+    description = "SSH from Bob agent container (public IP - Derek uses Tailscale)"
     from_port   = 22
     to_port     = 22
     protocol    = "tcp"
