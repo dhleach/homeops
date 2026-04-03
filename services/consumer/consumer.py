@@ -715,6 +715,21 @@ def main() -> None:
             f"[{utc_ts()}] Resumed from state file (saved_at={saved.get('saved_at')})",
             flush=True,
         )
+        # Warm up Prometheus metrics from persisted state so gauges show real
+        # values immediately on restart — before any new events arrive.
+        # Without this, floor_temperature_fahrenheit stays 0 until a temp change
+        # triggers a thermostat_current_temp_updated event.
+        if _metrics is not None:
+            for eid, es in climate_state.items():
+                zone = CLIMATE_ENTITIES.get(eid)
+                temp = es.get("current_temp")
+                if zone and temp is not None:
+                    _metrics.set_floor_temperature(zone, float(temp))
+                    print(f"[{utc_ts()}] Warmed metric floor_temp {zone}={temp}", flush=True)
+            if furnace_on_since is not None:
+                _metrics.set_furnace_active(True)
+            if daily_state.get("last_outdoor_temp_f") is not None:
+                _metrics.set_outdoor_temperature(float(daily_state["last_outdoor_temp_f"]))
     else:
         # Cold-start: bootstrap furnace state from the observer log.
         furnace_on_since = last_furnace_on_since(path)
