@@ -11,7 +11,6 @@ from datetime import UTC, datetime
 
 import httpx
 from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
 
 PROMETHEUS_URL = "http://localhost:9090/api/v1/query"
 
@@ -23,13 +22,9 @@ app = FastAPI(
     description="Live HVAC data served from EC2-local Prometheus.",
 )
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# CORS is handled entirely by Nginx (api.homeops.now.conf).
+# Do NOT add FastAPI CORSMiddleware here — duplicate Access-Control-Allow-Origin
+# headers cause Safari/iOS to reject the response with "Load failed".
 
 
 # ---------------------------------------------------------------------------
