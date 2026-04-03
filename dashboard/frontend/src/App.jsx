@@ -4,7 +4,15 @@ import { OutdoorCard } from "./components/OutdoorCard.jsx";
 import { LiveIndicator } from "./components/LiveIndicator.jsx";
 import { ErrorBanner } from "./components/ErrorBanner.jsx";
 
-const GRAFANA_URL = import.meta.env.VITE_GRAFANA_URL ?? "#";
+const GRAFANA_BASE = import.meta.env.VITE_GRAFANA_URL ?? "https://api.homeops.now/grafana";
+const GRAFANA_URL = GRAFANA_BASE;
+
+const DASHBOARDS = [
+  { uid: "homeops-temps",       title: "Floor Temperatures",              description: "Live readings — all floors + outdoor" },
+  { uid: "homeops-zones",       title: "Zone Runtimes + Furnace Status",  description: "Call activity and today's runtime per floor" },
+  { uid: "homeops-correlation", title: "Outdoor Temp Correlation",        description: "How cold weather drives heating demand" },
+  { uid: "homeops-daily",       title: "Daily Summary + Anomalies",       description: "Session history and floor-2 long-call events" },
+];
 const ZONE_ORDER = ["floor_1", "floor_2", "floor_3"];
 
 export default function App() {
@@ -100,6 +108,52 @@ export default function App() {
             </div>
           </>
         )}
+
+        {/* Grafana dashboards */}
+        <section className="mt-16 border-t border-border pt-12">
+          <div className="mb-8 flex items-center justify-between">
+            <div>
+              <h2 className="text-xl font-semibold text-white">Live Dashboards</h2>
+              <p className="mt-1 text-sm text-slate-400">Powered by Prometheus + Grafana on AWS EC2</p>
+            </div>
+            <a
+              href={`${GRAFANA_BASE}/dashboards`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-xs text-slate-500 transition-colors hover:text-slate-300"
+            >
+              Open in Grafana →
+            </a>
+          </div>
+
+          <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+            {DASHBOARDS.map(({ uid, title, description }) => (
+              <div key={uid} className="overflow-hidden rounded-2xl border border-border bg-card">
+                <div className="border-b border-border px-4 py-3 flex items-center justify-between">
+                  <div>
+                    <h3 className="text-sm font-medium text-white">{title}</h3>
+                    <p className="text-xs text-slate-500">{description}</p>
+                  </div>
+                  <a
+                    href={`${GRAFANA_BASE}/d/${uid}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-xs text-blue-400 hover:text-blue-300 transition-colors ml-4 shrink-0"
+                  >
+                    Full view ↗
+                  </a>
+                </div>
+                <iframe
+                  src={`${GRAFANA_BASE}/d/${uid}?kiosk&theme=dark&refresh=30s`}
+                  title={title}
+                  className="w-full border-0"
+                  style={{ height: "300px" }}
+                  loading="lazy"
+                />
+              </div>
+            ))}
+          </div>
+        </section>
 
         {/* About section */}
         <section className="mt-20 border-t border-border pt-12">
