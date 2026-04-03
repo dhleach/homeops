@@ -6,6 +6,7 @@ on:
       - master
     paths:
       - 'dashboard/frontend/**'
+      - '.github/workflows/frontend-deploy.yml'
 
 concurrency:
   group: frontend-deploy
