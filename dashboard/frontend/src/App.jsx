@@ -6,6 +6,7 @@ import { ErrorBanner } from "./components/ErrorBanner.jsx";
 
 const GRAFANA_BASE = import.meta.env.VITE_GRAFANA_URL ?? "https://api.homeops.now/grafana";
 const GRAFANA_URL = `${GRAFANA_BASE}/d/homeops-temps`;
+const API_URL = import.meta.env.VITE_API_URL ?? "https://api.homeops.now";
 
 const DASHBOARDS = [
   { uid: "homeops-temps",       title: "Floor Temperatures",              description: "Live readings — all floors + outdoor" },
@@ -177,6 +178,12 @@ export default function App() {
               title="Overheating prevention"
               body="Floor 2's 3-vent constraint causes the furnace to overheat if calls run too long. The pipeline detects, alerts, and logs every long-call event."
             />
+            <FeatureTile
+              icon="⚡"
+              title="REST API"
+              body="Live sensor data is served as JSON by a FastAPI backend on AWS EC2, querying Prometheus for the latest floor temperatures, setpoints, and zone call states."
+              link={{ href: `${API_URL}/api/current-temps`, label: "View live JSON →" }}
+            />
           </div>
         </section>
       </main>
@@ -186,6 +193,14 @@ export default function App() {
         <div className="mx-auto flex max-w-5xl flex-col items-center justify-between gap-3 text-xs text-slate-600 sm:flex-row">
           <span>Built with React · Tailwind · FastAPI · Prometheus · Terraform</span>
           <div className="flex items-center gap-4">
+            <a
+              href={`${API_URL}/api/current-temps`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="transition-colors hover:text-slate-400"
+            >
+              API →
+            </a>
             <a
               href="https://github.com/dhleach/homeops"
               target="_blank"
@@ -201,7 +216,7 @@ export default function App() {
   );
 }
 
-function FeatureTile({ icon, title, body }) {
+function FeatureTile({ icon, title, body, link }) {
   return (
     <div className="flex flex-col gap-3">
       <div className="flex h-10 w-10 items-center justify-center rounded-xl border border-border bg-card text-xl">
@@ -209,6 +224,16 @@ function FeatureTile({ icon, title, body }) {
       </div>
       <h3 className="font-semibold text-white">{title}</h3>
       <p className="text-sm leading-relaxed text-slate-400">{body}</p>
+      {link && (
+        <a
+          href={link.href}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-sm text-blue-400 transition-colors hover:text-blue-300"
+        >
+          {link.label}
+        </a>
+      )}
     </div>
   );
 }
