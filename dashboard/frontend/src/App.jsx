@@ -190,14 +190,14 @@ export default function App() {
 
       {/* ── Footer ─────────────────────────────────────────────────────── */}
       <footer className="border-t border-border px-6 py-6">
-        <div className="mx-auto flex max-w-5xl flex-col items-center justify-between gap-3 text-xs text-slate-600 sm:flex-row">
+        <div className="mx-auto flex max-w-5xl flex-col items-center justify-between gap-3 text-xs text-slate-400 sm:flex-row">
           <span>Built with React · Tailwind · FastAPI · Prometheus · Terraform</span>
           <div className="flex items-center gap-4">
             <a
               href={`${API_URL}/api/current-temps`}
               target="_blank"
               rel="noopener noreferrer"
-              className="transition-colors hover:text-slate-400"
+              className="transition-colors hover:text-slate-200"
             >
               API →
             </a>
@@ -205,7 +205,7 @@ export default function App() {
               href="https://github.com/dhleach/homeops"
               target="_blank"
               rel="noopener noreferrer"
-              className="transition-colors hover:text-slate-400"
+              className="transition-colors hover:text-slate-200"
             >
               GitHub →
             </a>
