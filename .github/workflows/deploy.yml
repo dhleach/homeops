@@ -33,4 +33,13 @@ jobs:
             -o StrictHostKeyChecking=no \
             -o UserKnownHostsFile=/dev/null \
             github-deploy@100.115.21.72 \
-            "cd /home/leachd/repos/homeops && git pull origin master && sudo systemctl restart homeops-observer && sudo systemctl restart homeops-consumer && echo 'Deploy complete'"
+            "cd /home/leachd/repos/homeops && git pull origin master && sudo systemctl restart homeops-observer && sudo systemctl restart homeops-consumer && echo 'Pi deploy complete'"
+
+      - name: Deploy backend to EC2
+        run: |
+          ssh -i ${{ runner.temp }}/deploy_key \
+            -o ConnectTimeout=30 \
+            -o StrictHostKeyChecking=no \
+            -o UserKnownHostsFile=/dev/null \
+            ubuntu@100.125.111.71 \
+            "cd /home/ubuntu/homeops && git pull origin master && cd dashboard && docker compose up -d --build --force-recreate backend && echo 'EC2 backend deploy complete'"
