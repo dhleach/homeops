@@ -47,4 +47,4 @@ jobs:
             -o StrictHostKeyChecking=no \
             -o UserKnownHostsFile=/dev/null \
             ubuntu@100.125.111.71 \
-            "cd /home/ubuntu/homeops && git pull origin master && cd dashboard && docker compose up -d --build --force-recreate backend && echo 'EC2 backend deploy complete'"
+            "cd /home/ubuntu/homeops && git pull origin master && cd dashboard && docker compose up -d --build --force-recreate backend && sudo chown -R ubuntu:ubuntu /home/ubuntu/homeops/dashboard && echo 'EC2 backend deploy complete'"
