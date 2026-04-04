@@ -152,7 +152,7 @@ export default function App() {
                   src={`${GRAFANA_BASE}/d/${uid}?kiosk&theme=dark&refresh=30s`}
                   title={title}
                   className="w-full border-0"
-                  style={{ height: "300px" }}
+                  style={{ height: "450px" }}
                   loading="lazy"
                 />
               </div>
