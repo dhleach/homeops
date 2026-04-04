@@ -6,6 +6,7 @@ on:
       - master
     paths:
       - 'dashboard/frontend/**'
+      - '.github/workflows/frontend-deploy.yml'
 
 concurrency:
   group: frontend-deploy
@@ -32,6 +33,8 @@ jobs:
 
       - name: Build
         working-directory: dashboard/frontend
+        env:
+          VITE_API_URL: https://api.homeops.now
         run: npm run build
 
       - name: Configure AWS credentials
