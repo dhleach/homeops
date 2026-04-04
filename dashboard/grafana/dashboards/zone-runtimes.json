@@ -1,7 +1,9 @@
 {
   "__inputs": [],
   "__requires": [],
-  "annotations": { "list": [] },
+  "annotations": {
+    "list": []
+  },
   "description": "Zone call activity, today's runtime accumulation, and furnace status",
   "editable": false,
   "graphTooltip": 1,
@@ -9,25 +11,67 @@
   "links": [],
   "panels": [
     {
-      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
       "fieldConfig": {
         "defaults": {
-          "color": { "fixedColor": "red", "mode": "fixed" },
+          "color": {
+            "fixedColor": "red",
+            "mode": "fixed"
+          },
           "mappings": [
-            { "options": { "0": { "text": "IDLE" }, "1": { "text": "HEATING" } }, "type": "value" }
+            {
+              "options": {
+                "0": {
+                  "text": "IDLE"
+                },
+                "1": {
+                  "text": "HEATING"
+                }
+              },
+              "type": "value"
+            }
           ],
           "thresholds": {
             "mode": "absolute",
-            "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 1 }]
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
           }
         }
       },
-      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 0
+      },
       "id": 1,
-      "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "value" },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "textMode": "value"
+      },
       "targets": [
         {
-          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
           "expr": "furnace_heating_active",
           "legendFormat": "Furnace",
           "refId": "A"
@@ -37,113 +81,302 @@
       "type": "stat"
     },
     {
-      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
       "fieldConfig": {
         "defaults": {
           "mappings": [
-            { "options": { "0": { "color": "green", "text": "Idle" }, "1": { "color": "red", "text": "Calling" } }, "type": "value" }
+            {
+              "options": {
+                "0": {
+                  "color": "green",
+                  "text": "Idle"
+                },
+                "1": {
+                  "color": "red",
+                  "text": "Calling"
+                }
+              },
+              "type": "value"
+            }
           ],
-          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 1 }] }
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
         }
       },
-      "gridPos": { "h": 4, "w": 18, "x": 6, "y": 0 },
+      "gridPos": {
+        "h": 4,
+        "w": 18,
+        "x": 6,
+        "y": 0
+      },
       "id": 2,
-      "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "value_and_name", "orientation": "horizontal" },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "textMode": "value_and_name",
+        "orientation": "horizontal"
+      },
       "targets": [
         {
-          "datasource": { "type": "prometheus", "uid": "${datasource}" },
-          "expr": "floor_call_active",
-          "legendFormat": "{{floor}}",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "floor_call_active{floor=\"floor_3\"}",
+          "legendFormat": "floor_3",
           "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "floor_call_active{floor=\"floor_2\"}",
+          "legendFormat": "floor_2",
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "floor_call_active{floor=\"floor_1\"}",
+          "legendFormat": "floor_1",
+          "refId": "C"
         }
       ],
       "title": "Zone Call Status",
       "type": "stat"
     },
     {
-      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
       "fieldConfig": {
         "defaults": {
-          "color": { "mode": "palette-classic" },
-          "custom": { "lineWidth": 2, "fillOpacity": 10 },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 10
+          },
           "unit": "short",
           "mappings": [
-            { "options": { "0": { "text": "Idle" }, "1": { "text": "Active" } }, "type": "value" }
+            {
+              "options": {
+                "0": {
+                  "text": "Idle"
+                },
+                "1": {
+                  "text": "Active"
+                }
+              },
+              "type": "value"
+            }
           ]
         }
       },
-      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 4 },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 4
+      },
       "id": 3,
       "options": {
-        "legend": { "calcs": [], "displayMode": "list", "placement": "bottom" },
-        "tooltip": { "mode": "multi", "sort": "desc" }
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
       },
       "targets": [
         {
-          "datasource": { "type": "prometheus", "uid": "${datasource}" },
-          "expr": "floor_call_active",
-          "legendFormat": "{{floor}} call",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "floor_call_active{floor=\"floor_3\"}",
+          "legendFormat": "floor_3 call",
           "refId": "A"
         },
         {
-          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "floor_call_active{floor=\"floor_2\"}",
+          "legendFormat": "floor_2 call",
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "floor_call_active{floor=\"floor_1\"}",
+          "legendFormat": "floor_1 call",
+          "refId": "C"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
           "expr": "furnace_heating_active",
           "legendFormat": "furnace",
-          "refId": "B"
+          "refId": "D"
         }
       ],
       "title": "Call + Furnace Activity (time series)",
       "type": "timeseries"
     },
     {
-      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
       "fieldConfig": {
         "defaults": {
-          "color": { "mode": "palette-classic" },
+          "color": {
+            "mode": "palette-classic"
+          },
           "unit": "s",
-          "custom": { "fillOpacity": 15, "lineWidth": 2 },
+          "custom": {
+            "fillOpacity": 15,
+            "lineWidth": 2
+          },
           "min": 0
         }
       },
-      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 12 },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 12
+      },
       "id": 4,
       "options": {
-        "legend": { "calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom" },
-        "tooltip": { "mode": "multi", "sort": "desc" }
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
       },
       "targets": [
         {
-          "datasource": { "type": "prometheus", "uid": "${datasource}" },
-          "expr": "zone_runtime_today_seconds",
-          "legendFormat": "{{floor}}",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "zone_runtime_today_seconds{floor=\"floor_3\"}",
+          "legendFormat": "floor_3",
           "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "zone_runtime_today_seconds{floor=\"floor_2\"}",
+          "legendFormat": "floor_2",
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "zone_runtime_today_seconds{floor=\"floor_1\"}",
+          "legendFormat": "floor_1",
+          "refId": "C"
         }
       ],
       "title": "Zone Runtime Today (seconds, cumulative)",
       "type": "timeseries"
     },
     {
-      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
       "fieldConfig": {
         "defaults": {
           "unit": "s",
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              { "color": "green", "value": null },
-              { "color": "yellow", "value": 1800 },
-              { "color": "red", "value": 2700 }
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1800
+              },
+              {
+                "color": "red",
+                "value": 2700
+              }
             ]
           },
           "min": 0
         }
       },
-      "gridPos": { "h": 6, "w": 8, "x": 0, "y": 20 },
+      "gridPos": {
+        "h": 6,
+        "w": 8,
+        "x": 16,
+        "y": 20
+      },
       "id": 5,
-      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background", "graphMode": "area" },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "background",
+        "graphMode": "area"
+      },
       "targets": [
         {
-          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
           "expr": "zone_runtime_today_seconds{floor=\"floor_1\"}",
           "legendFormat": "Floor 1",
           "refId": "A"
@@ -153,28 +386,59 @@
       "type": "stat"
     },
     {
-      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
       "fieldConfig": {
         "defaults": {
           "unit": "s",
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              { "color": "green", "value": null },
-              { "color": "yellow", "value": 1800 },
-              { "color": "orange", "value": 2700 },
-              { "color": "red", "value": 3600 }
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1800
+              },
+              {
+                "color": "orange",
+                "value": 2700
+              },
+              {
+                "color": "red",
+                "value": 3600
+              }
             ]
           },
           "min": 0
         }
       },
-      "gridPos": { "h": 6, "w": 8, "x": 8, "y": 20 },
+      "gridPos": {
+        "h": 6,
+        "w": 8,
+        "x": 8,
+        "y": 20
+      },
       "id": 6,
-      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background", "graphMode": "area" },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "background",
+        "graphMode": "area"
+      },
       "targets": [
         {
-          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
           "expr": "zone_runtime_today_seconds{floor=\"floor_2\"}",
           "legendFormat": "Floor 2",
           "refId": "A"
@@ -184,27 +448,55 @@
       "type": "stat"
     },
     {
-      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
       "fieldConfig": {
         "defaults": {
           "unit": "s",
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              { "color": "green", "value": null },
-              { "color": "yellow", "value": 1800 },
-              { "color": "red", "value": 2700 }
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1800
+              },
+              {
+                "color": "red",
+                "value": 2700
+              }
             ]
           },
           "min": 0
         }
       },
-      "gridPos": { "h": 6, "w": 8, "x": 16, "y": 20 },
+      "gridPos": {
+        "h": 6,
+        "w": 8,
+        "x": 0,
+        "y": 20
+      },
       "id": 7,
-      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background", "graphMode": "area" },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "background",
+        "graphMode": "area"
+      },
       "targets": [
         {
-          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
           "expr": "zone_runtime_today_seconds{floor=\"floor_3\"}",
           "legendFormat": "Floor 3",
           "refId": "A"
@@ -216,13 +508,28 @@
   ],
   "refresh": "30s",
   "schemaVersion": 39,
-  "tags": ["homeops", "zones"],
+  "tags": [
+    "homeops",
+    "zones"
+  ],
   "templating": {
     "list": [
-      { "current": {}, "hide": 2, "includeAll": false, "name": "datasource", "options": [], "query": "prometheus", "refresh": 1, "type": "datasource" }
+      {
+        "current": {},
+        "hide": 2,
+        "includeAll": false,
+        "name": "datasource",
+        "options": [],
+        "query": "prometheus",
+        "refresh": 1,
+        "type": "datasource"
+      }
     ]
   },
-  "time": { "from": "now-6h", "to": "now" },
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
   "timepicker": {},
   "timezone": "America/New_York",
   "title": "Zone Runtimes + Furnace Status",

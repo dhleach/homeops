@@ -1,128 +1,318 @@
 {
   "__inputs": [],
   "__requires": [],
-  "annotations": { "list": [] },
-  "description": "Outdoor temperature vs floor zone runtime — shows how cold weather drives heating demand",
+  "annotations": {
+    "list": []
+  },
+  "description": "Outdoor temperature vs floor zone runtime \u2014 shows how cold weather drives heating demand",
   "editable": false,
   "graphTooltip": 1,
   "id": null,
   "links": [],
   "panels": [
     {
-      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
       "fieldConfig": {
         "defaults": {
-          "color": { "mode": "palette-classic" },
-          "custom": { "lineWidth": 2, "fillOpacity": 5 }
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 5
+          }
         },
         "overrides": [
           {
-            "matcher": { "id": "byName", "options": "outdoor" },
+            "matcher": {
+              "id": "byName",
+              "options": "outdoor"
+            },
             "properties": [
-              { "id": "color", "value": { "fixedColor": "#73BF69", "mode": "fixed" } },
-              { "id": "unit", "value": "fahrenheit" },
-              { "id": "custom.axisPlacement", "value": "right" },
-              { "id": "custom.axisLabel", "value": "Outdoor Temp (°F)" }
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "#73BF69",
+                  "mode": "fixed"
+                }
+              },
+              {
+                "id": "unit",
+                "value": "fahrenheit"
+              },
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              },
+              {
+                "id": "custom.axisLabel",
+                "value": "Outdoor Temp (\u00b0F)"
+              }
             ]
           },
           {
-            "matcher": { "id": "byFrameRefID", "options": "B" },
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "B"
+            },
             "properties": [
-              { "id": "unit", "value": "s" },
-              { "id": "custom.axisLabel", "value": "Zone Runtime (s)" }
+              {
+                "id": "unit",
+                "value": "s"
+              },
+              {
+                "id": "custom.axisLabel",
+                "value": "Zone Runtime (s)"
+              }
             ]
           }
         ]
       },
-      "gridPos": { "h": 12, "w": 24, "x": 0, "y": 0 },
+      "gridPos": {
+        "h": 12,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
       "id": 1,
       "options": {
-        "legend": { "calcs": ["mean", "last"], "displayMode": "table", "placement": "bottom" },
-        "tooltip": { "mode": "multi", "sort": "desc" }
+        "legend": {
+          "calcs": [
+            "mean",
+            "last"
+          ],
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
       },
       "targets": [
         {
-          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
           "expr": "outdoor_temperature_fahrenheit",
           "legendFormat": "outdoor",
           "refId": "A"
         },
         {
-          "datasource": { "type": "prometheus", "uid": "${datasource}" },
-          "expr": "zone_runtime_today_seconds",
-          "legendFormat": "{{floor}} runtime",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "zone_runtime_today_seconds{floor=\"floor_3\"}",
+          "legendFormat": "floor_3 runtime",
           "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "zone_runtime_today_seconds{floor=\"floor_2\"}",
+          "legendFormat": "floor_2 runtime",
+          "refId": "C"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "zone_runtime_today_seconds{floor=\"floor_1\"}",
+          "legendFormat": "floor_1 runtime",
+          "refId": "D"
         }
       ],
       "title": "Outdoor Temp vs Zone Runtime Today",
       "type": "timeseries"
     },
     {
-      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
       "fieldConfig": {
         "defaults": {
-          "color": { "mode": "palette-classic" },
-          "custom": { "lineWidth": 2, "fillOpacity": 8 }
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 8
+          }
         },
         "overrides": [
           {
-            "matcher": { "id": "byName", "options": "outdoor" },
+            "matcher": {
+              "id": "byName",
+              "options": "outdoor"
+            },
             "properties": [
-              { "id": "color", "value": { "fixedColor": "#73BF69", "mode": "fixed" } },
-              { "id": "unit", "value": "fahrenheit" }
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "#73BF69",
+                  "mode": "fixed"
+                }
+              },
+              {
+                "id": "unit",
+                "value": "fahrenheit"
+              }
             ]
           },
           {
-            "matcher": { "id": "byFrameRefID", "options": "B" },
-            "properties": [{ "id": "unit", "value": "fahrenheit" }]
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "B"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "fahrenheit"
+              }
+            ]
           }
         ]
       },
-      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 12 },
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 12
+      },
       "id": 2,
       "options": {
-        "legend": { "calcs": ["mean", "last", "min", "max"], "displayMode": "table", "placement": "bottom" },
-        "tooltip": { "mode": "multi", "sort": "desc" }
+        "legend": {
+          "calcs": [
+            "mean",
+            "last",
+            "min",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
       },
       "targets": [
         {
-          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
           "expr": "outdoor_temperature_fahrenheit",
           "legendFormat": "outdoor",
           "refId": "A"
         },
         {
-          "datasource": { "type": "prometheus", "uid": "${datasource}" },
-          "expr": "floor_temperature_fahrenheit",
-          "legendFormat": "{{floor}}",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "floor_temperature_fahrenheit{floor=\"floor_3\"}",
+          "legendFormat": "floor_3",
           "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "floor_temperature_fahrenheit{floor=\"floor_2\"}",
+          "legendFormat": "floor_2",
+          "refId": "C"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "floor_temperature_fahrenheit{floor=\"floor_1\"}",
+          "legendFormat": "floor_1",
+          "refId": "D"
         }
       ],
       "title": "Outdoor vs Indoor Temperatures (historical)",
       "type": "timeseries"
     },
     {
-      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
       "fieldConfig": {
         "defaults": {
           "unit": "s",
-          "color": { "mode": "palette-classic" },
-          "custom": { "fillOpacity": 15, "lineWidth": 2 },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "fillOpacity": 15,
+            "lineWidth": 2
+          },
           "min": 0
         }
       },
-      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 22 },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 22
+      },
       "id": 3,
       "options": {
-        "legend": { "calcs": ["lastNotNull", "max", "mean"], "displayMode": "table", "placement": "bottom" },
-        "tooltip": { "mode": "multi", "sort": "desc" }
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max",
+            "mean"
+          ],
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
       },
       "targets": [
         {
-          "datasource": { "type": "prometheus", "uid": "${datasource}" },
-          "expr": "increase(zone_runtime_today_seconds[1h])",
-          "legendFormat": "{{floor}} runtime (1h increase)",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "increase(zone_runtime_today_seconds[1h]){floor=\"floor_3\"}",
+          "legendFormat": "floor_3 runtime (1h increase)",
           "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "increase(zone_runtime_today_seconds[1h]){floor=\"floor_2\"}",
+          "legendFormat": "floor_2 runtime (1h increase)",
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "increase(zone_runtime_today_seconds[1h]){floor=\"floor_1\"}",
+          "legendFormat": "floor_1 runtime (1h increase)",
+          "refId": "C"
         }
       ],
       "title": "Hourly Runtime Increase per Floor",
@@ -131,13 +321,28 @@
   ],
   "refresh": "1m",
   "schemaVersion": 39,
-  "tags": ["homeops", "correlation"],
+  "tags": [
+    "homeops",
+    "correlation"
+  ],
   "templating": {
     "list": [
-      { "current": {}, "hide": 2, "includeAll": false, "name": "datasource", "options": [], "query": "prometheus", "refresh": 1, "type": "datasource" }
+      {
+        "current": {},
+        "hide": 2,
+        "includeAll": false,
+        "name": "datasource",
+        "options": [],
+        "query": "prometheus",
+        "refresh": 1,
+        "type": "datasource"
+      }
     ]
   },
-  "time": { "from": "now-24h", "to": "now" },
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  },
   "timepicker": {},
   "timezone": "America/New_York",
   "title": "Outdoor Temp + Runtime Correlation",
