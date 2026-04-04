@@ -1,6 +1,8 @@
 # homeops
 
-A Raspberry Pi system that monitors a 3-zone HVAC setup and prevents furnace overheating — with real-time Telegram alerts and a structured event pipeline built on top of Home Assistant.
+**Live dashboard → [homeops.now](https://homeops.now) · API → [api.homeops.now/api/current-temps](https://api.homeops.now/api/current-temps)**
+
+A full-stack observability platform for a 3-zone home HVAC system — event-driven Python pipeline on a Raspberry Pi 5, live metrics in Prometheus + Grafana on AWS EC2, React dashboard on S3 + CloudFront, FastAPI backend, all provisioned with Terraform.
 
 ## The Problem
 
@@ -17,32 +19,58 @@ Home Assistant alone can't prevent this. It sees state changes; it doesn't reaso
 - **Event-driven pipeline** — observer writes raw `state_changed` events to JSONL; consumer tails that file and emits semantically rich derived events downstream
 - **Schema-versioned events** — every event carries a `schema` field (e.g. `homeops.consumer.floor_2_long_call_warning.v1`) for safe downstream evolution
 - **Production-grade operations** — runs as `systemd` services on the Pi, log rotation via `logrotate`, exponential-backoff reconnects on the WebSocket
-- **575 pytest tests + 23 React component tests**, GitHub Actions CI, Ruff lint/format enforcement on every PR
+- **549 pytest tests + 27 React component tests**, GitHub Actions CI, Ruff lint/format enforcement on every PR
 
 ## Architecture
 
 ```
-Home Assistant
-  WebSocket API
-       │
-       ▼
-  observer.py  ──► state/observer/events.jsonl  (raw JSONL, append-only)
-                               │
-                               ▼
-                         consumer.py
-                               │
-                 ┌─────────────┼─────────────┐
-                 ▼             ▼             ▼
-        state/consumer/   stdout        Telegram alert
-        events.jsonl                  (floor-2 long call)
-       (derived events)
+┌──────────────────── Raspberry Pi 5 ─────────────────────┐
+│                                                          │
+│  Home Assistant                                          │
+│    WebSocket API                                         │
+│         │                                                │
+│         ▼                                                │
+│    observer.py ──► state/observer/events.jsonl           │
+│                               │                          │
+│                               ▼                          │
+│                         consumer.py ──► /metrics         │
+│                               │         (Prometheus      │
+│                 ┌─────────────┤          exposition)     │
+│                 ▼             ▼                          │
+│        state/consumer/   Telegram alert                  │
+│        events.jsonl      (floor-2 long call)             │
+│       (derived events)                                   │
+└──────────────────────────────────────────────────────────┘
+                              │ scrape every 15s (Tailscale)
+                              ▼
+┌──────────────────── AWS EC2 ─────────────────────────────┐
+│                                                          │
+│  Prometheus  ◄──────────────────────────────────────     │
+│       │                                                  │
+│       ▼                                                  │
+│   Grafana  (4 provisioned dashboards)                    │
+│       │                                                  │
+│   FastAPI  /api/current-temps  ◄── Prometheus query      │
+│       │                                                  │
+│   Nginx  (api.homeops.now → FastAPI + Grafana)           │
+└──────────────────────────────────────────────────────────┘
+                              │
+          ┌───────────────────┤
+          ▼                   ▼
+    S3 + CloudFront      api.homeops.now
+    homeops.now          (FastAPI JSON)
+    (React frontend)
 ```
 
 **Observer** connects to the Home Assistant WebSocket API, subscribes to `state_changed` events for configured entities, and writes one JSON line per event to a JSONL log. It reconnects automatically with exponential backoff.
 
-**Consumer** tails the observer log in real time using a non-blocking `select`-based follow loop. It routes each event by entity ID, maintains per-zone heating session state, and emits higher-level derived events to its own JSONL log and stdout. The timeout-driven loop ensures the floor-2 warning fires even during quiet periods with no sensor events.
+**Consumer** tails the observer log in real time. It routes each event by entity ID, maintains per-zone heating session state, emits higher-level derived events, and exports live Prometheus metrics via `/metrics`.
 
-Both services run as independent `systemd` units on the same Pi and communicate only through the shared JSONL file — no message broker, no database.
+**EC2 dashboard stack** — Prometheus scrapes the Pi's `/metrics` endpoint every 15 seconds over Tailscale. Grafana reads from Prometheus and serves 4 provisioned dashboards. FastAPI queries Prometheus and exposes structured JSON at `/api/current-temps`. Nginx proxies both behind a TLS subdomain.
+
+**Frontend** — React + Tailwind, built by GitHub Actions and deployed to S3/CloudFront on every push to `master`.
+
+All infrastructure (EC2, S3, CloudFront, Route53, ACM, IAM) is managed with Terraform.
 
 ## Event Types
 
