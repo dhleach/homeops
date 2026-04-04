@@ -165,7 +165,7 @@ export default function App() {
             <FeatureTile
               icon="🥧"
               title="Raspberry Pi"
-              body="A Pi 4 running Home Assistant reads thermostat and outdoor sensor data every 30 seconds via a custom Python event pipeline."
+              body="A Pi 5 running Home Assistant reads thermostat and outdoor sensor data every 30 seconds via a custom Python event pipeline."
             />
             <FeatureTile
               icon="📊"
