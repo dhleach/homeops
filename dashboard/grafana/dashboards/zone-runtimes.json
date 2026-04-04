@@ -85,7 +85,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "furnace_heating_active",
+          "expr": "furnace_heating_active{job=\"homeops-consumer\"}",
           "legendFormat": "Furnace",
           "refId": "A"
         }
@@ -154,7 +154,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "floor_call_active{floor=\"floor_3\"}",
+          "expr": "floor_call_active{floor=\"floor_3\", job=\"homeops-consumer\"}",
           "legendFormat": "floor_3",
           "refId": "A"
         },
@@ -163,7 +163,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "floor_call_active{floor=\"floor_2\"}",
+          "expr": "floor_call_active{floor=\"floor_2\", job=\"homeops-consumer\"}",
           "legendFormat": "floor_2",
           "refId": "B"
         },
@@ -172,7 +172,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "floor_call_active{floor=\"floor_1\"}",
+          "expr": "floor_call_active{floor=\"floor_1\", job=\"homeops-consumer\"}",
           "legendFormat": "floor_1",
           "refId": "C"
         }
@@ -234,7 +234,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "floor_call_active{floor=\"floor_3\"}",
+          "expr": "floor_call_active{floor=\"floor_3\", job=\"homeops-consumer\"}",
           "legendFormat": "floor_3 call",
           "refId": "A"
         },
@@ -243,7 +243,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "floor_call_active{floor=\"floor_2\"}",
+          "expr": "floor_call_active{floor=\"floor_2\", job=\"homeops-consumer\"}",
           "legendFormat": "floor_2 call",
           "refId": "B"
         },
@@ -252,7 +252,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "floor_call_active{floor=\"floor_1\"}",
+          "expr": "floor_call_active{floor=\"floor_1\", job=\"homeops-consumer\"}",
           "legendFormat": "floor_1 call",
           "refId": "C"
         },
@@ -261,7 +261,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "furnace_heating_active",
+          "expr": "furnace_heating_active{job=\"homeops-consumer\"}",
           "legendFormat": "furnace",
           "refId": "D"
         }
@@ -314,7 +314,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "zone_runtime_today_seconds{floor=\"floor_3\"}",
+          "expr": "zone_runtime_today_seconds{floor=\"floor_3\", job=\"homeops-consumer\"}",
           "legendFormat": "floor_3",
           "refId": "A"
         },
@@ -323,7 +323,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "zone_runtime_today_seconds{floor=\"floor_2\"}",
+          "expr": "zone_runtime_today_seconds{floor=\"floor_2\", job=\"homeops-consumer\"}",
           "legendFormat": "floor_2",
           "refId": "B"
         },
@@ -332,7 +332,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "zone_runtime_today_seconds{floor=\"floor_1\"}",
+          "expr": "zone_runtime_today_seconds{floor=\"floor_1\", job=\"homeops-consumer\"}",
           "legendFormat": "floor_1",
           "refId": "C"
         }
@@ -390,7 +390,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "zone_runtime_today_seconds{floor=\"floor_1\"}",
+          "expr": "zone_runtime_today_seconds{floor=\"floor_1\", job=\"homeops-consumer\"}",
           "legendFormat": "Floor 1",
           "refId": "A"
         }
@@ -452,7 +452,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "zone_runtime_today_seconds{floor=\"floor_2\"}",
+          "expr": "zone_runtime_today_seconds{floor=\"floor_2\", job=\"homeops-consumer\"}",
           "legendFormat": "Floor 2",
           "refId": "A"
         }
@@ -510,7 +510,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "zone_runtime_today_seconds{floor=\"floor_3\"}",
+          "expr": "zone_runtime_today_seconds{floor=\"floor_3\", job=\"homeops-consumer\"}",
           "legendFormat": "Floor 3",
           "refId": "A"
         }
