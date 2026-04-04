@@ -28,7 +28,7 @@ services:
       - GF_SERVER_HTTP_PORT=3000
       - GF_AUTH_ANONYMOUS_ENABLED=true
       - GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer
-      - GF_AUTH_DISABLE_LOGIN_FORM=false
+      - GF_AUTH_DISABLE_LOGIN_FORM=true
       - GF_SECURITY_ALLOW_EMBEDDING=true
       - GF_SERVER_ROOT_URL=https://api.homeops.now/grafana
       - GF_SERVER_SERVE_FROM_SUB_PATH=true
