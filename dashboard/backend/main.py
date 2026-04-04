@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 
 import httpx
 from fastapi import FastAPI
+from pydantic import BaseModel, Field
 
 PROMETHEUS_URL = "http://localhost:9090/api/v1/query"
 
@@ -25,6 +26,39 @@ app = FastAPI(
 # CORS is handled entirely by Nginx (api.homeops.now.conf).
 # Do NOT add FastAPI CORSMiddleware here — duplicate Access-Control-Allow-Origin
 # headers cause Safari/iOS to reject the response with "Load failed".
+
+
+# ---------------------------------------------------------------------------
+# Response models
+# ---------------------------------------------------------------------------
+
+
+class CurrentTempsResponse(BaseModel):
+    """Live HVAC telemetry snapshot.
+
+    All temperature fields are in °F. Boolean call/furnace fields indicate
+    whether that zone is actively calling for heat. ``null`` values mean
+    the metric was not yet available in Prometheus (e.g. sensor offline or
+    consumer just restarted).
+    """
+
+    floor_1: float | None = Field(None, description="Floor 1 current temperature (°F)")
+    floor_2: float | None = Field(None, description="Floor 2 current temperature (°F)")
+    floor_3: float | None = Field(None, description="Floor 3 current temperature (°F)")
+    outdoor: float | None = Field(None, description="Outdoor current temperature (°F)")
+
+    furnace_active: bool | None = Field(None, description="True when furnace is heating")
+
+    floor_1_call: bool | None = Field(None, description="True when floor 1 is calling for heat")
+    floor_2_call: bool | None = Field(None, description="True when floor 2 is calling for heat")
+    floor_3_call: bool | None = Field(None, description="True when floor 3 is calling for heat")
+
+    floor_1_setpoint: float | None = Field(None, description="Floor 1 thermostat setpoint (°F)")
+    floor_2_setpoint: float | None = Field(None, description="Floor 2 thermostat setpoint (°F)")
+    floor_3_setpoint: float | None = Field(None, description="Floor 3 thermostat setpoint (°F)")
+
+    last_updated: str = Field(..., description="ISO-8601 UTC timestamp of this snapshot")
+    error: str | None = Field(None, description="Set when Prometheus was unreachable")
 
 
 # ---------------------------------------------------------------------------
@@ -60,13 +94,16 @@ def health() -> dict:
     return {"status": "ok"}
 
 
-@app.get("/api/current-temps")
-async def current_temps() -> dict:
+@app.get("/api/current-temps", response_model=CurrentTempsResponse)
+async def current_temps() -> CurrentTempsResponse:
     """Return live HVAC temps and call/furnace state from Prometheus.
 
-    All numeric fields are floats; boolean fields are bools.
-    Returns null values + an ``error`` field when Prometheus is unreachable.
+    All numeric fields are floats (°F); boolean fields indicate active
+    heating state. Returns null values + an ``error`` field when
+    Prometheus is unreachable.
     """
+    ts = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
     try:
         async with httpx.AsyncClient() as client:
             # Floor temps
@@ -107,33 +144,33 @@ async def current_temps() -> dict:
                 floor_setpoints[floor] = _first_value(result)
 
     except Exception as exc:  # noqa: BLE001
-        return {
-            "floor_1": None,
-            "floor_2": None,
-            "floor_3": None,
-            "outdoor": None,
-            "furnace_active": None,
-            "floor_1_call": None,
-            "floor_2_call": None,
-            "floor_3_call": None,
-            "floor_1_setpoint": None,
-            "floor_2_setpoint": None,
-            "floor_3_setpoint": None,
-            "last_updated": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "error": f"Prometheus unreachable: {exc}",
-        }
+        return CurrentTempsResponse(
+            floor_1=None,
+            floor_2=None,
+            floor_3=None,
+            outdoor=None,
+            furnace_active=None,
+            floor_1_call=None,
+            floor_2_call=None,
+            floor_3_call=None,
+            floor_1_setpoint=None,
+            floor_2_setpoint=None,
+            floor_3_setpoint=None,
+            last_updated=ts,
+            error=f"Prometheus unreachable: {exc}",
+        )
 
-    return {
-        "floor_1": floor_temps.get("floor_1"),
-        "floor_2": floor_temps.get("floor_2"),
-        "floor_3": floor_temps.get("floor_3"),
-        "outdoor": outdoor,
-        "furnace_active": furnace_active,
-        "floor_1_call": floor_calls.get("floor_1"),
-        "floor_2_call": floor_calls.get("floor_2"),
-        "floor_3_call": floor_calls.get("floor_3"),
-        "floor_1_setpoint": floor_setpoints.get("floor_1"),
-        "floor_2_setpoint": floor_setpoints.get("floor_2"),
-        "floor_3_setpoint": floor_setpoints.get("floor_3"),
-        "last_updated": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
-    }
+    return CurrentTempsResponse(
+        floor_1=floor_temps.get("floor_1"),
+        floor_2=floor_temps.get("floor_2"),
+        floor_3=floor_temps.get("floor_3"),
+        outdoor=outdoor,
+        furnace_active=furnace_active,
+        floor_1_call=floor_calls.get("floor_1"),
+        floor_2_call=floor_calls.get("floor_2"),
+        floor_3_call=floor_calls.get("floor_3"),
+        floor_1_setpoint=floor_setpoints.get("floor_1"),
+        floor_2_setpoint=floor_setpoints.get("floor_2"),
+        floor_3_setpoint=floor_setpoints.get("floor_3"),
+        last_updated=ts,
+    )
