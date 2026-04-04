@@ -5,7 +5,7 @@ import { LiveIndicator } from "./components/LiveIndicator.jsx";
 import { ErrorBanner } from "./components/ErrorBanner.jsx";
 
 const GRAFANA_BASE = import.meta.env.VITE_GRAFANA_URL ?? "https://api.homeops.now/grafana";
-const GRAFANA_URL = GRAFANA_BASE;
+const GRAFANA_URL = `${GRAFANA_BASE}/d/homeops-temps`;
 
 const DASHBOARDS = [
   { uid: "homeops-temps",       title: "Floor Temperatures",              description: "Live readings — all floors + outdoor" },
@@ -121,7 +121,7 @@ export default function App() {
               <p className="mt-1 text-sm text-slate-400">Powered by Prometheus + Grafana on AWS EC2</p>
             </div>
             <a
-              href={`${GRAFANA_BASE}/dashboards`}
+              href={`${GRAFANA_BASE}/d/homeops-temps`}
               target="_blank"
               rel="noopener noreferrer"
               className="text-xs text-slate-500 transition-colors hover:text-slate-300"
