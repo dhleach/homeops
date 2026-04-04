@@ -35,9 +35,14 @@ jobs:
             github-deploy@100.115.21.72 \
             "cd /home/leachd/repos/homeops && git pull origin master && sudo systemctl restart homeops-observer && sudo systemctl restart homeops-consumer && echo 'Pi deploy complete'"
 
+      - name: Write EC2 SSH key
+        run: |
+          echo "${{ secrets.EC2_DEPLOY_SSH_KEY }}" > ${{ runner.temp }}/ec2_deploy_key
+          chmod 600 ${{ runner.temp }}/ec2_deploy_key
+
       - name: Deploy backend to EC2
         run: |
-          ssh -i ${{ runner.temp }}/deploy_key \
+          ssh -i ${{ runner.temp }}/ec2_deploy_key \
             -o ConnectTimeout=30 \
             -o StrictHostKeyChecking=no \
             -o UserKnownHostsFile=/dev/null \
