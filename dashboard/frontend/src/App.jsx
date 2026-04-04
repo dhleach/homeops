@@ -93,12 +93,15 @@ export default function App() {
                 <TempCard
                   key={zone}
                   zone={zone}
-                  data={data?.zones?.[zone]}
+                  data={data ? {
+                    current_temp_f: data[zone] ?? null,
+                    hvac_action: data[`${zone}_call`] ? "heating" : (data.furnace_active ? "idle" : "idle"),
+                  } : null}
                 />
               ))}
               <OutdoorCard
-                temp={data?.outdoor_temp_f}
-                lastUpdated={data?.outdoor_last_updated}
+                temp={data?.outdoor ?? null}
+                lastUpdated={data?.last_updated}
               />
             </div>
 
