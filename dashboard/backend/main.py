@@ -97,6 +97,15 @@ async def current_temps() -> dict:
                 raw = _first_value(result)
                 floor_calls[floor] = bool(raw) if raw is not None else None
 
+            # Per-floor setpoints
+            floor_setpoints: dict[str, float | None] = {}
+            for floor in FLOORS:
+                result = await _query(
+                    client,
+                    f'floor_setpoint_fahrenheit{{floor="{floor}"}}',
+                )
+                floor_setpoints[floor] = _first_value(result)
+
     except Exception as exc:  # noqa: BLE001
         return {
             "floor_1": None,
@@ -107,6 +116,9 @@ async def current_temps() -> dict:
             "floor_1_call": None,
             "floor_2_call": None,
             "floor_3_call": None,
+            "floor_1_setpoint": None,
+            "floor_2_setpoint": None,
+            "floor_3_setpoint": None,
             "last_updated": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "error": f"Prometheus unreachable: {exc}",
         }
@@ -120,5 +132,8 @@ async def current_temps() -> dict:
         "floor_1_call": floor_calls.get("floor_1"),
         "floor_2_call": floor_calls.get("floor_2"),
         "floor_3_call": floor_calls.get("floor_3"),
+        "floor_1_setpoint": floor_setpoints.get("floor_1"),
+        "floor_2_setpoint": floor_setpoints.get("floor_2"),
+        "floor_3_setpoint": floor_setpoints.get("floor_3"),
         "last_updated": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
