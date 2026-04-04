@@ -74,7 +74,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "zone_runtime_today_seconds{floor=\"floor_3\"}",
+          "expr": "zone_runtime_today_seconds{floor=\"floor_3\", job=\"homeops-consumer\"}",
           "legendFormat": "floor_3",
           "refId": "A"
         },
@@ -83,7 +83,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "zone_runtime_today_seconds{floor=\"floor_2\"}",
+          "expr": "zone_runtime_today_seconds{floor=\"floor_2\", job=\"homeops-consumer\"}",
           "legendFormat": "floor_2",
           "refId": "B"
         },
@@ -92,7 +92,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "zone_runtime_today_seconds{floor=\"floor_1\"}",
+          "expr": "zone_runtime_today_seconds{floor=\"floor_1\", job=\"homeops-consumer\"}",
           "legendFormat": "floor_1",
           "refId": "C"
         }
@@ -149,7 +149,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "heating_session_duration_seconds",
+          "expr": "heating_session_duration_seconds{job=\"homeops-consumer\"}",
           "legendFormat": "Last session",
           "refId": "A"
         }
@@ -215,7 +215,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "floor_runtime_anomaly_total",
+          "expr": "floor_runtime_anomaly_total{job=\"homeops-consumer\"}",
           "legendFormat": "Floor 2 anomalies",
           "refId": "A"
         }
@@ -268,7 +268,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "zone_runtime_today_seconds{floor=\"floor_3\"}",
+          "expr": "zone_runtime_today_seconds{floor=\"floor_3\", job=\"homeops-consumer\"}",
           "legendFormat": "floor_3",
           "refId": "A"
         },
@@ -277,7 +277,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "zone_runtime_today_seconds{floor=\"floor_2\"}",
+          "expr": "zone_runtime_today_seconds{floor=\"floor_2\", job=\"homeops-consumer\"}",
           "legendFormat": "floor_2",
           "refId": "B"
         },
@@ -286,7 +286,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "zone_runtime_today_seconds{floor=\"floor_1\"}",
+          "expr": "zone_runtime_today_seconds{floor=\"floor_1\", job=\"homeops-consumer\"}",
           "legendFormat": "floor_1",
           "refId": "C"
         }
@@ -339,7 +339,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "heating_session_duration_seconds",
+          "expr": "heating_session_duration_seconds{job=\"homeops-consumer\"}",
           "legendFormat": "Session duration",
           "refId": "A"
         }
@@ -391,7 +391,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "floor_runtime_anomaly_total",
+          "expr": "floor_runtime_anomaly_total{job=\"homeops-consumer\"}",
           "legendFormat": "Anomaly count (cumulative)",
           "refId": "A"
         }

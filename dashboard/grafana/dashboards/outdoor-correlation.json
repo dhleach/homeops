@@ -111,7 +111,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "outdoor_temperature_fahrenheit",
+          "expr": "outdoor_temperature_fahrenheit{job=\"homeops-consumer\"}",
           "legendFormat": "outdoor",
           "refId": "A"
         },
@@ -120,7 +120,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "zone_runtime_today_seconds{floor=\"floor_3\"}",
+          "expr": "zone_runtime_today_seconds{floor=\"floor_3\", job=\"homeops-consumer\"}",
           "legendFormat": "floor_3 runtime",
           "refId": "B"
         },
@@ -129,7 +129,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "zone_runtime_today_seconds{floor=\"floor_2\"}",
+          "expr": "zone_runtime_today_seconds{floor=\"floor_2\", job=\"homeops-consumer\"}",
           "legendFormat": "floor_2 runtime",
           "refId": "C"
         },
@@ -138,7 +138,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "zone_runtime_today_seconds{floor=\"floor_1\"}",
+          "expr": "zone_runtime_today_seconds{floor=\"floor_1\", job=\"homeops-consumer\"}",
           "legendFormat": "floor_1 runtime",
           "refId": "D"
         }
@@ -224,7 +224,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "outdoor_temperature_fahrenheit",
+          "expr": "outdoor_temperature_fahrenheit{job=\"homeops-consumer\"}",
           "legendFormat": "outdoor",
           "refId": "A"
         },
@@ -233,7 +233,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "floor_temperature_fahrenheit{floor=\"floor_3\"}",
+          "expr": "floor_temperature_fahrenheit{floor=\"floor_3\", job=\"homeops-consumer\"}",
           "legendFormat": "floor_3",
           "refId": "B"
         },
@@ -242,7 +242,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "floor_temperature_fahrenheit{floor=\"floor_2\"}",
+          "expr": "floor_temperature_fahrenheit{floor=\"floor_2\", job=\"homeops-consumer\"}",
           "legendFormat": "floor_2",
           "refId": "C"
         },
@@ -251,7 +251,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "floor_temperature_fahrenheit{floor=\"floor_1\"}",
+          "expr": "floor_temperature_fahrenheit{floor=\"floor_1\", job=\"homeops-consumer\"}",
           "legendFormat": "floor_1",
           "refId": "D"
         }
@@ -305,7 +305,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "increase(zone_runtime_today_seconds[1h]){floor=\"floor_3\"}",
+          "expr": "increase(zone_runtime_today_seconds[1h]){floor=\"floor_3\", job=\"homeops-consumer\"}",
           "legendFormat": "floor_3 runtime (1h increase)",
           "refId": "A"
         },
@@ -314,7 +314,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "increase(zone_runtime_today_seconds[1h]){floor=\"floor_2\"}",
+          "expr": "increase(zone_runtime_today_seconds[1h]){floor=\"floor_2\", job=\"homeops-consumer\"}",
           "legendFormat": "floor_2 runtime (1h increase)",
           "refId": "B"
         },
@@ -323,7 +323,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "increase(zone_runtime_today_seconds[1h]){floor=\"floor_1\"}",
+          "expr": "increase(zone_runtime_today_seconds[1h]){floor=\"floor_1\", job=\"homeops-consumer\"}",
           "legendFormat": "floor_1 runtime (1h increase)",
           "refId": "C"
         }

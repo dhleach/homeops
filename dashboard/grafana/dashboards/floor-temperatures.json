@@ -133,7 +133,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "floor_temperature_fahrenheit{floor=\"floor_3\"}",
+          "expr": "floor_temperature_fahrenheit{floor=\"floor_3\", job=\"homeops-consumer\"}",
           "legendFormat": "floor_3",
           "refId": "A"
         },
@@ -142,7 +142,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "floor_temperature_fahrenheit{floor=\"floor_2\"}",
+          "expr": "floor_temperature_fahrenheit{floor=\"floor_2\", job=\"homeops-consumer\"}",
           "legendFormat": "floor_2",
           "refId": "B"
         },
@@ -151,7 +151,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "floor_temperature_fahrenheit{floor=\"floor_1\"}",
+          "expr": "floor_temperature_fahrenheit{floor=\"floor_1\", job=\"homeops-consumer\"}",
           "legendFormat": "floor_1",
           "refId": "C"
         },
@@ -160,7 +160,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "outdoor_temperature_fahrenheit",
+          "expr": "outdoor_temperature_fahrenheit{job=\"homeops-consumer\"}",
           "legendFormat": "outdoor",
           "refId": "D"
         }
@@ -225,7 +225,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "floor_temperature_fahrenheit{floor=\"floor_1\"}",
+          "expr": "floor_temperature_fahrenheit{floor=\"floor_1\", job=\"homeops-consumer\"}",
           "legendFormat": "Floor 1",
           "refId": "A"
         }
@@ -289,7 +289,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "floor_temperature_fahrenheit{floor=\"floor_2\"}",
+          "expr": "floor_temperature_fahrenheit{floor=\"floor_2\", job=\"homeops-consumer\"}",
           "legendFormat": "Floor 2",
           "refId": "A"
         }
@@ -353,7 +353,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "floor_temperature_fahrenheit{floor=\"floor_3\"}",
+          "expr": "floor_temperature_fahrenheit{floor=\"floor_3\", job=\"homeops-consumer\"}",
           "legendFormat": "Floor 3",
           "refId": "A"
         }
@@ -417,7 +417,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "outdoor_temperature_fahrenheit",
+          "expr": "outdoor_temperature_fahrenheit{job=\"homeops-consumer\"}",
           "legendFormat": "Outdoor",
           "refId": "A"
         }
