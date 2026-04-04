@@ -726,6 +726,12 @@ def main() -> None:
                 if zone and temp is not None:
                     _metrics.set_floor_temperature(zone, float(temp))
                     print(f"[{utc_ts()}] Warmed metric floor_temp {zone}={temp}", flush=True)
+                setpoint = es.get("setpoint")
+                if zone and setpoint is not None:
+                    _metrics.set_floor_setpoint(zone, float(setpoint))
+                    print(
+                        f"[{utc_ts()}] Warmed metric floor_setpoint {zone}={setpoint}", flush=True
+                    )
             if furnace_on_since is not None:
                 _metrics.set_furnace_active(True)
             if daily_state.get("last_outdoor_temp_f") is not None:

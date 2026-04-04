@@ -88,12 +88,19 @@ class HvacMetrics:
             ["floor"],
             registry=self._registry,
         )
+        self.floor_setpoint_fahrenheit = Gauge(
+            "floor_setpoint_fahrenheit",
+            "Latest thermostat setpoint (target temperature) per floor (°F)",
+            ["floor"],
+            registry=self._registry,
+        )
 
         # Initialise labelled gauges to 0 for all floors so Prometheus sees them immediately
         for floor in _FLOORS:
             self.floor_temperature_fahrenheit.labels(floor=floor).set(0)
             self.floor_call_active.labels(floor=floor).set(0)
             self.zone_runtime_today_seconds.labels(floor=floor).set(0)
+            self.floor_setpoint_fahrenheit.labels(floor=floor).set(0)
 
     def start(self) -> None:
         """Start the Prometheus HTTP server in a daemon thread."""
@@ -124,6 +131,9 @@ class HvacMetrics:
 
     def set_outdoor_temperature(self, temp_f: float) -> None:
         self.outdoor_temperature_fahrenheit.set(temp_f)
+
+    def set_floor_setpoint(self, floor: str, setpoint_f: float) -> None:
+        self.floor_setpoint_fahrenheit.labels(floor=floor).set(setpoint_f)
 
     def set_floor_call_active(self, floor: str, active: bool) -> None:
         self.floor_call_active.labels(floor=floor).set(1 if active else 0)
@@ -160,6 +170,16 @@ class HvacMetrics:
             temp_f = data.get("current_temp", data.get("temperature_f"))
             if floor and temp_f is not None:
                 self.set_floor_temperature(floor, float(temp_f))
+            # Both current_temp and setpoint_changed events carry "setpoint" in common.
+            setpoint = data.get("setpoint")
+            if floor and setpoint is not None:
+                self.set_floor_setpoint(floor, float(setpoint))
+
+        elif schema == "homeops.consumer.thermostat_setpoint_changed.v1":
+            floor = data.get("zone", data.get("floor"))
+            setpoint = data.get("setpoint")
+            if floor and setpoint is not None:
+                self.set_floor_setpoint(floor, float(setpoint))
 
         elif schema == "homeops.consumer.outdoor_temp_updated.v1":
             temp_f = data.get("temperature_f")

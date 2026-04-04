@@ -96,6 +96,7 @@ export default function App() {
                   data={data ? {
                     current_temp_f: data[zone] ?? null,
                     hvac_action: data[`${zone}_call`] ? "heating" : "idle",
+                    setpoint_f: data[`${zone}_setpoint`] ?? null,
                   } : null}
                 />
               ))}
