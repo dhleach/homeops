@@ -8,7 +8,20 @@
   "editable": false,
   "graphTooltip": 1,
   "id": null,
-  "links": [],
+  "links": [
+    {
+      "asDropdown": false,
+      "icon": "arrow-left",
+      "includeVars": false,
+      "keepTime": false,
+      "tags": [],
+      "targetBlank": false,
+      "title": "\u2190 HomeOps",
+      "tooltip": "Back to homeops.now",
+      "type": "link",
+      "url": "https://homeops.now"
+    }
+  ],
   "panels": [
     {
       "datasource": {
