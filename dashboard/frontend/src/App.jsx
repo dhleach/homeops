@@ -14,7 +14,7 @@ const DASHBOARDS = [
   { uid: "homeops-correlation", title: "Outdoor Temp Correlation",        description: "How cold weather drives heating demand" },
   { uid: "homeops-daily",       title: "Daily Summary + Anomalies",       description: "Session history and floor-2 long-call events" },
 ];
-const ZONE_ORDER = ["floor_1", "floor_2", "floor_3"];
+const ZONE_ORDER = ["floor_3", "floor_2", "floor_1"];
 
 export default function App() {
   const { data, loading, error, lastUpdated, refresh } = useTemps();
