@@ -645,7 +645,7 @@ def main() -> None:
         f"[{utc_ts()}] Furnace short-call threshold: {furnace_short_call_threshold_s}s",
         flush=True,
     )
-    floor_2_warn_threshold_s = int(os.environ.get("FLOOR_2_WARN_THRESHOLD_S", "2700"))  # 45 min
+    floor_2_warn_threshold_s = int(os.environ.get("FLOOR_2_WARN_THRESHOLD_S", "3600"))  # 1 hr
     floor_2_telegram_rate_limit_s = int(
         os.environ.get("FLOOR_2_TELEGRAM_RATE_LIMIT_S", "3600")
     )  # 1 hour
@@ -1273,7 +1273,9 @@ def main() -> None:
                     if suppressed > 0
                     else ""
                 )
-                _warn_ts = warn_event["data"].get("started_at") or warn_event.get("ts")
+                _warn_ts = warn_event.get(
+                    "ts"
+                )  # use event generation time, not started_at (which is always 45+ min old → false "replayed" label)
                 msg = (
                     f"⚠️ Floor 2 has been calling for {elapsed_s // 60} min!\n"
                     f"{temp_line}"
