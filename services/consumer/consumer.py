@@ -645,7 +645,7 @@ def main() -> None:
         f"[{utc_ts()}] Furnace short-call threshold: {furnace_short_call_threshold_s}s",
         flush=True,
     )
-    floor_2_warn_threshold_s = int(os.environ.get("FLOOR_2_WARN_THRESHOLD_S", "3600"))  # 1 hr
+    floor_2_warn_threshold_s = int(os.environ.get("FLOOR_2_WARN_THRESHOLD_S", "2700"))  # 45 min
     floor_2_telegram_rate_limit_s = int(
         os.environ.get("FLOOR_2_TELEGRAM_RATE_LIMIT_S", "3600")
     )  # 1 hour
@@ -657,7 +657,7 @@ def main() -> None:
         flush=True,
     )
     observer_silence_threshold_s = int(
-        os.environ.get("OBSERVER_SILENCE_THRESHOLD_S", "600")
+        os.environ.get("OBSERVER_SILENCE_THRESHOLD_S", "3600")  # 1 hr
     )  # 10 min
     print(f"[{utc_ts()}] Observer silence threshold: {observer_silence_threshold_s}s", flush=True)
     telegram_bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
