@@ -657,7 +657,7 @@ def main() -> None:
         flush=True,
     )
     observer_silence_threshold_s = int(
-        os.environ.get("OBSERVER_SILENCE_THRESHOLD_S", "600")
+        os.environ.get("OBSERVER_SILENCE_THRESHOLD_S", "3600")  # 1 hr
     )  # 10 min
     print(f"[{utc_ts()}] Observer silence threshold: {observer_silence_threshold_s}s", flush=True)
     telegram_bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
@@ -1273,7 +1273,9 @@ def main() -> None:
                     if suppressed > 0
                     else ""
                 )
-                _warn_ts = warn_event["data"].get("started_at") or warn_event.get("ts")
+                # Use event generation time (≈ now), not started_at.
+                # started_at is always 45+ min old → would always say "replayed from downtime".
+                _warn_ts = warn_event.get("ts")
                 msg = (
                     f"⚠️ Floor 2 has been calling for {elapsed_s // 60} min!\n"
                     f"{temp_line}"
@@ -1373,7 +1375,9 @@ def main() -> None:
                     f"⚠️ Observer silence detected!\n"
                     f"No events received for {silence_min} min.\n"
                     f"Last event: {last_ts}\n"
-                    f"Check observer service on Pi." + _event_ts_suffix(last_ts, datetime.now(UTC))
+                    f"Check observer service on Pi."
+                    # no _event_ts_suffix: last_ts is intentionally old (it's the
+                    # last-seen event before silence) — would always show "replayed"
                 )
                 url = f"https://api.telegram.org/bot{telegram_bot_token}/sendMessage"
                 data = _parse.urlencode({"chat_id": telegram_chat_id, "text": msg}).encode()
@@ -1411,7 +1415,7 @@ def main() -> None:
                     f"Calling for {elapsed_m:.0f} min with no temperature increase.\n"
                     f"Start temp: {start_t}°F, Current: {curr_t}°F\n"
                     f"Check thermostat or vents."
-                    + _event_ts_suffix(last_consumed_observer_ts, datetime.now(UTC))
+                    + _event_ts_suffix(no_resp_event.get("ts"), datetime.now(UTC))
                 )
                 url = f"https://api.telegram.org/bot{telegram_bot_token}/sendMessage"
                 data = _parse.urlencode({"chat_id": telegram_chat_id, "text": msg}).encode()
