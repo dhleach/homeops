@@ -148,6 +148,16 @@ class HvacMetrics:
         for floor in _FLOORS:
             self.zone_runtime_today_seconds.labels(floor=floor).set(0)
 
+    def restore_daily_runtimes(self, per_floor_runtime_s: dict[str, float]) -> None:
+        """
+        Restore zone_runtime_today_seconds from saved daily state after a restart.
+
+        Called once after startup playback so the gauge reflects the full day's
+        accumulated runtime rather than only the sessions replayed since last_consumed_ts.
+        """
+        for floor, runtime_s in per_floor_runtime_s.items():
+            self.zone_runtime_today_seconds.labels(floor=floor).set(float(runtime_s))
+
     def inc_floor_runtime_anomaly(self, floor: str) -> None:
         self.floor_runtime_anomaly_total.labels(floor=floor).inc()
 

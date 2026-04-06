@@ -68,8 +68,8 @@
           },
           {
             "matcher": {
-              "id": "byFrameRefID",
-              "options": "B"
+              "id": "byRegexp",
+              "options": ".* runtime"
             },
             "properties": [
               {
@@ -77,8 +77,12 @@
                 "value": "s"
               },
               {
+                "id": "custom.axisPlacement",
+                "value": "left"
+              },
+              {
                 "id": "custom.axisLabel",
-                "value": "Zone Runtime (s)"
+                "value": "Zone Runtime"
               }
             ]
           }
