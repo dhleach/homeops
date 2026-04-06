@@ -801,6 +801,9 @@ def main() -> None:
         fresh_restart = _pb_result["fresh_restart"]
         current_date = _pb_result["current_date"] or current_date
         last_consumed_observer_ts = _pb_result["last_consumed_observer_ts"]
+        # Restore gauge from saved daily_state so the metric reflects the full
+        # day's runtime, not just sessions replayed since last_consumed_ts.
+        _metrics.restore_daily_runtimes(daily_state.get("per_floor_runtime_s", {}))
         print(f"[{utc_ts()}] [LIVE] Entering live tail mode", flush=True)
     else:
         print(f"[{utc_ts()}] [LIVE] Cold-start — no playback state found", flush=True)
