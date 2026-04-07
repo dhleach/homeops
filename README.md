@@ -2,7 +2,7 @@
 
 **Live dashboard → [homeops.now](https://homeops.now) · API → [api.homeops.now/api/current-temps](https://api.homeops.now/api/current-temps)**
 
-A full-stack observability platform for a 3-zone home HVAC system — event-driven Python pipeline on a Raspberry Pi 5, live metrics in Prometheus + Grafana on AWS EC2, React dashboard on S3 + CloudFront, FastAPI backend, all provisioned with Terraform.
+A full-stack observability platform for a 3-zone home HVAC system — event-driven Python pipeline on a Raspberry Pi 5, live metrics in Prometheus + Grafana on AWS EC2, React dashboard on S3 + CloudFront, FastAPI backend, all provisioned with Terraform. 25 derived event types, 698 tests.
 
 ## The Problem
 
@@ -13,8 +13,8 @@ Home Assistant alone can't prevent this. It sees state changes; it doesn't reaso
 ## What It Does
 
 - **Real-time overheating prevention** — tracks how long floor 2 has been calling for heat; fires a Telegram alert before the limit switch trips (configurable threshold, default 45 min)
-- **15 derived event types** from raw HA state changes — floor call sessions, furnace sessions, thermostat setpoint/mode/temp changes, outdoor temperature, daily summaries, and observer silence watchdog
-- **Heating cycle analytics** — `zone_time_to_temp` (how fast each zone heats), `zone_overshoot` (how far past setpoint the zone runs), `zone_undershoot` (calls that fail to reach setpoint, with a `likely_cause` field)
+- **25 derived event types** from raw HA state changes — floor call sessions, floor heating performance, furnace sessions, furnace diagnostics, thermostat setpoint/mode/temp changes, zone temperature snapshots, outdoor temperature, daily summaries, and system watchdog
+- **Heating cycle analytics** — `zone_time_to_temp` (how fast each zone heats), `zone_overshoot` (how far past setpoint the zone runs), `zone_setpoint_miss` (calls that fail to reach setpoint), `zone_slow_to_heat_warning` (zones heating below expected rate), and furnace duty cycle via `furnace_duty_cycle.py`
 - **Thermostat entity tracking** — setpoint changes, mode changes, current temp updates, and setpoint-reached events per zone
 - **Event-driven pipeline** — observer writes raw `state_changed` events to JSONL; consumer tails that file and emits semantically rich derived events downstream
 - **Schema-versioned events** — every event carries a `schema` field (e.g. `homeops.consumer.floor_2_long_call_warning.v1`) for safe downstream evolution
@@ -76,17 +76,20 @@ All infrastructure (EC2, S3, CloudFront, Route53, ACM, IAM) is managed with Terr
 
 ## Event Types
 
-The consumer emits **15 derived event types**:
+The consumer emits **25 derived event types**:
 
 | Category | Events |
 |---|---|
-| Floor heating calls | `floor_call_started.v1`, `floor_call_ended.v1` (×3 zones) |
-| Furnace sessions | `heating_session_started.v1`, `heating_session_ended.v1` |
+| Floor heating calls | `floor_call_started.v1`, `floor_call_ended.v1` |
+| Floor diagnostics | `floor_no_response_warning.v1`, `floor_not_responding.v1`, `floor_runtime_anomaly.v1` |
+| Floor-2 overheating | `floor_2_long_call_warning.v1`, `floor_2_long_call_escalation.v1` |
+| Furnace sessions | `heating_session_started.v1`, `heating_session_ended.v1`, `heating_long_session_warning.v1`, `heating_short_session_warning.v1` |
+| Furnace diagnostics | `furnace_short_call_warning.v1` |
 | Thermostat state | `thermostat_setpoint_changed.v1`, `thermostat_current_temp_updated.v1`, `thermostat_mode_changed.v1`, `thermostat_setpoint_reached.v1` |
-| Heating performance | `zone_time_to_temp.v1`, `zone_overshoot.v1`, `zone_undershoot.v1` |
+| Heating performance | `zone_time_to_temp.v1`, `zone_overshoot.v1`, `zone_setpoint_miss.v1`, `zone_slow_to_heat_warning.v1`, `zone_temp_snapshot.v1` |
 | Environmental | `outdoor_temp_updated.v1` |
-| Alerting | `floor_2_long_call_warning.v1`, `observer_silence_warning.v1` |
-| Summaries | `furnace_daily_summary.v1` |
+| System | `observer_silence_warning.v1` |
+| Summaries | `furnace_daily_summary.v1`, `floor_daily_summary.v1` |
 
 All events share a common envelope (`schema`, `source`, `ts`, `data`) and are written as newline-delimited JSON.
 
@@ -164,9 +167,12 @@ homeops/
 │       ├── requirements.txt
 │       └── README.md             # full consumer reference
 ├── scripts/
-│   ├── query_floor_runtime.py    # CLI: per-floor runtime summary for a date range
-│   └── floor_runtime_trend.py    # CLI: day-by-day runtime trend table (last N days)
-│   └── furnace_duty_cycle.py     # CLI: furnace duty cycle % for any time window
+│   ├── query_floor_runtime.py         # CLI: per-floor runtime summary for a date range
+│   ├── floor_runtime_trend.py         # CLI: day-by-day runtime trend table (last N days)
+│   ├── furnace_duty_cycle.py          # CLI: furnace duty cycle % for any time window
+│   ├── furnace_session_analysis.py    # CLI: correlate furnace session length vs outdoor temp (CSV output)
+│   ├── temp_correlation.py            # CLI: Pearson correlation — outdoor temp vs floor runtime
+│   └── validate_floor_aggregation.py # dev: validate floor_daily_summary totals vs raw events
 ├── docs/
 │   └── event-schemas/
 │       └── consumer-events.md    # authoritative event schema reference
@@ -374,6 +380,57 @@ Date           Runtime    Calls   Avg Call   Max Call    Outdoor
 ---------------------------------------------------------------
 2026-03-31      4h 33m        8    34m        1h 22m      42°F
 ```
+
+### `scripts/furnace_duty_cycle.py`
+
+Compute furnace duty cycle for any time window from `heating_session_ended.v1` events:
+
+```bash
+# Single day
+python3 scripts/furnace_duty_cycle.py --start 2026-01-15 --end 2026-01-15
+
+# Date range
+python3 scripts/furnace_duty_cycle.py --start 2026-01-01 --end 2026-01-31
+
+# Sub-day window
+python3 scripts/furnace_duty_cycle.py --start "2026-01-15T06:00" --end "2026-01-15T18:00"
+```
+
+Sessions that span window boundaries are clipped to the window. Output: duty cycle percentage, total on-time, and window duration.
+
+### `scripts/furnace_session_analysis.py`
+
+Correlate furnace session length with outdoor temperature from `heating_session_ended.v1` events:
+
+```bash
+# All sessions
+python3 scripts/furnace_session_analysis.py
+
+# With CSV output
+python3 scripts/furnace_session_analysis.py --out state/furnace_session_correlation.csv
+
+# Last N days
+python3 scripts/furnace_session_analysis.py --days 30
+```
+
+Output: per-session CSV with `started_at`, `ended_at`, `duration_s`, `outdoor_temp_f`, plus Pearson correlation coefficient between session length and outdoor temperature.
+
+### `scripts/temp_correlation.py`
+
+Pearson correlation between outdoor temperature and per-floor daily heating runtime from `floor_daily_summary.v1` events:
+
+```bash
+# All floors, all data
+python3 scripts/temp_correlation.py
+
+# Last 60 days
+python3 scripts/temp_correlation.py --days 60
+
+# Single floor
+python3 scripts/temp_correlation.py --floor floor_2
+```
+
+Answers: does floor heating runtime depend on outdoor temperature, and by how much?
 
 ## Security Notes
 
