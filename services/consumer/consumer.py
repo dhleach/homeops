@@ -1378,7 +1378,8 @@ def main() -> None:
                     f"⚠️ Observer silence detected!\n"
                     f"No events received for {silence_min} min.\n"
                     f"Last event: {last_ts}\n"
-                    f"Check homeops.now to confirm data is still flowing. If not, check observer service on Pi."
+                    f"Check homeops.now to confirm data is still flowing.\n"
+                    f"If not, check observer service on Pi."
                     # no _event_ts_suffix: last_ts is intentionally old (it's the
                     # last-seen event before silence) — would always show "replayed"
                 )
