@@ -657,7 +657,7 @@ def main() -> None:
         flush=True,
     )
     observer_silence_threshold_s = int(
-        os.environ.get("OBSERVER_SILENCE_THRESHOLD_S", "3600")  # 1 hr
+        os.environ.get("OBSERVER_SILENCE_THRESHOLD_S", "4200")  # 70 min
     )  # 10 min
     print(f"[{utc_ts()}] Observer silence threshold: {observer_silence_threshold_s}s", flush=True)
     telegram_bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
@@ -1378,7 +1378,7 @@ def main() -> None:
                     f"⚠️ Observer silence detected!\n"
                     f"No events received for {silence_min} min.\n"
                     f"Last event: {last_ts}\n"
-                    f"Check observer service on Pi."
+                    f"Check homeops.now to confirm data is still flowing. If not, check observer service on Pi."
                     # no _event_ts_suffix: last_ts is intentionally old (it's the
                     # last-seen event before silence) — would always show "replayed"
                 )
