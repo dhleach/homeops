@@ -323,6 +323,7 @@ def _playback_phase(
                         tg_msg += _event_ts_suffix(ts_str, datetime.now(UTC))
                         _send_telegram(telegram_bot_token, telegram_chat_id, tg_msg)
                     daily_state = _empty_daily_state()
+                    _metrics.reset_daily_runtimes()
                     current_date = evt_date
 
                     # Floor runtime anomaly check
@@ -894,6 +895,7 @@ def main() -> None:
                             flush=True,
                         )
                     daily_state = _empty_daily_state()
+                    _metrics.reset_daily_runtimes()
                     current_date = evt_date
 
                     # --- Floor runtime anomaly detection ---
