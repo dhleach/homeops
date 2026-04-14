@@ -49,6 +49,7 @@ The consumer is split across seven focused files:
 | `alerts.py` | `check_floor_2_warning`, `check_floor_2_escalation`, `check_observer_silence`, `write_zone_temp_snapshot` — in-flight periodic checks |
 | `reporting.py` | `emit_daily_summary`, `format_daily_summary_message` — end-of-day summary generation and Telegram formatting |
 | `metrics.py` | `HvacMetrics` — Prometheus gauge definitions, update helpers, and HTTP server (port 8001); foundation for the homeops.now public dashboard data pipeline |
+| `hvac_context.py` | HVAC context summarizer — reads `state.json` + `events.jsonl` and outputs a structured plain-text summary of current conditions, zone runtimes, recent sessions, and warnings for LLM input |
 
 ---
 

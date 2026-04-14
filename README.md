@@ -2,7 +2,7 @@
 
 **Live dashboard → [homeops.now](https://homeops.now) · API → [api.homeops.now/api/current-temps](https://api.homeops.now/api/current-temps)**
 
-A full-stack observability platform for a 3-zone home HVAC system — event-driven Python pipeline on a Raspberry Pi 5, live metrics in Prometheus + Grafana on AWS EC2, React dashboard on S3 + CloudFront, FastAPI backend, all provisioned with Terraform. 25 derived event types, 698 tests.
+A full-stack observability platform for a 3-zone home HVAC system — event-driven Python pipeline on a Raspberry Pi 5, live metrics in Prometheus + Grafana on AWS EC2, React dashboard on S3 + CloudFront, FastAPI backend, all provisioned with Terraform. 25 derived event types, 751 tests.
 
 ## The Problem
 
@@ -19,7 +19,7 @@ Home Assistant alone can't prevent this. It sees state changes; it doesn't reaso
 - **Event-driven pipeline** — observer writes raw `state_changed` events to JSONL; consumer tails that file and emits semantically rich derived events downstream
 - **Schema-versioned events** — every event carries a `schema` field (e.g. `homeops.consumer.floor_2_long_call_warning.v1`) for safe downstream evolution
 - **Production-grade operations** — runs as `systemd` services on the Pi, log rotation via `logrotate`, exponential-backoff reconnects on the WebSocket
-- **698 pytest tests + 27 React component tests**, GitHub Actions CI, Ruff lint/format enforcement on every PR
+- **751 pytest tests + 27 React component tests**, GitHub Actions CI, Ruff lint/format enforcement on every PR
 
 ## Architecture
 
@@ -304,7 +304,7 @@ cd services
 ../services/observer/.venv/bin/python -m pytest
 ```
 
-698 tests cover observer reconnect logic, consumer event derivation, floor-2 long-call warning and escalation, thermostat tracking, heating cycle analytics, consumer state persistence, and Prometheus metrics gauge updates.
+751 tests cover observer reconnect logic, consumer event derivation, floor-2 long-call warning and escalation, thermostat tracking, heating cycle analytics, consumer state persistence, and Prometheus metrics gauge updates.
 
 ### CI
 
@@ -431,6 +431,23 @@ python3 scripts/temp_correlation.py --floor floor_2
 ```
 
 Answers: does floor heating runtime depend on outdoor temperature, and by how much?
+
+### `services/consumer/hvac_context.py`
+
+Generates a compact, structured plain-text summary of current HVAC conditions and recent history for LLM input. Reads `state/consumer/state.json` and `state/consumer/events.jsonl`.
+
+```bash
+# Default: 48h lookback, output to stdout
+python3 services/consumer/hvac_context.py
+
+# Custom lookback window
+python3 services/consumer/hvac_context.py --hours 24
+
+# Write to file
+python3 services/consumer/hvac_context.py --output /tmp/hvac_context.txt
+```
+
+Output includes current zone temps and setpoints, today's runtime by floor, yesterday's daily summary, recent heating sessions, and active warnings. Designed as the data layer for the agent-assisted recommendations epic.
 
 ## Security Notes
 
