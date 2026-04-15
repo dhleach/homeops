@@ -200,7 +200,7 @@ async def _build_hvac_context() -> str:
 
 async def _call_gemini(context: str, question: str, api_key: str) -> str:
     """Call Gemini REST API and return the response text."""
-    url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
+    url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
     payload = {
         "system_instruction": {"parts": [{"text": SYSTEM_PROMPT}]},
         "contents": [{"parts": [{"text": f"HVAC DATA:\n{context}\n\nQUESTION: {question}"}]}],
