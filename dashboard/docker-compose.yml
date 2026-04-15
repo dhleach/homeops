@@ -5,6 +5,8 @@ services:
     # on the EC2 host without extra networking config.
     network_mode: host
     restart: always
+    environment:
+      - GEMINI_API_KEY
 
   prometheus:
     image: prom/prometheus:v3.2.1
