@@ -565,8 +565,37 @@ class TestBuildContext:
 
     def test_yesterday_daily_summary_included(self, tmp_path: Path) -> None:
         """Yesterday's daily summary appears even with short lookback window."""
+        from datetime import UTC, datetime, timedelta
+
+        # Build an event with yesterday's actual date so the test isn't hardcoded
+        # to a specific calendar date (which would make it fail as dates advance).
+        yesterday = (datetime.now(UTC) - timedelta(days=1)).date().isoformat()
+        yesterday_event = {
+            "schema": "homeops.consumer.furnace_daily_summary.v1",
+            "source": "consumer.v1",
+            "ts": f"{yesterday}T00:22:51.000000+00:00",
+            "data": {
+                "date": yesterday,
+                "total_furnace_runtime_s": 9677,
+                "session_count": 25,
+                "per_floor_runtime_s": {"floor_1": 5966, "floor_2": 6607, "floor_3": 0},
+                "outdoor_temp_min_f": 45.0,
+                "outdoor_temp_max_f": 80.0,
+                "outdoor_temp_avg_f": 60.0,
+                "per_floor_session_count": {"floor_1": 17, "floor_2": 19, "floor_3": 0},
+                "per_floor_avg_setpoint_f": {"floor_1": 68.0, "floor_2": 68.0, "floor_3": 68.0},
+                "warnings_triggered": {
+                    "floor_2_long_call": 1,
+                    "floor_2_escalation": 0,
+                    "floor_no_response": 0,
+                    "zone_slow_to_heat": 0,
+                    "observer_silence": 0,
+                    "setpoint_miss": 0,
+                },
+            },
+        }
         sp = self._write_state(tmp_path, SAMPLE_STATE)
-        ep = self._write_events(tmp_path, SAMPLE_EVENTS)
+        ep = self._write_events(tmp_path, [yesterday_event])
         # 1h lookback — only events from last 1 hour — but yesterday summary should still appear
         result = build_context(str(sp), str(ep), lookback_hours=1)
         assert "YESTERDAY" in result
