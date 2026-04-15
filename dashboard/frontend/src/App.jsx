@@ -3,6 +3,7 @@ import { TempCard } from "./components/TempCard.jsx";
 import { OutdoorCard } from "./components/OutdoorCard.jsx";
 import { LiveIndicator } from "./components/LiveIndicator.jsx";
 import { ErrorBanner } from "./components/ErrorBanner.jsx";
+import { AskHvac } from "./components/AskHvac.jsx";
 
 const GRAFANA_BASE = import.meta.env.VITE_GRAFANA_URL ?? "https://api.homeops.now/grafana";
 const GRAFANA_URL = `${GRAFANA_BASE}/d/homeops-temps`;
@@ -113,6 +114,11 @@ export default function App() {
             </div>
           </>
         )}
+
+        {/* AI Diagnostic */}
+        <section className="mt-16 border-t border-border pt-12">
+          <AskHvac apiUrl={API_URL} />
+        </section>
 
         {/* Grafana dashboards */}
         <section className="mt-16 border-t border-border pt-12">
@@ -247,6 +253,7 @@ export default function App() {
                   ["Infra", "AWS EC2 · S3 · CloudFront · Route53"],
                   ["IaC", "Terraform · Docker Compose"],
                   ["CI/CD", "GitHub Actions · Nginx · Certbot"],
+                  ["AI", "Gemini 2.0 Flash · live diagnostic Q&A"],
                 ].map(([label, value]) => (
                   <div key={label}>
                     <span className="font-medium text-slate-300">{label}</span>
