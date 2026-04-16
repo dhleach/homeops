@@ -23,6 +23,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from log_config import get_logger
 from metrics import HvacMetrics
 
 from alerts import (
@@ -58,6 +59,8 @@ from state import (
 )
 from telegram_commands import handle_telegram_commands
 from utils import _get_version, append_jsonl, follow, utc_ts
+
+logger = get_logger("consumer")
 
 # Module-level metrics singleton — set to an HvacMetrics instance in main() when the
 # METRICS_PORT env var is present (or always).  None during unit tests that don't want
@@ -112,10 +115,7 @@ def _emit_derived(derived: dict[str, Any], derived_log: str, fresh_restart: bool
     if _metrics is not None:
         _metrics.update_from_event(derived.get("schema", ""), derived.get("data", {}))
     if fresh_restart and derived.get("schema") in _RESTART_CLEAR_SCHEMAS:
-        print(
-            f"[{utc_ts()}] Cleared fresh_restart after first full heating session",
-            flush=True,
-        )
+        logger.info("Cleared fresh_restart after first full heating session")
         return False
     return fresh_restart
 
@@ -132,7 +132,7 @@ def _send_telegram(bot_token: str, chat_id: str, msg: str) -> None:
     try:
         _urllib.urlopen(url, data=data, timeout=10)
     except Exception as _e:
-        print(f"[{utc_ts()}] WARN: Telegram send failed: {_e}", flush=True)
+        logger.warning(f"Telegram send failed: {_e}")
 
 
 def _make_furnace_short_call_event(
@@ -232,15 +232,12 @@ def _playback_phase(
     _LOG = "[PLAYBACK]"
     last_consumed_observer_ts: str | None = last_consumed_ts
 
-    print(
-        f"[{utc_ts()}] {_LOG} Starting catch-up replay from ts={last_consumed_ts}",
-        flush=True,
-    )
+    logger.info(f"{_LOG} Starting catch-up replay from ts={last_consumed_ts}")
 
     try:
         obs_file = open(observer_log, encoding="utf-8")  # noqa: SIM115
     except FileNotFoundError:
-        print(f"[{utc_ts()}] {_LOG} Observer log not found, skipping playback", flush=True)
+        logger.info(f"{_LOG} Observer log not found, skipping playback")
         return {
             "floor_on_since": floor_on_since,
             "furnace_on_since": furnace_on_since,
@@ -292,10 +289,7 @@ def _playback_phase(
             new_state: str | None = data.get("new_state")
             attributes: dict[str, Any] = data.get("attributes") or {}
 
-            print(
-                f"[{utc_ts()}] {_LOG} {ts_str} {schema} {entity_id}: {old_state} -> {new_state}",
-                flush=True,
-            )
+            logger.info(f"{_LOG} {ts_str} {schema} {entity_id}: {old_state} -> {new_state}")
 
             ts: datetime | None = None
             try:
@@ -310,7 +304,7 @@ def _playback_phase(
                     current_date = evt_date
                 elif evt_date != current_date:
                     summary = emit_daily_summary(daily_state, current_date)
-                    print(f"[{utc_ts()}] {_LOG} date rollover → emitting daily summary", flush=True)
+                    logger.info(f"{_LOG} date rollover → emitting daily summary")
                     print(json.dumps(summary), flush=True)
                     append_jsonl(derived_log, summary)
                     for _floor_evt in emit_floor_daily_summaries(daily_state, current_date):
@@ -584,10 +578,7 @@ def _playback_phase(
 
             event_count += 1
 
-    print(
-        f"[{utc_ts()}] {_LOG} Playback complete: replayed {event_count} observer events",
-        flush=True,
-    )
+    logger.info(f"{_LOG} Playback complete: replayed {event_count} observer events")
 
     return {
         "floor_on_since": floor_on_since,
@@ -626,13 +617,13 @@ def main() -> None:
     """Tail observer events and emit derived floor/furnace session events."""
     path = os.environ.get("EVENT_LOG", "state/observer/events.jsonl")
     derived_log = os.environ.get("DERIVED_EVENT_LOG", "state/consumer/events.jsonl")
-    print(f"[{utc_ts()}] Derived log: {derived_log}", flush=True)
+    logger.info(f"Derived log: {derived_log}")
     version = _get_version()
-    print(f"[{utc_ts()}] Consumer version: {version}", flush=True)
+    logger.info(f"Consumer version: {version}")
     os.makedirs("state/consumer", exist_ok=True)
     with open("state/consumer/version.txt", "w", encoding="utf-8") as _vf:
         _vf.write(version + "\n")
-    print(f"[{utc_ts()}] Consumer following: {path}", flush=True)
+    logger.info(f"Consumer following: {path}")
 
     global _metrics
     metrics_port = int(os.environ.get("METRICS_PORT", "8001"))
@@ -642,32 +633,25 @@ def main() -> None:
     furnace_short_call_threshold_s = int(
         os.environ.get("FURNACE_SHORT_CALL_THRESHOLD_S", "120")
     )  # 2 min
-    print(
-        f"[{utc_ts()}] Furnace short-call threshold: {furnace_short_call_threshold_s}s",
-        flush=True,
-    )
+    logger.info(f"Furnace short-call threshold: {furnace_short_call_threshold_s}s")
     floor_2_warn_threshold_s = int(os.environ.get("FLOOR_2_WARN_THRESHOLD_S", "2700"))  # 45 min
     floor_2_telegram_rate_limit_s = int(
         os.environ.get("FLOOR_2_TELEGRAM_RATE_LIMIT_S", "3600")
     )  # 1 hour
-    print(f"[{utc_ts()}] Floor-2 warning threshold: {floor_2_warn_threshold_s}s", flush=True)
-    print(f"[{utc_ts()}] Floor-2 Telegram rate limit: {floor_2_telegram_rate_limit_s}s", flush=True)
-    print(
-        f"[{utc_ts()}] Slow-to-heat thresholds: "
-        + ", ".join(f"{z}={t}s" for z, t in SLOW_TO_HEAT_THRESHOLDS_S.items()),
-        flush=True,
+    logger.info(f"Floor-2 warning threshold: {floor_2_warn_threshold_s}s")
+    logger.info(f"Floor-2 Telegram rate limit: {floor_2_telegram_rate_limit_s}s")
+    logger.info(
+        "Slow-to-heat thresholds: "
+        + ", ".join(f"{z}={t}s" for z, t in SLOW_TO_HEAT_THRESHOLDS_S.items())
     )
     observer_silence_threshold_s = int(
         os.environ.get("OBSERVER_SILENCE_THRESHOLD_S", "4200")  # 70 min
     )  # 10 min
-    print(f"[{utc_ts()}] Observer silence threshold: {observer_silence_threshold_s}s", flush=True)
+    logger.info(f"Observer silence threshold: {observer_silence_threshold_s}s")
     telegram_bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
     telegram_chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
     telegram_command_interval_s = int(os.environ.get("TELEGRAM_COMMAND_CHECK_INTERVAL_S", "30"))
-    print(
-        f"[{utc_ts()}] Telegram command check interval: {telegram_command_interval_s}s",
-        flush=True,
-    )
+    logger.info(f"Telegram command check interval: {telegram_command_interval_s}s")
 
     _register_sigterm_handler()
 
@@ -689,9 +673,9 @@ def main() -> None:
     if _baseline_path.exists():
         try:
             _baseline = json.loads(_baseline_path.read_text(encoding="utf-8"))
-            print(f"[{utc_ts()}] Loaded baseline from {_baseline_path}", flush=True)
+            logger.info(f"Loaded baseline from {_baseline_path}")
         except Exception as _e:
-            print(f"[{utc_ts()}] WARN: Could not load baseline: {_e}", flush=True)
+            logger.warning(f"Could not load baseline: {_e}")
     furnace_session_anomaly_rule = FurnaceSessionAnomalyRule(_baseline)
 
     # Attempt to resume from a recent state file; otherwise cold-start.
@@ -712,10 +696,7 @@ def main() -> None:
             s["setpoint_reached_ts"] = _parse_dt(s.get("setpoint_reached_ts"))
             climate_state[eid] = s
         daily_state = saved.get("daily_state") or _empty_daily_state()
-        print(
-            f"[{utc_ts()}] Resumed from state file (saved_at={saved.get('saved_at')})",
-            flush=True,
-        )
+        logger.info(f"Resumed from state file (saved_at={saved.get('saved_at')})")
         # Warm up Prometheus metrics from persisted state so gauges show real
         # values immediately on restart — before any new events arrive.
         # Without this, floor_temperature_fahrenheit stays 0 until a temp change
@@ -726,13 +707,11 @@ def main() -> None:
                 temp = es.get("current_temp")
                 if zone and temp is not None:
                     _metrics.set_floor_temperature(zone, float(temp))
-                    print(f"[{utc_ts()}] Warmed metric floor_temp {zone}={temp}", flush=True)
+                    logger.info(f"Warmed metric floor_temp {zone}={temp}")
                 setpoint = es.get("setpoint")
                 if zone and setpoint is not None:
                     _metrics.set_floor_setpoint(zone, float(setpoint))
-                    print(
-                        f"[{utc_ts()}] Warmed metric floor_setpoint {zone}={setpoint}", flush=True
-                    )
+                    logger.info(f"Warmed metric floor_setpoint {zone}={setpoint}")
             if furnace_on_since is not None:
                 _metrics.set_furnace_active(True)
             if daily_state.get("last_outdoor_temp_f") is not None:
@@ -741,10 +720,7 @@ def main() -> None:
         # Cold-start: bootstrap furnace state from the observer log.
         furnace_on_since = last_furnace_on_since(path)
         if furnace_on_since:
-            print(
-                f"[{utc_ts()}] Bootstrapped furnace_on_since={furnace_on_since.isoformat()}",
-                flush=True,
-            )
+            logger.info(f"Bootstrapped furnace_on_since={furnace_on_since.isoformat()}")
         floor_on_since = {key: None for key in floor_entities.keys()}
         climate_state = {}
         daily_state = _empty_daily_state()
@@ -754,10 +730,7 @@ def main() -> None:
         seeded_temp = _load_last_outdoor_temp()
         if seeded_temp is not None:
             daily_state["last_outdoor_temp_f"] = seeded_temp
-            print(
-                f"[{utc_ts()}] Seeded last_outdoor_temp_f={seeded_temp} from saved state",
-                flush=True,
-            )
+            logger.info(f"Seeded last_outdoor_temp_f={seeded_temp} from saved state")
 
     current_date = datetime.now(UTC).strftime("%Y-%m-%d")
     last_snapshot_ts: datetime | None = None
@@ -775,7 +748,7 @@ def main() -> None:
     # Playback phase: catch up on missed observer events before entering live mode.
     playback_from_ts = _load_last_consumed_ts()
     if playback_from_ts:
-        print(f"[{utc_ts()}] Found last_consumed_observer_ts={playback_from_ts}", flush=True)
+        logger.info(f"Found last_consumed_observer_ts={playback_from_ts}")
         _pb_result = _playback_phase(
             path,
             playback_from_ts,
@@ -812,9 +785,9 @@ def main() -> None:
             if eid in _FLOOR_ENTITIES
         }
         _metrics.restore_daily_runtimes(_per_floor)
-        print(f"[{utc_ts()}] [LIVE] Entering live tail mode", flush=True)
+        logger.info("[LIVE] Entering live tail mode")
     else:
-        print(f"[{utc_ts()}] [LIVE] Cold-start — no playback state found", flush=True)
+        logger.info("[LIVE] Cold-start — no playback state found")
 
     # Main stream loop: consume observer events and emit higher-level derived events.
     for line in follow(path):
@@ -825,7 +798,7 @@ def main() -> None:
             try:
                 evt = json.loads(line)
             except json.JSONDecodeError as e:
-                print(f"[{utc_ts()}] WARN: bad json line: {e}", flush=True)
+                logger.warning(f"Bad json line: {e}")
                 continue
 
             schema = evt.get("schema")
@@ -884,15 +857,11 @@ def main() -> None:
                         try:
                             _urllib.urlopen(tg_url, tg_data, timeout=10)
                         except Exception as e:
-                            print(
-                                f"[{utc_ts()}] WARN: Telegram daily summary failed: {e}",
-                                flush=True,
-                            )
+                            logger.warning(f"Telegram daily summary failed: {e}")
                     else:
-                        print(
-                            f"[{utc_ts()}] WARN: TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID"
-                            " not set, skipping daily summary alert",
-                            flush=True,
+                        logger.warning(
+                            "TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID not set,"
+                            " skipping daily summary alert"
                         )
                     daily_state = _empty_daily_state()
                     _metrics.reset_daily_runtimes()
@@ -922,11 +891,7 @@ def main() -> None:
                                     ):
                                         _prior_summaries.append(_evt)
                         except Exception as _e:
-                            print(
-                                f"[{utc_ts()}] WARN: Could not read derived log"
-                                f" for anomaly check: {_e}",
-                                flush=True,
-                            )
+                            logger.warning(f"Could not read derived log for anomaly check: {_e}")
 
                     _runtime_anomaly_rule = FloorRuntimeAnomalyRule(history=_prior_summaries)
                     _per_floor = summary["data"].get("per_floor_runtime_s", {})
@@ -998,18 +963,13 @@ def main() -> None:
                     daily_state["last_outdoor_temp_f"] = derived["data"]["temperature_f"]
                     daily_state["last_outdoor_temp_recorded_at"] = utc_ts()
                 if new_state in (None, "unavailable", "unknown", ""):
-                    print(
-                        f"[{utc_ts()}] WARN: outdoor_temperature state unavailable, skipping",
-                        flush=True,
-                    )
+                    logger.warning("outdoor_temperature state unavailable, skipping")
                 else:
                     try:
                         float(new_state)
                     except (ValueError, TypeError):
-                        print(
-                            f"[{utc_ts()}] WARN: outdoor_temperature non-numeric value"
-                            f" {new_state!r}, skipping",
-                            flush=True,
+                        logger.warning(
+                            f"outdoor_temperature non-numeric value {new_state!r}, skipping"
                         )
                 # Always save on outdoor_temp event — this is the 62-min heartbeat write.
                 _save_state(
@@ -1068,15 +1028,11 @@ def main() -> None:
                             try:
                                 _urllib.urlopen(url, data=data, timeout=10)
                             except Exception as e:
-                                print(
-                                    f"[{utc_ts()}] WARN: Telegram slow-to-heat alert failed: {e}",
-                                    flush=True,
-                                )
+                                logger.warning(f"Telegram slow-to-heat alert failed: {e}")
                         else:
-                            print(
-                                f"[{utc_ts()}] WARN: TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID"
-                                " not set, skipping slow-to-heat alert",
-                                flush=True,
+                            logger.warning(
+                                "TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID not set,"
+                                " skipping slow-to-heat alert"
                             )
                     if derived["schema"] == "homeops.consumer.zone_setpoint_miss.v1":
                         daily_state["warnings_triggered"]["setpoint_miss"] += 1
@@ -1154,16 +1110,13 @@ def main() -> None:
                                     try:
                                         _urllib.urlopen(_url, _tdata, timeout=10)
                                     except Exception as _te:
-                                        print(
-                                            f"[{utc_ts()}] WARN: Telegram short-session"
-                                            f" alert failed: {_te}",
-                                            flush=True,
+                                        logger.warning(
+                                            f"Telegram short-session alert failed: {_te}"
                                         )
                                 else:
-                                    print(
-                                        f"[{utc_ts()}] WARN: TELEGRAM_BOT_TOKEN or"
-                                        " TELEGRAM_CHAT_ID not set, skipping short-session alert",
-                                        flush=True,
+                                    logger.warning(
+                                        "TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID not set,"
+                                        " skipping short-session alert"
                                     )
                             elif _anom[
                                 "schema"
@@ -1193,16 +1146,11 @@ def main() -> None:
                                     try:
                                         _urllib.urlopen(_url, _tdata, timeout=10)
                                     except Exception as _te:
-                                        print(
-                                            f"[{utc_ts()}] WARN: Telegram long-session"
-                                            f" alert failed: {_te}",
-                                            flush=True,
-                                        )
+                                        logger.warning(f"Telegram long-session alert failed: {_te}")
                                 else:
-                                    print(
-                                        f"[{utc_ts()}] WARN: TELEGRAM_BOT_TOKEN or"
-                                        " TELEGRAM_CHAT_ID not set, skipping long-session alert",
-                                        flush=True,
+                                    logger.warning(
+                                        "TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID not set,"
+                                        " skipping long-session alert"
                                     )
                         # Short-call warning: rapid cycling detection
                         if (
@@ -1227,10 +1175,9 @@ def main() -> None:
                                 ) + _event_ts_suffix(ts_str, datetime.now(UTC))
                                 _send_telegram(telegram_bot_token, telegram_chat_id, _sc_msg)
                             else:
-                                print(
-                                    f"[{utc_ts()}] WARN: TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID"
-                                    " not set, skipping short-call alert",
-                                    flush=True,
+                                logger.warning(
+                                    "TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID not set,"
+                                    " skipping short-call alert"
                                 )
                 _save_state(
                     floor_on_since,
@@ -1259,11 +1206,9 @@ def main() -> None:
                 daily_state["floor_2_telegram_suppressed_count"] = (
                     daily_state.get("floor_2_telegram_suppressed_count", 0) + 1
                 )
-                print(
-                    f"[{utc_ts()}] Floor-2 Telegram suppressed (rate limit"
-                    f" {floor_2_telegram_rate_limit_s}s); suppressed_count="
-                    f"{daily_state['floor_2_telegram_suppressed_count']}",
-                    flush=True,
+                logger.info(
+                    f"Floor-2 Telegram suppressed (rate limit {floor_2_telegram_rate_limit_s}s); "
+                    f"suppressed_count={daily_state['floor_2_telegram_suppressed_count']}"
                 )
             elif telegram_bot_token and telegram_chat_id:
                 import urllib.parse as _parse
@@ -1303,13 +1248,9 @@ def main() -> None:
                     floor_2_telegram_last_sent_ts = _now_for_rl
                     daily_state["floor_2_telegram_suppressed_count"] = 0
                 except Exception as e:
-                    print(f"[{utc_ts()}] WARN: Telegram alert failed: {e}", flush=True)
+                    logger.warning(f"Telegram alert failed: {e}")
             else:
-                print(
-                    f"[{utc_ts()}] WARN: TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID"
-                    " not set, skipping alert",
-                    flush=True,
-                )
+                logger.warning("TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID not set, skipping alert")
             # Escalation: fire on 2nd, 3rd, etc. long-call warning in the same day
             long_call_count = daily_state["warnings_triggered"]["floor_2_long_call"]
             escalation_event = check_floor_2_escalation(
@@ -1325,10 +1266,9 @@ def main() -> None:
                     daily_state["floor_2_telegram_suppressed_count"] = (
                         daily_state.get("floor_2_telegram_suppressed_count", 0) + 1
                     )
-                    print(
-                        f"[{utc_ts()}] Floor-2 escalation Telegram suppressed (rate limit); "
-                        f"suppressed_count={daily_state['floor_2_telegram_suppressed_count']}",
-                        flush=True,
+                    logger.info(
+                        f"Floor-2 escalation Telegram suppressed (rate limit); "
+                        f"suppressed_count={daily_state['floor_2_telegram_suppressed_count']}"
                     )
                 elif telegram_bot_token and telegram_chat_id:
                     import urllib.parse as _parse
@@ -1355,15 +1295,10 @@ def main() -> None:
                         floor_2_telegram_last_sent_ts = _esc_now
                         daily_state["floor_2_telegram_suppressed_count"] = 0
                     except Exception as _esc_e:
-                        print(
-                            f"[{utc_ts()}] WARN: Telegram escalation alert failed: {_esc_e}",
-                            flush=True,
-                        )
+                        logger.warning(f"Telegram escalation alert failed: {_esc_e}")
                 else:
-                    print(
-                        f"[{utc_ts()}] WARN: TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID"
-                        " not set, skipping escalation alert",
-                        flush=True,
+                    logger.warning(
+                        "TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID not set, skipping escalation alert"
                     )
 
         # Observer silence watchdog (runs on every event and on timeouts)
@@ -1397,12 +1332,11 @@ def main() -> None:
                 try:
                     _urllib.urlopen(url, data=data, timeout=10)
                 except Exception as e:
-                    print(f"[{utc_ts()}] WARN: Telegram alert failed: {e}", flush=True)
+                    logger.warning(f"Telegram alert failed: {e}")
             else:
-                print(
-                    f"[{utc_ts()}] WARN: TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID"
-                    " not set, skipping observer silence alert",
-                    flush=True,
+                logger.warning(
+                    "TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID not set,"
+                    " skipping observer silence alert"
                 )
 
         # In-flight floor-not-responding check (runs on every event and on timeouts)
@@ -1435,12 +1369,11 @@ def main() -> None:
                 try:
                     _urllib.urlopen(url, data=data, timeout=10)
                 except Exception as e:
-                    print(f"[{utc_ts()}] WARN: Telegram alert failed: {e}", flush=True)
+                    logger.warning(f"Telegram alert failed: {e}")
             else:
-                print(
-                    f"[{utc_ts()}] WARN: TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID"
-                    " not set, skipping floor-not-responding alert",
-                    flush=True,
+                logger.warning(
+                    "TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID not set,"
+                    " skipping floor-not-responding alert"
                 )
 
         # Zone temperature snapshot — write every 5 minutes if we have data.
@@ -1450,7 +1383,7 @@ def main() -> None:
             or (now - last_snapshot_ts).total_seconds() >= ZONE_TEMP_SNAPSHOT_INTERVAL_S
         ):
             if write_zone_temp_snapshot(climate_state, daily_state):
-                print(f"[{utc_ts()}] Zone temp snapshot written", flush=True)
+                logger.info("Zone temp snapshot written")
             last_snapshot_ts = now
 
         # Telegram command polling — check for /summary every ~30 s.
