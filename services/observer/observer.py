@@ -8,6 +8,9 @@ from pathlib import Path
 
 import websockets
 from dotenv import load_dotenv
+from log_config import get_logger
+
+logger = get_logger("observer")
 
 
 def utc_ts():
@@ -31,10 +34,6 @@ def _get_version() -> str:
         return "unknown"
 
 
-def eprint(*args, **kwargs):
-    print(*args, file=sys.stderr, **kwargs)
-
-
 async def main():
     """Stream Home Assistant state changes to stdout (and optional JSONL file)."""
     # Load dotenv values first so explicit process env vars can still override them.
@@ -54,7 +53,7 @@ async def main():
     event_log = os.environ.get("OBSERVER_EVENT_LOG")
 
     if not ws_url or not token:
-        eprint(f"[{utc_ts()}] Missing HA_WS_URL or HA_TOKEN in {env_path}")
+        logger.error("Missing HA_WS_URL or HA_TOKEN in %s", env_path)
         sys.exit(2)
 
     watch = set(e.strip() for e in watch_raw.split(",") if e.strip())
@@ -65,7 +64,7 @@ async def main():
     # Keep the process alive forever; any disconnect/error falls back to reconnect.
     while True:
         try:
-            eprint(f"[{utc_ts()}] Connecting to {ws_url}")
+            logger.info("Connecting to %s", ws_url)
             async with websockets.connect(ws_url, ping_interval=20, ping_timeout=20) as ws:
                 backoff_s = 1  # reset backoff once connected
 
@@ -80,7 +79,7 @@ async def main():
                 if auth_resp.get("type") != "auth_ok":
                     raise RuntimeError(f"Auth failed: {auth_resp}")
 
-                eprint(f"[{utc_ts()}] Auth OK")
+                logger.info("Auth OK")
 
                 # 3) Subscribe to state_changed
                 sub_id = 1
@@ -97,9 +96,9 @@ async def main():
                 if not sub_resp.get("success", False):
                     raise RuntimeError(f"Subscribe failed: {sub_resp}")
 
-                eprint(
-                    f"[{utc_ts()}] Subscribed. Watching: "
-                    + (", ".join(sorted(watch)) if watch else "(ALL)")
+                logger.info(
+                    "Subscribed. Watching: %s",
+                    (", ".join(sorted(watch)) if watch else "(ALL)"),
                 )
 
                 # 4) Print matching state changes
@@ -150,14 +149,14 @@ async def main():
                             with open(event_log, "a", encoding="utf-8") as f:
                                 f.write(line + "\n")
                         except OSError as e:
-                            eprint(f"[{utc_ts()}] WARN: failed to append to {event_log}: {e}")
+                            logger.warning("WARN: failed to append to %s: %s", event_log, e)
 
         except (websockets.exceptions.ConnectionClosed, OSError) as e:
-            eprint(f"[{utc_ts()}] Disconnected: {e.__class__.__name__}: {e}")
+            logger.warning("Disconnected: %s: %s", e.__class__.__name__, e)
         except Exception as e:
-            eprint(f"[{utc_ts()}] Error: {e.__class__.__name__}: {e}")
+            logger.error("Error: %s: %s", e.__class__.__name__, e)
 
-        eprint(f"[{utc_ts()}] Reconnecting in {backoff_s}s...")
+        logger.info("Reconnecting in %ss...", backoff_s)
         await asyncio.sleep(backoff_s)
         backoff_s = min(max_backoff_s, backoff_s * 2)
 
@@ -166,4 +165,4 @@ if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        eprint(f"[{utc_ts()}] Stopped")
+        logger.info("Stopped")
