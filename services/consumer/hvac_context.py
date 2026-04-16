@@ -25,9 +25,17 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
+
+# Add insights rules to path (insights/ is a sibling of consumer/)
+sys.path.insert(0, str(Path(__file__).parent.parent / "insights"))
+
+from rules.efficiency_degradation import EfficiencyDegradationRule
+from rules.heating_efficiency import HeatingEfficiencyRule
+from rules.time_of_day_pattern import TimeOfDayPatternRule
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -405,7 +413,70 @@ def build_context(
     # Warnings
     sections.append(_build_warnings_section(events, since))
 
+    # Insights: heating efficiency, efficiency degradation, time-of-day patterns
+    insights_section = _build_insights_section(events)
+    if insights_section:
+        sections.append(insights_section)
+
     return "\n\n".join(sections)
+
+
+def _build_insights_section(events: list[dict[str, Any]]) -> str:
+    """
+    Run the three new insights rules against the full event list and return
+    a formatted section string, or an empty string if no data is available.
+    """
+    lines: list[str] = []
+
+    # --- Heating efficiency ---
+    efficiency_rule = HeatingEfficiencyRule(history=events, min_sessions=5, lookback_days=14)
+    efficiency_text = efficiency_rule.summary_text()
+    if efficiency_text:
+        lines.append(efficiency_text)
+
+    # --- Efficiency degradation ---
+    degradation_rule = EfficiencyDegradationRule(
+        history=events, min_weeks=3, min_events_per_week=3, slope_threshold_s_per_week=60.0
+    )
+    degradation_findings = degradation_rule.check()
+    if degradation_findings:
+        lines.append("Efficiency Degradation Warnings:")
+        for f in degradation_findings:
+            d = f["data"]
+            lines.append(
+                f"  {d['floor']}: session duration trending up "
+                f"+{d['slope_s_per_week']:.0f}s/week over {d['weeks_analysed']} weeks "
+                f"({d['earliest_week']} → {d['latest_week']})"
+            )
+
+    # --- Time-of-day patterns ---
+    # Use full event history as both baseline and window (48h lookback is already applied upstream)
+    session_events = [
+        e for e in events if e.get("schema") == "homeops.consumer.heating_session_ended.v1"
+    ]
+    if len(session_events) >= 8:
+        # Split: older 75% as baseline, newer 25% as observation window
+        split = max(1, len(session_events) * 3 // 4)
+        baseline_events = session_events[:split]
+        window_events = session_events[split:]
+        tod_rule = TimeOfDayPatternRule(
+            history=baseline_events, threshold_ratio=1.8, min_events=8, min_window_events=3
+        )
+        tod_findings = tod_rule.check(window_events)
+        if tod_findings:
+            lines.append("Time-of-Day Pattern Anomalies:")
+            for f in tod_findings:
+                d = f["data"]
+                lines.append(
+                    f"  {d['floor']} calling {d['ratio']}x more during {d['period']} "
+                    f"than baseline ({d['observed_share']:.0%} vs "
+                    f"{d['historical_share']:.0%} historically)"
+                )
+
+    if not lines:
+        return ""
+
+    return "INSIGHTS\n" + "\n".join(lines)
 
 
 def main() -> None:
