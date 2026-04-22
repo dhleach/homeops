@@ -63,12 +63,26 @@ resource "aws_iam_role_policy_attachment" "s3_config_read" {
 # SSM — k3s node token: EC2 reads it during bootstrap; homeops-deploy user writes it from Pi
 data "aws_iam_policy_document" "ssm_k3s_token_read" {
   statement {
-    sid     = "ReadK3sToken"
+    sid     = "ReadBootstrapSecrets"
     effect  = "Allow"
     actions = ["ssm:GetParameter"]
+    # EC2 reads k3s token + Gemini API key during bootstrap
     resources = [
-      "arn:aws:ssm:${var.aws_region}:*:parameter/homeops/${var.environment}/k3s-node-token"
+      "arn:aws:ssm:${var.aws_region}:*:parameter/homeops/${var.environment}/k3s-node-token",
+      "arn:aws:ssm:${var.aws_region}:*:parameter/homeops/${var.environment}/gemini-api-key"
     ]
+  }
+  # Needed to decrypt SecureString params (AWS-managed key aws/ssm)
+  statement {
+    sid     = "DecryptSSMSecrets"
+    effect  = "Allow"
+    actions = ["kms:Decrypt"]
+    resources = ["arn:aws:kms:${var.aws_region}:*:key/*"]
+    condition {
+      test     = "StringLike"
+      variable = "kms:ViaService"
+      values   = ["ssm.${var.aws_region}.amazonaws.com"]
+    }
   }
 }
 
@@ -107,7 +121,13 @@ data "aws_iam_policy_document" "ssm_k3s_token_write" {
     sid     = "KMSForSSM"
     effect  = "Allow"
     actions = ["kms:GenerateDataKey", "kms:Decrypt"]
-    resources = ["arn:aws:kms:${var.aws_region}:*:key/alias/aws/ssm"]
+    # AWS managed key — wildcard account ID is required here since we don't know account ID at plan time
+    resources = ["arn:aws:kms:${var.aws_region}:*:key/*"]
+    condition {
+      test     = "StringLike"
+      variable = "kms:ViaService"
+      values   = ["ssm.${var.aws_region}.amazonaws.com"]
+    }
   }
 }
 

@@ -65,8 +65,13 @@ resource "aws_instance" "homeops" {
 
     # ── 1. System packages ───────────────────────────────────────────────────
     apt-get update -y >> $LOG 2>&1
-    apt-get install -y docker.io docker-compose-v2 nginx git curl awscli >> $LOG 2>&1
-    usermod -aG docker ubuntu
+    # Install AWS CLI v2 (v1 from apt is EOL and can fail with IMDSv2)
+    apt-get install -y docker.io docker-compose-v2 nginx git curl unzip >> $LOG 2>&1
+    curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-aarch64.zip" -o /tmp/awscliv2.zip >> $LOG 2>&1
+    unzip -q /tmp/awscliv2.zip -d /tmp >> $LOG 2>&1
+    /tmp/aws/install >> $LOG 2>&1 && echo "[OK] AWS CLI v2 installed" >> $LOG || echo "[WARN] AWS CLI v2 install failed" >> $LOG
+    rm -rf /tmp/awscliv2.zip /tmp/aws
+    usermod -aG docker ubuntu >> $LOG 2>&1
     systemctl enable docker nginx >> $LOG 2>&1
     systemctl start docker nginx >> $LOG 2>&1
     echo "[OK] packages installed" >> $LOG
@@ -128,18 +133,23 @@ server {
 NGINXEOF
     ln -sf /etc/nginx/sites-available/api.homeops.now /etc/nginx/sites-enabled/api.homeops.now
     rm -f /etc/nginx/sites-enabled/default
-    nginx -t >> $LOG 2>&1 && systemctl reload nginx >> $LOG 2>&1
-    echo "[OK] nginx HTTP-only config loaded" >> $LOG
+    nginx -t >> $LOG 2>&1 \
+      && systemctl reload nginx >> $LOG 2>&1 \
+      && echo "[OK] nginx HTTP-only config loaded" >> $LOG \
+      || echo "[WARN] nginx -t failed — certbot will likely fail too" >> $LOG
 
-    # Run certbot — retry up to 8x with 60s gaps (DNS may take a few minutes to propagate after EIP assignment)
+    # Wait for EIP association to fully propagate before certbot
+    sleep 30
+
+    # Run certbot — max 5 retries to avoid Let's Encrypt rate limit (5 failed validations/hr)
     CERT_OK=0
-    for i in $(seq 1 8); do
+    for i in $(seq 1 5); do
       if certbot --nginx -d api.homeops.now --non-interactive --agree-tos -m admin@homeops.now >> $LOG 2>&1; then
         echo "[OK] certbot succeeded on attempt $i" >> $LOG
         CERT_OK=1
         break
       fi
-      echo "[WARN] certbot attempt $i/8 failed, retrying in 60s..." >> $LOG
+      echo "[WARN] certbot attempt $i/5 failed, retrying in 60s..." >> $LOG
       sleep 60
     done
 
@@ -161,7 +171,17 @@ NGINXEOF
     # ── 6. Docker Compose (homeops stack) ────────────────────────────────────
     if [ -f /home/ubuntu/homeops/dashboard/docker-compose.yml ]; then
       cd /home/ubuntu/homeops/dashboard
-      sudo -u ubuntu docker compose up -d >> $LOG 2>&1 \
+      # Pull GEMINI_API_KEY from SSM — required by backend container
+      GEMINI_API_KEY=$(aws ssm get-parameter \
+        --name "/homeops/${var.environment}/gemini-api-key" \
+        --with-decryption \
+        --query 'Parameter.Value' \
+        --output text \
+        --region ${var.aws_region} 2>/dev/null)
+      if [ -z "$GEMINI_API_KEY" ]; then
+        echo "[WARN] GEMINI_API_KEY not found in SSM — backend container will fail. Add to SSM: /homeops/${var.environment}/gemini-api-key" >> $LOG
+      fi
+      GEMINI_API_KEY="$GEMINI_API_KEY" docker compose up -d >> $LOG 2>&1 \
         && echo "[OK] docker compose up" >> $LOG \
         || echo "[WARN] docker compose failed — check secrets/env" >> $LOG
     else
@@ -169,24 +189,26 @@ NGINXEOF
     fi
 
     # ── 7. k3s agent ─────────────────────────────────────────────────────────
-    # Pull k3s join token from SSM. Token is stored by the Pi operator after k3s server install.
-    # SSM path: /homeops/production/k3s-node-token
-    # If SSM token not available, skip — join manually with: scripts/k3s-agent-join.sh
-    K3S_TOKEN=$(aws ssm get-parameter \
-      --name "/homeops/${var.environment}/k3s-node-token" \
-      --with-decryption \
-      --query 'Parameter.Value' \
-      --output text \
-      --region ${var.aws_region} 2>/dev/null)
-
-    if [ -n "$K3S_TOKEN" ]; then
-      # Pi Tailscale IP is the k3s server
-      K3S_URL="https://${var.tailscale_ip}:6443"
-      curl -sfL https://get.k3s.io | K3S_URL=$K3S_URL K3S_TOKEN=$K3S_TOKEN sh -s - agent >> $LOG 2>&1 \
-        && echo "[OK] k3s agent joined cluster" >> $LOG \
-        || echo "[WARN] k3s agent join failed — join manually" >> $LOG
+    # Only attempt k3s join if Tailscale is up — Pi control plane is on Tailscale network
+    if [ -z "$TS_IP" ]; then
+      echo "[WARN] Skipping k3s join — Tailscale not up, can't reach Pi at ${var.tailscale_ip}" >> $LOG
     else
-      echo "[INFO] k3s SSM token not found — join cluster manually with: scripts/k3s-agent-join.sh" >> $LOG
+      # Pull k3s join token from SSM
+      K3S_TOKEN=$(/usr/local/bin/aws ssm get-parameter \
+        --name "/homeops/${var.environment}/k3s-node-token" \
+        --with-decryption \
+        --query 'Parameter.Value' \
+        --output text \
+        --region ${var.aws_region} 2>/dev/null)
+
+      if [ -n "$K3S_TOKEN" ]; then
+        K3S_URL="https://${var.tailscale_ip}:6443"
+        curl -sfL https://get.k3s.io | K3S_URL=$K3S_URL K3S_TOKEN=$K3S_TOKEN sh -s - agent >> $LOG 2>&1 \
+          && echo "[OK] k3s agent joined cluster" >> $LOG \
+          || echo "[WARN] k3s agent join failed — join manually" >> $LOG
+      else
+        echo "[INFO] k3s SSM token not found in SSM — join cluster manually" >> $LOG
+      fi
     fi
 
     echo "=== Bootstrap complete $(date -u) ===" >> $LOG
