@@ -244,9 +244,6 @@ resource "aws_eip" "homeops" {
     Project     = "homeops"
   }
 
-  lifecycle {
-    prevent_destroy = true
-  }
 }
 
 resource "aws_eip_association" "homeops" {
