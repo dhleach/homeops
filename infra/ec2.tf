@@ -96,10 +96,20 @@ SSHKEYS
       || echo "[WARN] repo clone failed" >> $LOG
 
     # ── 4. Tailscale ─────────────────────────────────────────────────────────
-    # Delete any stale Tailscale machine record with this hostname before registering
+    # Auth key pulled from SSM — NOT interpolated from Terraform vars (would land in state plaintext)
     curl -fsSL https://tailscale.com/install.sh | sh >> $LOG 2>&1
     if command -v tailscale &>/dev/null; then
-      tailscale up --authkey="${var.tailscale_authkey}" --hostname="homeops-ec2" --accept-routes >> $LOG 2>&1
+      TS_AUTHKEY=$(/usr/local/bin/aws ssm get-parameter \
+        --name "/homeops/${var.environment}/tailscale-authkey" \
+        --with-decryption \
+        --query 'Parameter.Value' \
+        --output text \
+        --region ${var.aws_region} 2>/dev/null)
+      if [ -z "$TS_AUTHKEY" ]; then
+        echo "[WARN] Tailscale authkey not found in SSM — Tailscale will not join" >> $LOG
+      else
+        tailscale up --authkey="$TS_AUTHKEY" --hostname="homeops-ec2" --accept-routes >> $LOG 2>&1
+      fi
       # Verify Tailscale actually joined (has an IP)
       for i in 1 2 3 4 5; do
         TS_IP=$(tailscale ip --4 2>/dev/null)
@@ -150,7 +160,7 @@ NGINXEOF
         break
       fi
       echo "[WARN] certbot attempt $i/5 failed, retrying in 60s..." >> $LOG
-      sleep 60
+      [ $i -lt 5 ] && sleep 60
     done
 
     # Install full nginx config ONLY if cert was obtained
@@ -172,7 +182,7 @@ NGINXEOF
     if [ -f /home/ubuntu/homeops/dashboard/docker-compose.yml ]; then
       cd /home/ubuntu/homeops/dashboard
       # Pull GEMINI_API_KEY from SSM — required by backend container
-      GEMINI_API_KEY=$(aws ssm get-parameter \
+      GEMINI_API_KEY=$(/usr/local/bin/aws ssm get-parameter \
         --name "/homeops/${var.environment}/gemini-api-key" \
         --with-decryption \
         --query 'Parameter.Value' \
@@ -189,7 +199,8 @@ NGINXEOF
     fi
 
     # ── 7. k3s agent ─────────────────────────────────────────────────────────
-    # Only attempt k3s join if Tailscale is up — Pi control plane is on Tailscale network
+    # Re-query TS_IP — may have come up during the certbot/docker window even if step 4 timed out
+    TS_IP=$(tailscale ip --4 2>/dev/null)
     if [ -z "$TS_IP" ]; then
       echo "[WARN] Skipping k3s join — Tailscale not up, can't reach Pi at ${var.tailscale_ip}" >> $LOG
     else

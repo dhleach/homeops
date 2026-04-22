@@ -69,7 +69,8 @@ data "aws_iam_policy_document" "ssm_k3s_token_read" {
     # EC2 reads k3s token + Gemini API key during bootstrap
     resources = [
       "arn:aws:ssm:${var.aws_region}:*:parameter/homeops/${var.environment}/k3s-node-token",
-      "arn:aws:ssm:${var.aws_region}:*:parameter/homeops/${var.environment}/gemini-api-key"
+      "arn:aws:ssm:${var.aws_region}:*:parameter/homeops/${var.environment}/gemini-api-key",
+      "arn:aws:ssm:${var.aws_region}:*:parameter/homeops/${var.environment}/tailscale-authkey"
     ]
   }
   # Needed to decrypt SecureString params (AWS-managed key aws/ssm)
@@ -108,10 +109,10 @@ data "aws_iam_policy_document" "ssm_k3s_token_write" {
   statement {
     sid    = "WriteK3sToken"
     effect = "Allow"
+    # No ssm:DeleteParameter — not needed and a compromised key could delete bootstrap secrets
     actions = [
       "ssm:PutParameter",
-      "ssm:GetParameter",
-      "ssm:DeleteParameter"
+      "ssm:GetParameter"
     ]
     resources = [
       "arn:aws:ssm:${var.aws_region}:*:parameter/homeops/*"
