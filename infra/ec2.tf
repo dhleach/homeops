@@ -55,25 +55,23 @@ resource "aws_instance" "homeops" {
     }
   }
 
-  # Bootstrap: install Docker, Docker Compose, Nginx, clone homeops repo, bake SSH keys, join Tailscale
+  # Bootstrap: install Docker, Docker Compose, Nginx, clone homeops repo, bake SSH keys, join Tailscale, get TLS cert, join k3s
+  # IMPORTANT: Do NOT use set -e — individual section failures are logged and handled gracefully.
+  # Progress is written to /var/log/homeops-bootstrap.log for post-boot debugging.
   user_data = <<-EOF
     #!/bin/bash
-    set -e
-    apt-get update -y
-    apt-get install -y docker.io docker-compose-v2 nginx git curl
+    LOG=/var/log/homeops-bootstrap.log
+    echo "=== Bootstrap started $(date -u) ===" > $LOG
 
-    # Add ubuntu user to docker group
+    # ── 1. System packages ───────────────────────────────────────────────────
+    apt-get update -y >> $LOG 2>&1
+    apt-get install -y docker.io docker-compose-v2 nginx git curl awscli >> $LOG 2>&1
     usermod -aG docker ubuntu
+    systemctl enable docker nginx >> $LOG 2>&1
+    systemctl start docker nginx >> $LOG 2>&1
+    echo "[OK] packages installed" >> $LOG
 
-    # Enable and start services
-    systemctl enable docker nginx
-    systemctl start docker nginx
-
-    # Clone homeops repo
-    git clone https://github.com/dhleach/homeops.git /home/ubuntu/homeops
-    chown -R ubuntu:ubuntu /home/ubuntu/homeops
-
-    # Bake authorized SSH keys — survives instance replacement
+    # ── 2. SSH keys ───────────────────────────────────────────────────────────
     mkdir -p /home/ubuntu/.ssh
     chmod 700 /home/ubuntu/.ssh
     cat >> /home/ubuntu/.ssh/authorized_keys << 'SSHKEYS'
@@ -84,21 +82,41 @@ ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIK4NwtPsdoheR2mUazj1QydrJXYp/qtWbEUDmgQiWES3
 SSHKEYS
     chmod 600 /home/ubuntu/.ssh/authorized_keys
     chown -R ubuntu:ubuntu /home/ubuntu/.ssh
+    echo "[OK] SSH keys baked" >> $LOG
 
-    # Install and join Tailscale
-    curl -fsSL https://tailscale.com/install.sh | sh
-    tailscale up --authkey="${var.tailscale_authkey}" --hostname="homeops-ec2" --accept-routes
+    # ── 3. Clone repo ─────────────────────────────────────────────────────────
+    git clone https://github.com/dhleach/homeops.git /home/ubuntu/homeops >> $LOG 2>&1 \
+      && chown -R ubuntu:ubuntu /home/ubuntu/homeops \
+      && echo "[OK] repo cloned" >> $LOG \
+      || echo "[WARN] repo clone failed" >> $LOG
 
-    # Install certbot for Let's Encrypt
-    apt-get install -y certbot python3-certbot-nginx
+    # ── 4. Tailscale ─────────────────────────────────────────────────────────
+    # Delete any stale Tailscale machine record with this hostname before registering
+    curl -fsSL https://tailscale.com/install.sh | sh >> $LOG 2>&1
+    if command -v tailscale &>/dev/null; then
+      tailscale up --authkey="${var.tailscale_authkey}" --hostname="homeops-ec2" --accept-routes >> $LOG 2>&1
+      # Verify Tailscale actually joined (has an IP)
+      for i in 1 2 3 4 5; do
+        TS_IP=$(tailscale ip --4 2>/dev/null)
+        if [ -n "$TS_IP" ]; then
+          echo "[OK] Tailscale joined: $TS_IP" >> $LOG
+          break
+        fi
+        echo "[WAIT] Tailscale not ready, attempt $i/5..." >> $LOG
+        sleep 10
+      done
+      [ -z "$TS_IP" ] && echo "[WARN] Tailscale failed to join after 5 attempts" >> $LOG
+    else
+      echo "[WARN] Tailscale install failed — install manually after boot" >> $LOG
+    fi
 
-    # Deploy Nginx config for api.homeops.now -> FastAPI
+    # ── 5. Nginx + certbot (HTTP-first, then SSL) ─────────────────────────────
+    # CRITICAL: Use HTTP-only config first. DO NOT load SSL config until cert exists.
+    # k3s Traefik was blocking port 80 previously — k3s is now installed with --disable traefik.
+    apt-get install -y certbot python3-certbot-nginx >> $LOG 2>&1
     mkdir -p /var/www/certbot
-    cp /home/ubuntu/homeops/dashboard/nginx/api.homeops.now.conf /etc/nginx/sites-available/api.homeops.now
-    ln -sf /etc/nginx/sites-available/api.homeops.now /etc/nginx/sites-enabled/api.homeops.now
-    rm -f /etc/nginx/sites-enabled/default
 
-    # Install HTTP-only config first so certbot challenge can succeed
+    # HTTP-only config — lets certbot ACME challenge through
     cat > /etc/nginx/sites-available/api.homeops.now << 'NGINXEOF'
 server {
     listen 80;
@@ -108,27 +126,70 @@ server {
     location / { proxy_pass http://localhost:8000; }
 }
 NGINXEOF
-    nginx -t && systemctl reload nginx
+    ln -sf /etc/nginx/sites-available/api.homeops.now /etc/nginx/sites-enabled/api.homeops.now
+    rm -f /etc/nginx/sites-enabled/default
+    nginx -t >> $LOG 2>&1 && systemctl reload nginx >> $LOG 2>&1
+    echo "[OK] nginx HTTP-only config loaded" >> $LOG
 
-    # Obtain Let's Encrypt cert with retry (DNS may not resolve immediately after EIP assignment)
-    for i in 1 2 3 4 5; do
-      if certbot --nginx -d api.homeops.now --non-interactive --agree-tos -m admin@homeops.now; then
-        echo "certbot succeeded on attempt $i" >> /var/log/homeops-bootstrap.log
+    # Run certbot — retry up to 8x with 60s gaps (DNS may take a few minutes to propagate after EIP assignment)
+    CERT_OK=0
+    for i in $(seq 1 8); do
+      if certbot --nginx -d api.homeops.now --non-interactive --agree-tos -m admin@homeops.now >> $LOG 2>&1; then
+        echo "[OK] certbot succeeded on attempt $i" >> $LOG
+        CERT_OK=1
         break
       fi
-      echo "certbot attempt $i failed, retrying in 60s..." >> /var/log/homeops-bootstrap.log
+      echo "[WARN] certbot attempt $i/8 failed, retrying in 60s..." >> $LOG
       sleep 60
     done
 
-    # Install full config with SSL paths (certbot may have already modified the file; overwrite cleanly)
-    cp /home/ubuntu/homeops/dashboard/nginx/api.homeops.now.conf /etc/nginx/sites-available/api.homeops.now
-    nginx -t && systemctl reload nginx
+    # Install full nginx config ONLY if cert was obtained
+    if [ $CERT_OK -eq 1 ] && [ -f /home/ubuntu/homeops/dashboard/nginx/api.homeops.now.conf ]; then
+      cp /home/ubuntu/homeops/dashboard/nginx/api.homeops.now.conf /etc/nginx/sites-available/api.homeops.now
+      nginx -t >> $LOG 2>&1 \
+        && systemctl reload nginx >> $LOG 2>&1 \
+        && echo "[OK] full nginx SSL config installed" >> $LOG \
+        || echo "[WARN] full nginx config failed nginx -t, keeping HTTP-only" >> $LOG
+    else
+      echo "[WARN] certbot failed — keeping HTTP-only nginx config. Run certbot manually after boot." >> $LOG
+    fi
 
     # Enable certbot auto-renewal
-    systemctl enable certbot.timer
-    systemctl start certbot.timer || true
+    systemctl enable certbot.timer >> $LOG 2>&1 || true
+    systemctl start certbot.timer >> $LOG 2>&1 || true
 
-    echo "Bootstrap complete" > /var/log/homeops-bootstrap.log
+    # ── 6. Docker Compose (homeops stack) ────────────────────────────────────
+    if [ -f /home/ubuntu/homeops/dashboard/docker-compose.yml ]; then
+      cd /home/ubuntu/homeops/dashboard
+      sudo -u ubuntu docker compose up -d >> $LOG 2>&1 \
+        && echo "[OK] docker compose up" >> $LOG \
+        || echo "[WARN] docker compose failed — check secrets/env" >> $LOG
+    else
+      echo "[WARN] docker-compose.yml not found, skipping" >> $LOG
+    fi
+
+    # ── 7. k3s agent ─────────────────────────────────────────────────────────
+    # Pull k3s join token from SSM. Token is stored by the Pi operator after k3s server install.
+    # SSM path: /homeops/production/k3s-node-token
+    # If SSM token not available, skip — join manually with: scripts/k3s-agent-join.sh
+    K3S_TOKEN=$(aws ssm get-parameter \
+      --name "/homeops/${var.environment}/k3s-node-token" \
+      --with-decryption \
+      --query 'Parameter.Value' \
+      --output text \
+      --region ${var.aws_region} 2>/dev/null)
+
+    if [ -n "$K3S_TOKEN" ]; then
+      # Pi Tailscale IP is the k3s server
+      K3S_URL="https://${var.tailscale_ip}:6443"
+      curl -sfL https://get.k3s.io | K3S_URL=$K3S_URL K3S_TOKEN=$K3S_TOKEN sh -s - agent >> $LOG 2>&1 \
+        && echo "[OK] k3s agent joined cluster" >> $LOG \
+        || echo "[WARN] k3s agent join failed — join manually" >> $LOG
+    else
+      echo "[INFO] k3s SSM token not found — join cluster manually with: scripts/k3s-agent-join.sh" >> $LOG
+    fi
+
+    echo "=== Bootstrap complete $(date -u) ===" >> $LOG
   EOF
 
   tags = {

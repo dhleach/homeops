@@ -60,6 +60,73 @@ resource "aws_iam_role_policy_attachment" "s3_config_read" {
   policy_arn = aws_iam_policy.s3_config_read.arn
 }
 
+# SSM — k3s node token: EC2 reads it during bootstrap; homeops-deploy user writes it from Pi
+data "aws_iam_policy_document" "ssm_k3s_token_read" {
+  statement {
+    sid     = "ReadK3sToken"
+    effect  = "Allow"
+    actions = ["ssm:GetParameter"]
+    resources = [
+      "arn:aws:ssm:${var.aws_region}:*:parameter/homeops/${var.environment}/k3s-node-token"
+    ]
+  }
+}
+
+resource "aws_iam_policy" "ssm_k3s_token_read" {
+  name        = "homeops-ec2-ssm-k3s-token-${var.environment}"
+  description = "Allow EC2 to read k3s node token from SSM for automated cluster join"
+  policy      = data.aws_iam_policy_document.ssm_k3s_token_read.json
+
+  tags = {
+    Environment = var.environment
+    Project     = "homeops"
+  }
+}
+
+resource "aws_iam_role_policy_attachment" "ssm_k3s_token_read" {
+  role       = aws_iam_role.homeops_ec2.name
+  policy_arn = aws_iam_policy.ssm_k3s_token_read.arn
+}
+
+# SSM write — allow homeops-deploy IAM user (used on Pi) to store k3s token
+# This lets `aws ssm put-parameter` work from the Pi without needing admin creds
+data "aws_iam_policy_document" "ssm_k3s_token_write" {
+  statement {
+    sid    = "WriteK3sToken"
+    effect = "Allow"
+    actions = [
+      "ssm:PutParameter",
+      "ssm:GetParameter",
+      "ssm:DeleteParameter"
+    ]
+    resources = [
+      "arn:aws:ssm:${var.aws_region}:*:parameter/homeops/*"
+    ]
+  }
+  statement {
+    sid     = "KMSForSSM"
+    effect  = "Allow"
+    actions = ["kms:GenerateDataKey", "kms:Decrypt"]
+    resources = ["arn:aws:kms:${var.aws_region}:*:key/alias/aws/ssm"]
+  }
+}
+
+resource "aws_iam_policy" "ssm_k3s_token_write" {
+  name        = "homeops-deploy-ssm-k3s-token-${var.environment}"
+  description = "Allow homeops-deploy IAM user to write k3s token to SSM from Pi"
+  policy      = data.aws_iam_policy_document.ssm_k3s_token_write.json
+
+  tags = {
+    Environment = var.environment
+    Project     = "homeops"
+  }
+}
+
+resource "aws_iam_user_policy_attachment" "ssm_k3s_token_write" {
+  user       = "homeops-deploy"
+  policy_arn = aws_iam_policy.ssm_k3s_token_write.arn
+}
+
 # ── Instance Profile ──────────────────────────────────────────────────────────
 
 resource "aws_iam_instance_profile" "homeops_ec2" {
