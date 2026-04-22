@@ -57,6 +57,16 @@ resource "aws_security_group" "homeops_ec2" {
     cidr_blocks = ["${var.tailscale_ip}/32"]
   }
 
+  # k3s API server - Pi control plane needs to reach EC2
+  # worker on 6443
+  ingress {
+    description = "k3s API server from Pi (Tailscale)"
+    from_port   = 6443
+    to_port     = 6443
+    protocol    = "tcp"
+    cidr_blocks = ["100.115.21.72/32"]
+  }
+
   egress {
     description = "All outbound"
     from_port   = 0
