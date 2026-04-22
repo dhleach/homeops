@@ -236,12 +236,20 @@ NGINXEOF
 # Stable public IP that survives stop/start cycles.
 
 resource "aws_eip" "homeops" {
-  instance = aws_instance.homeops.id
-  domain   = "vpc"
+  domain = "vpc"
 
   tags = {
     Name        = "homeops-eip-${var.environment}"
     Environment = var.environment
     Project     = "homeops"
   }
+
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+resource "aws_eip_association" "homeops" {
+  instance_id   = aws_instance.homeops.id
+  allocation_id = aws_eip.homeops.id
 }
