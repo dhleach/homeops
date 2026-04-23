@@ -217,6 +217,15 @@ else
     curl -sfL https://get.k3s.io | K3S_URL=$K3S_URL K3S_TOKEN=$K3S_TOKEN sh -s - agent >> $LOG 2>&1 \
       && echo "[OK] k3s agent joined cluster" >> $LOG \
       || echo "[WARN] k3s agent join failed — join manually" >> $LOG
+    # kube-router (installed by k3s) inserts iptables rules that block port 80/443.
+    # Insert explicit ACCEPT rules at the top of INPUT to guarantee nginx wins.
+    iptables -I INPUT 1 -p tcp --dport 443 -j ACCEPT >> $LOG 2>&1
+    iptables -I INPUT 1 -p tcp --dport 80 -j ACCEPT >> $LOG 2>&1
+    # Persist rules so they survive reboots
+    apt-get install -y iptables-persistent >> $LOG 2>&1
+    netfilter-persistent save >> $LOG 2>&1 \
+      && echo "[OK] iptables rules persisted" >> $LOG \
+      || echo "[WARN] iptables-persistent save failed" >> $LOG
   else
     echo "[INFO] k3s SSM token not found in SSM — join cluster manually" >> $LOG
   fi
