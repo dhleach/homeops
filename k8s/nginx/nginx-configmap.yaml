@@ -27,7 +27,7 @@ data:
       add_header X-Content-Type-Options "nosniff" always;
       add_header Referrer-Policy "no-referrer-when-downgrade" always;
       location /grafana/ {
-        proxy_pass    http://localhost:3000/grafana/;
+        proxy_pass    http://100.75.59.106:3000/grafana/;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
@@ -39,7 +39,7 @@ data:
       }
       location = /grafana { return 301 /grafana/;}
       location /prometheus/ {
-        proxy_pass    http://localhost:9090/;
+        proxy_pass    http://100.75.59.106:9090/;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
@@ -57,7 +57,7 @@ data:
           add_header Content-Length 0;
           return 204;
         }
-        proxy_pass http://localhost:8000;
+        proxy_pass http://100.75.59.106:8000;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
