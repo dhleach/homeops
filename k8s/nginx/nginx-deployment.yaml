@@ -34,7 +34,7 @@ spec:
             periodSeconds: 5
           livenessProbe:
             httpGet:
-              path: /
+              path: /api/current-temps
               port: 80
               scheme: HTTP
             initialDelaySeconds: 10
