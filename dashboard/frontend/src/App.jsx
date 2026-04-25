@@ -22,12 +22,6 @@ export default function App() {
 
   return (
     <div className="flex min-h-screen flex-col bg-surface">
-      {/* ── Maintenance Banner ── */}
-      <div className="bg-amber-500/15 border-b border-amber-500/30 px-6 py-2.5 text-center text-sm text-amber-300">
-        <span className="mr-2">🔧</span>
-        Kubernetes migration in progress — live data will resume Monday morning.
-        <span className="ml-2 text-amber-400/60">(Through 4/28/26 morning)</span>
-      </div>
       {/* ── Header ─────────────────────────────────────────────────────── */}
       <header className="border-b border-border px-6 py-5">
         <div className="mx-auto flex max-w-5xl items-center justify-between">
