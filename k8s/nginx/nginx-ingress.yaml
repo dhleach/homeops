@@ -6,6 +6,7 @@ metadata:
   annotations:
     cert-manager.io/cluster-issuer: "letsencrypt-prod"
 spec:
+  ingressClassName: traefik
   rules:
     - host: api.homeops.now
       http:
@@ -19,5 +20,5 @@ spec:
                   number: 80
   tls:
     - hosts:
-      - api.homeops.now
+        - api.homeops.now
       secretName: homeops-tls-cert
