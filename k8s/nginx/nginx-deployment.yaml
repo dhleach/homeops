@@ -27,7 +27,7 @@ spec:
             - containerPort: 80
           readinessProbe:
             httpGet:
-              path: /
+              path: /api/current-temps
               port: 80
               scheme: HTTP
             initialDelaySeconds: 5
