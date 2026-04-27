@@ -2,7 +2,7 @@
 
 **Live dashboard → [homeops.now](https://homeops.now) · API → [api.homeops.now/api/current-temps](https://api.homeops.now/api/current-temps)**
 
-A full-stack observability platform for a 3-zone home HVAC system — event-driven Python pipeline on a Raspberry Pi 5, live metrics in Prometheus + Grafana on AWS EC2, React dashboard on S3 + CloudFront, FastAPI backend, all provisioned with Terraform. 25 derived event types, 792 tests.
+A full-stack observability platform for a 3-zone home HVAC system — event-driven Python pipeline on a Raspberry Pi 5, live metrics in Prometheus + Grafana on AWS EC2, React dashboard on S3 + CloudFront, FastAPI backend, all provisioned with Terraform. 25 derived event types, 795 tests.
 
 ## The Problem
 
@@ -304,7 +304,7 @@ cd services
 ../services/observer/.venv/bin/python -m pytest
 ```
 
-792 tests cover observer reconnect logic, consumer event derivation, floor-2 long-call warning and escalation, thermostat tracking, heating cycle analytics, consumer state persistence, Prometheus metrics gauge updates, and insights engine rules (time-of-day pattern analysis, efficiency degradation, heating efficiency scoring).
+795 tests cover observer reconnect logic, consumer event derivation, floor-2 long-call warning and escalation, thermostat tracking, heating cycle analytics, consumer state persistence, Prometheus metrics gauge updates, and insights engine rules (time-of-day pattern analysis, efficiency degradation, heating efficiency scoring).
 
 ### CI
 
