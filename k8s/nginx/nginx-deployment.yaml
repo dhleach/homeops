@@ -5,6 +5,11 @@ metadata:
   namespace: default
 spec:
   replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 0
   selector:
     matchLabels:
       app: nginx
@@ -13,7 +18,6 @@ spec:
       labels:
         app: nginx
     spec:
-      hostNetwork: true
       nodeSelector:
         role: ec2
       containers:
@@ -21,18 +25,24 @@ spec:
           image: nginx:1.27-alpine
           ports:
             - containerPort: 80
-            - containerPort: 443
+          readinessProbe:
+            httpGet:
+              path: /api/current-temps
+              port: 80
+              scheme: HTTP
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /api/current-temps
+              port: 80
+              scheme: HTTP
+            initialDelaySeconds: 10
+            periodSeconds: 10
           volumeMounts:
             - name: nginx-config
               mountPath: /etc/nginx/conf.d
-            - name: letsencrypt
-              mountPath: /etc/letsencrypt
-              readOnly: true
       volumes:
         - name: nginx-config
           configMap:
             name: nginx-config
-        - name: letsencrypt
-          hostPath:
-            path: /etc/letsencrypt
-            type: Directory
