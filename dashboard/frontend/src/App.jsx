@@ -210,7 +210,7 @@ export default function App() {
               <p className="text-sm leading-relaxed text-slate-400">
                 Before software I spent 9 years as a drilling engineer at Shell Oil, where I set the
                 Pennsylvania state record for footage drilled in 24 hours and designed process
-                improvements that saved $15M/year. I made the switch to engineering in 2019 and have
+                improvements that saved $15M/year. I made the switch to software development in 2019 and have
                 been building ever since.
               </p>
               <div className="mt-2 flex items-center gap-4">
