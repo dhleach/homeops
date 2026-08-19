@@ -18,7 +18,9 @@ concurrency group. A push to `master` runs:
    private interface cannot be resolved.
    - It fast-forwards `/home/ubuntu/homeops`.
    - It rebuilds/recreates the FastAPI backend container.
-   - It checks the container, `http://127.0.0.1:8000/health`, and Nginx syntax.
+   - It checks the container, waits with a bounded retry loop for
+     `http://127.0.0.1:8000/health`, and checks Nginx syntax. If the backend
+     never becomes ready, it prints the container state and recent backend logs.
 4. `scripts/deploy_smoke_check.py` verifies the public frontend, API,
    telemetry, Grafana, and Prometheus interfaces.
 
@@ -57,7 +59,9 @@ store a private key in the repository.
 ## Release-gate failure handling
 
 - A Pi failure stops the sequence before EC2 is changed.
-- An EC2 host-local health failure stops before the public smoke check.
+- An EC2 host-local health failure stops before the public smoke check. The
+  backend readiness check tolerates a cold Uvicorn start but fails closed after
+  its bounded retry window, including recent container diagnostics.
 - A public smoke failure fails the GitHub Actions run even if the SSH commands
   completed. Inspect the failing URL, then check the deployed SHA and service
   status on the affected host.
