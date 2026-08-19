@@ -1,6 +1,9 @@
 # HomeOps Infrastructure (Terraform)
 
-Provisions all AWS infrastructure for the [homeops.now](https://homeops.now) public dashboard.
+Provisions the AWS half of the [homeops.now](https://homeops.now) production
+system. The active application runtime is Docker Compose on one ARM64 EC2
+instance; the optional k3s bootstrap is a migration path and is not applied by
+the current GitHub Actions deploy workflow.
 
 ## Resources
 
@@ -13,8 +16,8 @@ Provisions all AWS infrastructure for the [homeops.now](https://homeops.now) pub
 | CloudFront | CDN + HTTPS for frontend, S3 OAC origin |
 | ACM certificate | TLS for `homeops.now` + `*.homeops.now`, DNS-validated, us-east-1 |
 | Route53 hosted zone | `homeops.now` DNS management |
-| Route53 records | Apex → CloudFront, `api.*` → EC2, `grafana.*` → EC2 |
-| Security group | 443/80 public, SSH from Tailscale IP only |
+| Route53 records | Apex → CloudFront, `api.*` → EC2, legacy `grafana.*` → EC2 DNS record |
+| Security group | 443/80 public, SSH from the configured `agent_ip`, Prometheus/k3s control traffic from the Pi Tailscale IP |
 | IAM role + profile | CloudWatch agent + S3 read for EC2 |
 
 ## Prerequisites
@@ -69,6 +72,23 @@ After `terraform apply`:
 | `cloudfront_distribution_id` | GitHub Actions cache invalidation |
 | `s3_bucket_name` | GitHub Actions `aws s3 sync` target |
 | `ssh_connect` | Ready-to-run SSH command |
+
+## Current interfaces
+
+- The current EC2 Elastic IP resolves as `32.194.69.77` for `api.homeops.now`
+  (verified 2026-08-18). Treat the Terraform `ec2_public_ip` output as the
+  authority if the instance is recreated.
+- The Pi Tailscale peer is `100.115.21.72`; it is supplied as `tailscale_ip`
+  and is used for Prometheus scraping and the optional k3s control-plane URL.
+- EC2 host services bind through Docker host networking: FastAPI `:8000`,
+  Prometheus `:9090`, Grafana `:3000`; Nginx owns public `:80`/`:443`.
+- The supported Grafana URL is `https://api.homeops.now/grafana/`. The
+  Terraform-created `grafana.homeops.now` DNS record is not currently a
+  supported virtual host; see [`docs/architecture.md`](../docs/architecture.md).
+
+For the complete topology and deployment ownership model, see
+[`docs/architecture.md`](../docs/architecture.md) and
+[`docs/deployment.md`](../docs/deployment.md).
 
 ## Cost (~$10-11/month)
 

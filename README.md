@@ -2,7 +2,7 @@
 
 **Live dashboard → [homeops.now](https://homeops.now) · API → [api.homeops.now/api/current-temps](https://api.homeops.now/api/current-temps)**
 
-A full-stack observability platform for a 3-zone home HVAC system — event-driven Python pipeline on a Raspberry Pi 5, live metrics in Prometheus + Grafana on AWS EC2, React dashboard on S3 + CloudFront, FastAPI backend, all provisioned with Terraform. 25 derived event types, 795 tests.
+A full-stack observability platform for a 3-zone home HVAC system — event-driven Python pipeline on a Raspberry Pi 5, live metrics in Prometheus + Grafana on AWS EC2, React dashboard on S3 + CloudFront, FastAPI backend, all provisioned with Terraform. 25 derived event types, 836 Python tests, and 30 React tests.
 
 ## The Problem
 
@@ -19,7 +19,7 @@ Home Assistant alone can't prevent this. It sees state changes; it doesn't reaso
 - **Event-driven pipeline** — observer writes raw `state_changed` events to JSONL; consumer tails that file and emits semantically rich derived events downstream
 - **Schema-versioned events** — every event carries a `schema` field (e.g. `homeops.consumer.floor_2_long_call_warning.v1`) for safe downstream evolution
 - **Production-grade operations** — runs as `systemd` services on the Pi, log rotation via `logrotate`, exponential-backoff reconnects on the WebSocket
-- **792 pytest tests + 27 React component tests**, GitHub Actions CI, Ruff lint/format enforcement on every PR
+- **836 Python tests + 30 React component tests**, GitHub Actions CI, Ruff lint/format enforcement on every PR, and post-deploy public smoke checks
 
 ## Architecture
 
@@ -63,14 +63,19 @@ Home Assistant alone can't prevent this. It sees state changes; it doesn't reaso
 ```
 **Full architecture diagrams:** [`docs/architecture/phase1.svg`](docs/architecture/phase1.svg) (Pi + event pipeline) · [`docs/architecture/phase2.svg`](docs/architecture/phase2.svg) (AWS stack + full system)
 
+For the verified address/port map, active-versus-migration boundaries, and
+deployment ownership model, see [`docs/architecture.md`](docs/architecture.md).
+For the release sequence, Pi permission model, rollback guidance, and smoke
+checks, see [`docs/deployment.md`](docs/deployment.md).
+
 
 **Observer** connects to the Home Assistant WebSocket API, subscribes to `state_changed` events for configured entities, and writes one JSON line per event to a JSONL log. It reconnects automatically with exponential backoff.
 
 **Consumer** tails the observer log in real time. It routes each event by entity ID, maintains per-zone heating session state, emits higher-level derived events, and exports live Prometheus metrics via `/metrics`.
 
-**EC2 dashboard stack** — Prometheus scrapes the Pi's `/metrics` endpoint every 15 seconds over Tailscale. Grafana reads from Prometheus and serves 4 provisioned dashboards. FastAPI queries Prometheus and exposes structured JSON at `/api/current-temps`. Nginx proxies both behind a TLS subdomain.
+**EC2 dashboard stack** — Prometheus scrapes the Pi's `/metrics` endpoint every 15 seconds over Tailscale. Grafana reads from Prometheus and serves 4 provisioned dashboards. FastAPI queries Prometheus and exposes structured JSON at `/api/current-temps`. Nginx proxies both behind a TLS subdomain. The active production stack uses Docker Compose with host networking; the Kubernetes manifests are a separate migration surface.
 
-**Frontend** — React + Tailwind, built by GitHub Actions and deployed to S3/CloudFront on every push to `master`.
+**Frontend** — React + Tailwind, built by GitHub Actions and deployed to S3/CloudFront when frontend files or its deploy workflow change on `master`.
 
 All infrastructure (EC2, S3, CloudFront, Route53, ACM, IAM) is managed with Terraform.
 
@@ -172,12 +177,17 @@ homeops/
 │   ├── furnace_duty_cycle.py          # CLI: furnace duty cycle % for any time window
 │   ├── furnace_session_analysis.py    # CLI: correlate furnace session length vs outdoor temp (CSV output)
 │   ├── temp_correlation.py            # CLI: Pearson correlation — outdoor temp vs floor runtime
-│   └── validate_floor_aggregation.py # dev: validate floor_daily_summary totals vs raw events
+│   ├── validate_floor_aggregation.py # dev: validate floor_daily_summary totals vs raw events
+│   └── deploy_smoke_check.py          # release gate for public frontend/API/observability
 ├── docs/
+│   ├── architecture.md               # verified topology, addresses, ports, and boundaries
+│   ├── deployment.md                 # CI/CD sequence, permissions, rollback, smoke checks
 │   └── event-schemas/
 │       └── consumer-events.md    # authoritative event schema reference
 ├── deploy/
-│   └── logrotate/                # logrotate config for JSONL files
+│   ├── deploy-pi.sh               # owner-scoped Pi deploy streamed by CI
+│   ├── deploy-ec2.sh              # EC2 backend deploy + host-local checks
+│   └── logrotate/                 # logrotate config for JSONL files
 ├── state/
 │   ├── observer/events.jsonl     # runtime output, gitignored
 │   └── consumer/events.jsonl    # derived events, gitignored
@@ -304,11 +314,11 @@ cd services
 ../services/observer/.venv/bin/python -m pytest
 ```
 
-795 tests cover observer reconnect logic, consumer event derivation, floor-2 long-call warning and escalation, thermostat tracking, heating cycle analytics, consumer state persistence, Prometheus metrics gauge updates, and insights engine rules (time-of-day pattern analysis, efficiency degradation, heating efficiency scoring).
+836 Python tests cover observer reconnect logic, consumer event derivation, floor-2 long-call warning and escalation, thermostat tracking, heating cycle analytics, consumer state persistence, Prometheus metrics gauge updates, the FastAPI backend, deployment smoke checks, and insights engine rules. The frontend has 30 React component tests.
 
 ### CI
 
-GitHub Actions runs Ruff lint and format checks on every PR and push to `master`. PRs that fail lint are blocked from merging.
+GitHub Actions runs Ruff lint and format checks on every PR and push to `master`. The Python CI job also runs the deployment smoke-check tests. Production deploys run host-local checks and then verify the public frontend, API, Grafana, and Prometheus endpoints before succeeding.
 
 ### Branching
 
@@ -453,3 +463,5 @@ Output includes current zone temps and setpoints, today's runtime by floor, yest
 
 - Never commit secrets from `secrets/`.
 - Treat `HA_TOKEN` like a password. If one is exposed, revoke it in Home Assistant immediately and generate a new one.
+- The operational IPs in the architecture/deployment docs are routing metadata, not credentials. Keep tokens, private keys, and Terraform state out of Git.
+- `api.homeops.now/grafana/` is the supported Grafana interface. The separate `grafana.homeops.now` DNS record is not currently a supported endpoint; see [`docs/architecture.md`](docs/architecture.md).

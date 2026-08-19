@@ -20,10 +20,10 @@ jobs:
           pip install ruff
       - name: Run ruff format check
         run: |
-          ruff format --check --diff services/observer/observer.py services/consumer/consumer.py
+          ruff format --check --diff services/observer/observer.py services/consumer/consumer.py scripts/deploy_smoke_check.py scripts/tests/test_deploy_smoke_check.py
       - name: Run ruff checks
         run: |
-          ruff check services/observer/observer.py services/consumer/consumer.py
+          ruff check services/observer/observer.py services/consumer/consumer.py scripts/deploy_smoke_check.py scripts/tests/test_deploy_smoke_check.py
 
   pytest:
     runs-on: ubuntu-latest
@@ -40,4 +40,4 @@ jobs:
           pip install -r services/consumer/requirements.txt
       - name: Run tests
         run: |
-          PYTHONPATH=services/consumer pytest services/consumer/tests/ -v
+          PYTHONPATH=services/consumer pytest services/consumer/tests/ scripts/tests/test_deploy_smoke_check.py -v

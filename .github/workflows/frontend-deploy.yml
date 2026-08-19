@@ -55,3 +55,6 @@ jobs:
           aws cloudfront create-invalidation \
             --distribution-id E2AOYUC5QNBP7C \
             --paths "/*"
+
+      - name: Verify public deployment
+        run: python3 scripts/deploy_smoke_check.py
