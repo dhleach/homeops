@@ -4,12 +4,29 @@ on:
   push:
     branches: [ master ]
 
+concurrency:
+  group: homeops-production-deploy
+  cancel-in-progress: false
+
 jobs:
   deploy:
     name: Deploy to Pi
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    env:
+      # These are operational addresses, not credentials. Keep them aligned
+      # with infra/variables.tf, dashboard/prometheus/prometheus.yml, and
+      # docs/architecture.md when infrastructure changes.
+      PI_TAILSCALE_IP: 100.115.21.72
+      EC2_TAILSCALE_HOST: homeops-ec2
+      EC2_PUBLIC_IP: 32.194.69.77
 
     steps:
+      - name: Checkout deployment scripts
+        uses: actions/checkout@v4
+
       - name: Connect to Tailnet
         uses: tailscale/github-action@v3
         with:
@@ -18,8 +35,26 @@ jobs:
           tags: tag:ci
           version: latest
 
-      - name: Wait for Tailscale
-        run: sleep 5
+      - name: Verify Tailnet interface
+        run: |
+          for attempt in 1 2 3 4 5 6; do
+            if tailscale ping --timeout=5s "${PI_TAILSCALE_IP}"; then
+              exit 0
+            fi
+            echo "Tailnet peer not ready; retry ${attempt}/6"
+            sleep 5
+          done
+          exit 1
+
+      - name: Select EC2 deployment interface
+        run: |
+          if tailscale ping --timeout=5s "${EC2_TAILSCALE_HOST}"; then
+            echo "EC2_SSH_HOST=${EC2_TAILSCALE_HOST}" >> "$GITHUB_ENV"
+            echo "Using the EC2 Tailnet hostname for SSH"
+          else
+            echo "EC2_SSH_HOST=${EC2_PUBLIC_IP}" >> "$GITHUB_ENV"
+            echo "EC2 Tailnet hostname unavailable; using the public EIP fallback"
+          fi
 
       - name: Write SSH key
         run: |
@@ -30,10 +65,11 @@ jobs:
         run: |
           ssh -i ${{ runner.temp }}/deploy_key \
             -o ConnectTimeout=30 \
-            -o StrictHostKeyChecking=no \
-            -o UserKnownHostsFile=/dev/null \
-            github-deploy@100.115.21.72 \
-            "cd /home/leachd/repos/homeops && git pull origin master && sudo systemctl restart homeops-observer && sudo systemctl restart homeops-consumer && echo 'Pi deploy complete'"
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=accept-new \
+            -o UserKnownHostsFile=${{ runner.temp }}/known_hosts \
+            "github-deploy@${PI_TAILSCALE_IP}" \
+            'bash -s' < deploy/deploy-pi.sh
 
       - name: Write EC2 SSH key
         run: |
@@ -44,7 +80,11 @@ jobs:
         run: |
           ssh -i ${{ runner.temp }}/ec2_deploy_key \
             -o ConnectTimeout=30 \
-            -o StrictHostKeyChecking=no \
-            -o UserKnownHostsFile=/dev/null \
-            ubuntu@32.194.69.77 \
-            "cd /home/ubuntu/homeops && git pull origin master && cd dashboard && docker compose up -d --build --force-recreate backend && sudo chown -R ubuntu:ubuntu /home/ubuntu/homeops/dashboard && echo 'EC2 backend deploy complete'"
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=accept-new \
+            -o UserKnownHostsFile=${{ runner.temp }}/known_hosts \
+            "ubuntu@${EC2_SSH_HOST}" \
+            'bash -s' < deploy/deploy-ec2.sh
+
+      - name: Verify public deployment
+        run: python3 scripts/deploy_smoke_check.py

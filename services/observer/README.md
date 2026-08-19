@@ -2,6 +2,10 @@
 
 The observer is a lightweight Python daemon that connects to the Home Assistant WebSocket API, filters for a configurable set of HVAC sensor entities, and streams structured JSONL events to stdout and an optional append-only log file. It is the first stage in the homeops data pipeline: raw sensor state changes become a durable, machine-readable event stream that downstream consumers can tail in real time.
 
+For the host/network boundary around this service, see the repository-level
+[`docs/architecture.md`](../../docs/architecture.md) and
+[`docs/deployment.md`](../../docs/deployment.md).
+
 ---
 
 ## Table of Contents
@@ -76,6 +80,7 @@ Emitted whenever a watched entity transitions between states.
 | `data.entity_id` | string | Home Assistant entity ID (e.g. `binary_sensor.furnace_heating`) |
 | `data.old_state` | string \| null | Previous entity state (e.g. `"off"`) |
 | `data.new_state` | string \| null | New entity state (e.g. `"on"`) |
+| `data.attributes` | object (optional) | Home Assistant attributes when the new state includes them, especially climate temperature/setpoint fields |
 
 **Example:**
 
@@ -98,7 +103,9 @@ Emitted whenever a watched entity transitions between states.
 
 ## Entity Reference
 
-The default `WATCH_ENTITIES` set covers four binary sensors that together describe the state of a three-zone forced-air heating system.
+The production example watches eight entities: four binary sensors, three
+climate thermostats, and one outdoor-temperature sensor. The observer itself
+has no hard-coded allowlist; `WATCH_ENTITIES` controls the subscription filter.
 
 | Entity ID | Friendly Name | Floor / Zone | Represents |
 |---|---|---|---|
@@ -106,8 +113,16 @@ The default `WATCH_ENTITIES` set covers four binary sensors that together descri
 | `binary_sensor.floor_1_heating_call` | Floor 1 Heating Call | Floor 1 | `on` when the floor-1 zone thermostat is calling for heat |
 | `binary_sensor.floor_2_heating_call` | Floor 2 Heating Call | Floor 2 | `on` when the floor-2 zone thermostat is calling for heat |
 | `binary_sensor.floor_3_heating_call` | Floor 3 Heating Call | Floor 3 | `on` when the floor-3 zone thermostat is calling for heat |
+| `climate.floor_1_thermostat` | Floor 1 Thermostat | Floor 1 | HVAC mode plus current temperature and setpoint attributes |
+| `climate.floor_2_thermostat` | Floor 2 Thermostat | Floor 2 | HVAC mode plus current temperature and setpoint attributes |
+| `climate.floor_3_thermostat` | Floor 3 Thermostat | Floor 3 | HVAC mode plus current temperature and setpoint attributes |
+| `sensor.outdoor_temperature` | Outdoor Temperature | Environment | Outdoor temperature state in °F |
 
-All four are `binary_sensor` entities with states `"on"` / `"off"`. The furnace sensor tracks the actual burner; the per-floor sensors track zone damper/thermostat calls. A floor can be calling for heat while the furnace is temporarily off (e.g. between cycles), so the two dimensions are independent.
+The four binary sensors have states `"on"` / `"off"`; the furnace sensor tracks
+the actual burner while the per-floor sensors track zone calls. Climate states
+are HVAC modes (`heat`, `cool`, or `off`) and carry numeric attributes. A floor
+can be calling for heat while the furnace is temporarily off (e.g. between
+cycles), so the two dimensions are independent.
 
 ---
 
@@ -126,7 +141,7 @@ The observer loads environment variables from a dotenv file, then allows process
 ### Example `secrets/observer.env`
 
 ```dotenv
-WATCH_ENTITIES=binary_sensor.furnace_heating,binary_sensor.floor_1_heating_call,binary_sensor.floor_2_heating_call,binary_sensor.floor_3_heating_call
+WATCH_ENTITIES=binary_sensor.furnace_heating,binary_sensor.floor_1_heating_call,binary_sensor.floor_2_heating_call,binary_sensor.floor_3_heating_call,climate.floor_1_thermostat,climate.floor_2_thermostat,climate.floor_3_thermostat,sensor.outdoor_temperature
 HA_ENV_FILE=secrets/ha.env
 OBSERVER_EVENT_LOG=state/observer/events.jsonl
 ```
@@ -160,6 +175,7 @@ pip install -r requirements.txt
 ### Configure secrets
 
 ```bash
+cd ../..
 cp secrets/ha.env.example secrets/ha.env
 cp secrets/observer.env.example secrets/observer.env
 # Edit both files and fill in HA_WS_URL and HA_TOKEN
@@ -168,7 +184,7 @@ cp secrets/observer.env.example secrets/observer.env
 ### Run
 
 ```bash
-HA_ENV_FILE=secrets/observer.env python observer.py
+HA_ENV_FILE=secrets/observer.env python services/observer/observer.py
 ```
 
 Events are written to stdout as they arrive:
@@ -185,7 +201,7 @@ Events are written to stdout as they arrive:
 ### Pipe to the consumer
 
 ```bash
-HA_ENV_FILE=secrets/observer.env python observer.py | python services/consumer/consumer.py
+HA_ENV_FILE=secrets/observer.env python services/observer/observer.py | python services/consumer/consumer.py
 ```
 
 Or let each service manage its own log file and use `OBSERVER_EVENT_LOG` / `EVENT_LOG` to decouple them.
@@ -225,7 +241,7 @@ HA_ENV_FILE=secrets/observer.env python observer.py | python3 validate_schema.py
 | `ts` is a non-empty string | Error |
 | `data` contains `entity_id`, `old_state`, `new_state` | Error |
 | `data.new_state` is non-null and non-empty | Error |
-| `entity_id` is one of the 5 known entities | Warning only (printed to stderr) |
+| `entity_id` is one of the 8 known entities | Warning only (printed to stderr) |
 | Binary sensor `new_state` is `"on"`, `"off"`, or `"unavailable"` | Error |
 | `sensor.outdoor_temperature` state is a float or `"unavailable"`/`"unknown"` | Error |
 

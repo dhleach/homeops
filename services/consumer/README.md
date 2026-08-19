@@ -2,6 +2,10 @@
 
 The consumer is a Python daemon that tails the observer's JSONL event stream in real time and emits higher-level **derived events** — floor heating-call sessions, whole-home heating sessions, thermostat/climate state changes, per-zone heating performance metrics, and in-flight overheating warnings. It is the second stage in the homeops data pipeline.
 
+For the host/network boundary around this service, see the repository-level
+[`docs/architecture.md`](../../docs/architecture.md) and
+[`docs/deployment.md`](../../docs/deployment.md).
+
 ---
 
 ## Table of Contents
@@ -37,7 +41,7 @@ The consumer reads the observer's raw `state_changed` events and produces semant
 
 ### Module structure
 
-The consumer is split across seven focused files:
+The consumer is split across nine focused modules:
 
 | Module | Responsibility |
 |---|---|
@@ -73,9 +77,9 @@ The consumer filters for `schema == "homeops.observer.state_changed.v1"` and ign
 | `binary_sensor.floor_3_heating_call` | `floor_call_started.v1`, `floor_call_ended.v1` |
 | `binary_sensor.furnace_heating` | `heating_session_started.v1`, `heating_session_ended.v1` |
 | `sensor.outdoor_temperature` | `outdoor_temp_updated.v1` |
-| `climate.floor_1_thermostat` | `thermostat_setpoint_changed.v1`, `thermostat_current_temp_updated.v1`, `thermostat_mode_changed.v1`, `thermostat_setpoint_reached.v1`, `zone_time_to_temp.v1`, `zone_overshoot.v1`, `zone_undershoot.v1` |
-| `climate.floor_2_thermostat` | `thermostat_setpoint_changed.v1`, `thermostat_current_temp_updated.v1`, `thermostat_mode_changed.v1`, `thermostat_setpoint_reached.v1`, `zone_time_to_temp.v1`, `zone_overshoot.v1`, `zone_undershoot.v1` |
-| `climate.floor_3_thermostat` | `thermostat_setpoint_changed.v1`, `thermostat_current_temp_updated.v1`, `thermostat_mode_changed.v1`, `thermostat_setpoint_reached.v1`, `zone_time_to_temp.v1`, `zone_overshoot.v1`, `zone_undershoot.v1` |
+| `climate.floor_1_thermostat` | `thermostat_setpoint_changed.v1`, `thermostat_current_temp_updated.v1`, `thermostat_mode_changed.v1`, `thermostat_setpoint_reached.v1`, `zone_time_to_temp.v1`, `zone_overshoot.v1`, `zone_setpoint_miss.v1`, `zone_slow_to_heat_warning.v1` |
+| `climate.floor_2_thermostat` | `thermostat_setpoint_changed.v1`, `thermostat_current_temp_updated.v1`, `thermostat_mode_changed.v1`, `thermostat_setpoint_reached.v1`, `zone_time_to_temp.v1`, `zone_overshoot.v1`, `zone_setpoint_miss.v1`, `zone_slow_to_heat_warning.v1` |
+| `climate.floor_3_thermostat` | `thermostat_setpoint_changed.v1`, `thermostat_current_temp_updated.v1`, `thermostat_mode_changed.v1`, `thermostat_setpoint_reached.v1`, `zone_time_to_temp.v1`, `zone_overshoot.v1`, `zone_setpoint_miss.v1`, `zone_slow_to_heat_warning.v1` |
 
 Additionally, `furnace_daily_summary.v1` is emitted once per UTC calendar day at the first event after midnight, followed immediately by three `floor_daily_summary.v1` events (one per floor).
 
@@ -92,9 +96,11 @@ Every derived event is:
 
 > **Full authoritative schema reference:** [`docs/event-schemas/consumer-events.md`](../../docs/event-schemas/consumer-events.md)
 >
-> That document contains complete field tables with source/rationale columns, design notes, and planned (not-yet-implemented) events. The sections below are the working reference for the 16 currently implemented event types.
+> That document contains complete field tables with source/rationale columns, design notes, and planned (not-yet-implemented) events. The sections below are the working reference for the currently implemented event types.
 
-The consumer emits fifteen derived event types. All share a common envelope.
+The consumer emits 25 derived event types. All share a common envelope. The
+authoritative list is maintained in `docs/event-schemas/consumer-events.md`; the
+working sections below cover the most frequently inspected event payloads.
 
 ### Common envelope
 
@@ -499,45 +505,6 @@ Emitted when a heating session ends (`hvac_action` leaves `"heating"`) and setpo
 
 ---
 
-### `homeops.consumer.zone_undershoot.v1`
-
-Emitted when a heating session ends (`hvac_action` leaves `"heating"`) and setpoint was **never reached** during the session. The `likely_cause` field distinguishes a deliberate setpoint adjustment from an unexplained early shutdown.
-
-| Field | Type | Description |
-|---|---|---|
-| `data.entity_id` | string | Climate entity ID |
-| `data.zone` | string | Zone identifier |
-| `data.start_temp_f` | float \| null | Temperature when `hvac_action` became `"heating"` |
-| `data.final_temp_f` | float \| null | Temperature when `hvac_action` left `"heating"` |
-| `data.setpoint_f` | float \| null | The target temperature that was not reached |
-| `data.shortfall_f` | float | `setpoint_f - final_temp_f`: degrees below setpoint at session end |
-| `data.call_duration_s` | integer | Seconds from session start to session end |
-| `data.outdoor_temp_f` | float \| null | Last known outdoor temperature at emission time |
-| `data.likely_cause` | string | `"thermostat_adjustment"` if the setpoint changed during the active heating session; `"unknown"` otherwise |
-
-**Example:**
-
-```json
-{
-  "schema": "homeops.consumer.zone_undershoot.v1",
-  "source": "consumer.v1",
-  "ts": "2026-03-19T05:22:44.903100+00:00",
-  "data": {
-    "entity_id": "climate.floor_3_thermostat",
-    "zone": "floor_3",
-    "start_temp_f": 62.0,
-    "final_temp_f": 66.5,
-    "setpoint_f": 68.0,
-    "shortfall_f": 1.5,
-    "call_duration_s": 2880,
-    "outdoor_temp_f": 14.2,
-    "likely_cause": "unknown"
-  }
-}
-```
-
----
-
 ### `homeops.consumer.furnace_daily_summary.v1`
 
 Emitted once per UTC calendar day at the first observer event with a new date (i.e. just after midnight UTC). Summarises the previous day's accumulated furnace and floor runtime.
@@ -644,7 +611,11 @@ Floor call start times are **not** bootstrapped — if the consumer restarts mid
 
 ## Prometheus Metrics (`/metrics`)
 
-The consumer exposes live HVAC telemetry in Prometheus exposition format at `GET http://localhost:8001/metrics`. This is the data pipeline source for the [homeops.now](https://homeops.now) public dashboard.
+The consumer exposes live HVAC telemetry in Prometheus exposition format at
+`GET http://127.0.0.1:8001/metrics` on the Pi. Prometheus on EC2 reaches the
+same listener at `http://100.115.21.72:8001/metrics` over Tailscale; it is not a
+public Internet endpoint. This is the data pipeline source for the
+[homeops.now](https://homeops.now) public dashboard.
 
 | Metric | Type | Labels | Description |
 |---|---|---|---|
@@ -707,4 +678,7 @@ TELEGRAM_CHAT_ID=<chat-id> \
 python3 services/consumer/consumer.py
 ```
 
-**As a systemd service:** See the Pi Baseline setup documentation for the `homeops-consumer.service` unit file.
+**As a systemd service:** The production unit is `homeops-consumer.service` on
+the Pi. See the repository-level [`docs/deployment.md`](../../docs/deployment.md)
+for the deployment/restart contract and [`docs/architecture.md`](../../docs/architecture.md)
+for the network boundary.
