@@ -187,6 +187,7 @@ homeops/
 ├── deploy/
 │   ├── deploy-pi.sh               # owner-scoped Pi deploy streamed by CI
 │   ├── deploy-ec2.sh              # EC2 backend deploy + host-local checks
+│   ├── tests/test-deploy-ec2.sh   # shell coverage for the EC2 readiness gate
 │   └── logrotate/                 # logrotate config for JSONL files
 ├── state/
 │   ├── observer/events.jsonl     # runtime output, gitignored

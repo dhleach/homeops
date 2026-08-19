@@ -41,3 +41,12 @@ jobs:
       - name: Run tests
         run: |
           PYTHONPATH=services/consumer pytest services/consumer/tests/ scripts/tests/test_deploy_smoke_check.py -v
+
+  shell:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate deployment shell scripts
+        run: bash -n deploy/deploy-ec2.sh deploy/deploy-pi.sh deploy/tests/test-deploy-ec2.sh
+      - name: Run deployment shell tests
+        run: bash deploy/tests/test-deploy-ec2.sh
