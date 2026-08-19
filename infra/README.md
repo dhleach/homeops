@@ -48,6 +48,15 @@ terraform apply
 terraform output
 ```
 
+## CI SSH identity
+
+The EC2 bootstrap in [`ec2.tf`](ec2.tf) installs the dedicated
+`homeops-ec2-deploy` public key for the GitHub Actions backend deploy. The
+matching private key belongs only in the repository's GitHub Actions
+`EC2_DEPLOY_SSH_KEY` secret; never commit or place that private key in
+Terraform state. Keep this CI identity separate from the personal
+`homeops-production`/Pi key.
+
 ## Important: Hosted Zone
 
 Route53 may have **auto-created a hosted zone** when `homeops.now` was registered.

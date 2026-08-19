@@ -1,0 +1,9 @@
+# Canonical least-privilege policy for the GitHub Actions Pi deploy account.
+# Keep this file in sync with docs/deployment.md.
+#
+# The account can update only the production checkout as its owner and restart
+# or inspect the two HomeOps services. It must not receive broad root access.
+Cmnd_Alias HOMEOPS_GIT = /usr/bin/git -C /home/leachd/repos/homeops *
+Cmnd_Alias HOMEOPS_SERVICES = /usr/bin/systemctl restart homeops-observer, /usr/bin/systemctl restart homeops-consumer, /usr/bin/systemctl is-active --quiet homeops-observer, /usr/bin/systemctl is-active --quiet homeops-consumer
+github-deploy ALL=(leachd) NOPASSWD: HOMEOPS_GIT
+github-deploy ALL=(root) NOPASSWD: HOMEOPS_SERVICES

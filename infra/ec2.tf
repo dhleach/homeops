@@ -84,6 +84,7 @@ ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIK4NwtPsdoheR2mUazj1QydrJXYp/qtWbEUDmgQiWES3
 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHeD3GdgQoCeFJNsimj5MzcUZDHG/pFemcScU0qRg5Tz bobclawbot@openclaw
 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIF0AyrnOaA5cfz8vA3JcP+eeWiXavnts2KDj1Byl5Kfx dhlea@LAPTOP-DH9TGJI8
 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIK4NwtPsdoheR2mUazj1QydrJXYp/qtWbEUDmgQiWES3 leachd@pi-homeops
+ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHdWYhaIu/u8siZPFBe42Sb8lRB59Y7tHo7sC4w8Qd3n homeops-ec2-deploy
 SSHKEYS
 chmod 600 /home/ubuntu/.ssh/authorized_keys
 chown -R ubuntu:ubuntu /home/ubuntu/.ssh
