@@ -35,26 +35,52 @@ checkout owned by `leachd`; Git could not write `.git/objects`. The fix is to
 run Git as the owner, not to recursively make the repository writable by every
 deployment process.
 
-The Pi must have a narrowly scoped sudo policy for the CI account. Install and
-validate this as an administrator on the Pi, adjusting executable paths with
-`command -v` if the distribution differs:
+The Pi must have one narrowly scoped sudo policy for the CI account. The
+reviewed source of truth is
+[`deploy/sudoers/homeops-github-deploy`](../deploy/sudoers/homeops-github-deploy).
+The canonical installed path is `/etc/sudoers.d/homeops-github-deploy`.
+Install and validate it as an administrator on the Pi, adjusting executable
+paths with `command -v` if the distribution differs:
 
 ```sudoers
-# /etc/sudoers.d/homeops-github-deploy
-Cmnd_Alias HOMEOPS_GIT = /usr/bin/git -C /home/leachd/repos/homeops *
-Cmnd_Alias HOMEOPS_SERVICES = /usr/bin/systemctl restart homeops-observer, /usr/bin/systemctl restart homeops-consumer, /usr/bin/systemctl is-active --quiet homeops-observer, /usr/bin/systemctl is-active --quiet homeops-consumer
-github-deploy ALL=(leachd) NOPASSWD: HOMEOPS_GIT
-github-deploy ALL=(root) NOPASSWD: HOMEOPS_SERVICES
+# See deploy/sudoers/homeops-github-deploy in the repository.
 ```
 
 ```bash
+sudo install -o root -g root -m 0440 \
+  deploy/sudoers/homeops-github-deploy \
+  /etc/sudoers.d/homeops-github-deploy
 sudo visudo -cf /etc/sudoers.d/homeops-github-deploy
 sudo -u leachd -H git -C /home/leachd/repos/homeops status --porcelain
 sudo -n -u leachd -H git -C /home/leachd/repos/homeops branch --show-current
 ```
 
+After the canonical file validates, remove the stale duplicate if it exists,
+then validate the complete sudoers configuration again:
+
+```bash
+sudo rm -f /etc/sudoers.d/github-deploy
+sudo visudo -c
+sudo -u github-deploy -H sudo -n -u leachd -H \
+  git -C /home/leachd/repos/homeops branch --show-current
+sudo -u github-deploy -H sudo -n systemctl is-active --quiet homeops-observer
+sudo -u github-deploy -H sudo -n systemctl is-active --quiet homeops-consumer
+```
+
+The duplicate removal is intentionally administrator-only: `github-deploy` and
+the Bob agent do not have permission to alter `/etc/sudoers.d`.
+
 Do not grant `github-deploy` `NOPASSWD: ALL`, make `.git` world-writable, or
 store a private key in the repository.
+
+## EC2 CI SSH identity
+
+The dedicated `homeops-ec2-deploy` public key is baked into the EC2
+`authorized_keys` bootstrap in [`infra/ec2.tf`](../infra/ec2.tf). Its private
+half remains only in the GitHub Actions `EC2_DEPLOY_SSH_KEY` secret. Keep that
+identity separate from the personal `homeops-production`/Pi key; when rotating
+the CI credential, replace both halves together and compare the public-key
+fingerprint before rerunning the release workflow.
 
 ## Release-gate failure handling
 

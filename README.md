@@ -187,6 +187,8 @@ homeops/
 ├── deploy/
 │   ├── deploy-pi.sh               # owner-scoped Pi deploy streamed by CI
 │   ├── deploy-ec2.sh              # EC2 backend deploy + host-local checks
+│   ├── sudoers/homeops-github-deploy # canonical least-privilege Pi policy
+│   ├── tests/test-pi-sudoers.sh   # static/visudo coverage for the Pi policy
 │   ├── tests/test-deploy-ec2.sh   # shell coverage for the EC2 readiness gate
 │   └── logrotate/                 # logrotate config for JSONL files
 ├── state/
