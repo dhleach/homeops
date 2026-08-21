@@ -35,7 +35,7 @@ describe("AskHvac", () => {
   it("renders header and subtitle", () => {
     render(<AskHvac apiUrl="https://api.homeops.now" />);
     expect(screen.getByText("Ask HomeOps")).toBeInTheDocument();
-    expect(screen.getByText(/Powered by Gemini/)).toBeInTheDocument();
+    expect(screen.getByText("Powered by Gemini 2.5 Flash · live HVAC data")).toBeInTheDocument();
   });
 
   it("renders all 3 suggested question chips", () => {

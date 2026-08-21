@@ -2,7 +2,7 @@
 
 **Live dashboard → [homeops.now](https://homeops.now) · API → [api.homeops.now/api/current-temps](https://api.homeops.now/api/current-temps)**
 
-A full-stack observability platform for a 3-zone home HVAC system — event-driven Python pipeline on a Raspberry Pi 5, live metrics in Prometheus + Grafana on AWS EC2, React dashboard on S3 + CloudFront, FastAPI backend, all provisioned with Terraform. 25 derived event types, 836 Python tests, and 30 React tests.
+A full-stack observability platform for a 3-zone home HVAC system — event-driven Python pipeline on a Raspberry Pi 5, live metrics in Prometheus + Grafana on AWS EC2, React dashboard on S3 + CloudFront, FastAPI backend, all provisioned with Terraform. 25 derived event types, 841 Python tests, and 30 React component tests.
 
 ## The Problem
 
@@ -19,7 +19,7 @@ Home Assistant alone can't prevent this. It sees state changes; it doesn't reaso
 - **Event-driven pipeline** — observer writes raw `state_changed` events to JSONL; consumer tails that file and emits semantically rich derived events downstream
 - **Schema-versioned events** — every event carries a `schema` field (e.g. `homeops.consumer.floor_2_long_call_warning.v1`) for safe downstream evolution
 - **Production-grade operations** — runs as `systemd` services on the Pi, log rotation via `logrotate`, exponential-backoff reconnects on the WebSocket
-- **836 Python tests + 30 React component tests**, GitHub Actions CI, Ruff lint/format enforcement on every PR, and post-deploy public smoke checks
+- **841 Python tests + 30 React component tests**, GitHub Actions CI, Ruff lint/format enforcement on every PR, and post-deploy public smoke checks
 
 ## Architecture
 
@@ -152,7 +152,7 @@ homeops/
 │   ├── iam.tf                    # EC2 IAM role + instance profile
 │   └── outputs.tf                # EC2 IP, CF distribution ID, S3 bucket name
 ├── dashboard/
-│   ├── backend/                  # FastAPI — /api/current-temps, auth, recruiter mgmt
+│   ├── backend/                  # FastAPI — telemetry and diagnostic APIs
 │   └── frontend/                 # React + Tailwind — homeops.now public site
 ├── compose/
 │   └── docker-compose.yml        # Home Assistant container
@@ -178,10 +178,12 @@ homeops/
 │   ├── furnace_session_analysis.py    # CLI: correlate furnace session length vs outdoor temp (CSV output)
 │   ├── temp_correlation.py            # CLI: Pearson correlation — outdoor temp vs floor runtime
 │   ├── validate_floor_aggregation.py # dev: validate floor_daily_summary totals vs raw events
-│   └── deploy_smoke_check.py          # release gate for public frontend/API/observability
+│   ├── deploy_smoke_check.py          # release gate for public frontend/API/observability
+│   └── test_counts.py                 # CI-generated canonical test-count validation
 ├── docs/
 │   ├── architecture.md               # verified topology, addresses, ports, and boundaries
 │   ├── deployment.md                 # CI/CD sequence, permissions, rollback, smoke checks
+│   ├── test-counts.json              # CI-verified Python and React test counts
 │   └── event-schemas/
 │       └── consumer-events.md    # authoritative event schema reference
 ├── deploy/
@@ -313,15 +315,22 @@ services/observer/.venv/bin/ruff check --fix services/
 ### Tests
 
 ```bash
-cd services
-../services/observer/.venv/bin/python -m pytest
+pip install pytest pytest-asyncio respx
+pip install -r services/consumer/requirements.txt \
+  -r services/observer/requirements.txt \
+  -r dashboard/backend/requirements.txt
+PYTHONPATH=services/consumer:services/observer:services/insights:dashboard/backend:scripts \
+  python3 -m pytest --import-mode=importlib \
+  services/observer/tests services/consumer/tests services/insights/rules/tests \
+  dashboard/backend/tests scripts/tests
+NODE_ENV=test npm --prefix dashboard/frontend test
 ```
 
-836 Python tests cover observer reconnect logic, consumer event derivation, floor-2 long-call warning and escalation, thermostat tracking, heating cycle analytics, consumer state persistence, Prometheus metrics gauge updates, the FastAPI backend, deployment smoke checks, and insights engine rules. The frontend has 30 React component tests.
+841 Python tests cover observer reconnect logic, consumer event derivation, floor-2 long-call warning and escalation, thermostat tracking, heating cycle analytics, consumer state persistence, Prometheus metrics gauge updates, the FastAPI backend, deployment smoke checks, insights engine rules, and test-count validation. The frontend has 30 React component tests. The canonical counts live in [`docs/test-counts.json`](docs/test-counts.json) and are verified against CI runner output.
 
 ### CI
 
-GitHub Actions runs Ruff lint and format checks on every PR and push to `master`. The Python CI job also runs the deployment smoke-check tests. Production deploys run host-local checks and then verify the public frontend, API, Grafana, and Prometheus endpoints before succeeding.
+GitHub Actions runs Ruff lint and format checks on every PR and push to `master`. The CI test job runs the complete Python and React suites, generates JUnit/Vitest reports, and fails if the canonical count or README claims drift. Production deploys run host-local checks and then verify the public frontend, API, Grafana, and Prometheus endpoints before succeeding.
 
 ### Branching
 

@@ -23,4 +23,4 @@ npm run dev
 ```
 
 Set `VITE_API_URL` and `VITE_GRAFANA_URL` when pointing the local frontend at a
-different backend or dashboard host. Tests run with `npm test`.
+different backend or dashboard host. Tests run with `NODE_ENV=test npm test`.
