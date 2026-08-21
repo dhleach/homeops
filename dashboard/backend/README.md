@@ -14,6 +14,11 @@ interface at `https://api.homeops.now`.
 | `POST /api/diagnostic` | Gemini-backed HVAC diagnostic using live Prometheus context |
 | `GET /openapi.json` | Generated API contract |
 
+`/api/diagnostic` is currently a public, read-only endpoint. Authentication,
+quotas, input limits, and budget controls are tracked in the separate Ask
+HomeOps hardening P0; this endpoint must not be presented as an authenticated
+or unrestricted production assistant.
+
 `/api/current-temps` returns a structured response with nullable telemetry
 fields. A non-null `error` means Prometheus was unreachable; the deployment
 smoke gate treats that as unhealthy. CORS is owned by
