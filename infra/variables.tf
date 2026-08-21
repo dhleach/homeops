@@ -51,3 +51,9 @@ variable "tailscale_authkey" {
   type        = string
   sensitive   = true
 }
+
+variable "cognito_domain_prefix" {
+  description = "Globally unique prefix for the Cognito managed-login domain"
+  type        = string
+  default     = "homeops-production"
+}

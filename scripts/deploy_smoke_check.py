@@ -6,6 +6,8 @@ Revision history:
               so deployment workflows fail closed when the public system is unhealthy.
   2026-08-18  Required thermostat setpoint fields in the telemetry contract so a
               partially populated API response cannot pass the release gate.
+  2026-08-21  Validate that the deployed OpenAPI contract includes the authenticated
+              diagnostic route and its safe auth/quota response set before release.
 """
 
 from __future__ import annotations
@@ -97,11 +99,26 @@ def _check_api(base_url: str, fetcher: Fetcher, timeout: float) -> list[str]:
     _require_status(openapi_response)
     openapi = _json(openapi_response)
     paths = openapi.get("paths", {}) if isinstance(openapi, dict) else {}
-    required_paths = {"/health", "/api/current-temps"}
+    required_paths = {"/health", "/api/current-temps", "/api/diagnostic"}
     if not required_paths.issubset(paths):
         missing = sorted(required_paths - set(paths))
         raise SmokeCheckError(
             f"{openapi_response.url}: OpenAPI missing paths: {', '.join(missing)}"
+        )
+    components = openapi.get("components", {}) if isinstance(openapi, dict) else {}
+    security_schemes = components.get("securitySchemes", {}) if isinstance(components, dict) else {}
+    diagnostic = paths.get("/api/diagnostic", {}) if isinstance(paths, dict) else {}
+    post_diagnostic = diagnostic.get("post", {}) if isinstance(diagnostic, dict) else {}
+    response_codes = (
+        set(post_diagnostic.get("responses", {})) if isinstance(post_diagnostic, dict) else set()
+    )
+    if not isinstance(security_schemes, dict) or not security_schemes:
+        raise SmokeCheckError(f"{openapi_response.url}: OpenAPI missing security schemes")
+    if not isinstance(post_diagnostic, dict) or not post_diagnostic.get("security"):
+        raise SmokeCheckError(f"{openapi_response.url}: diagnostic route is not authenticated")
+    if not {"401", "403", "429", "503"}.issubset(response_codes):
+        raise SmokeCheckError(
+            f"{openapi_response.url}: diagnostic route missing auth/quota responses"
         )
 
     telemetry_response = fetcher(_join(base_url, "/api/current-temps"), timeout)

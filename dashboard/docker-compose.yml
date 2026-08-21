@@ -5,11 +5,20 @@ services:
     # on the EC2 host without extra networking config.
     network_mode: host
     restart: always
+    depends_on:
+      valkey:
+        condition: service_healthy
     environment:
       - GEMINI_API_KEY
       - ASK_HOMEOPS_GLOBAL_MAX_IN_FLIGHT
       - ASK_HOMEOPS_GLOBAL_DAILY_CALL_LIMIT
       - ASK_HOMEOPS_LIMITER_BACKEND
+      - ASK_HOMEOPS_REDIS_URL
+      - ASK_HOMEOPS_OIDC_ISSUER
+      - ASK_HOMEOPS_OIDC_AUDIENCE
+      - ASK_HOMEOPS_OIDC_AUDIENCE_CLAIM
+      - ASK_HOMEOPS_OIDC_JWKS_URL
+      - ASK_HOMEOPS_DIAGNOSTIC_SCOPE
       - ASK_HOMEOPS_TRUSTED_PROXY_IPS=127.0.0.1/32,::1/128
       - ASK_HOMEOPS_TRUSTED_PROXY_HOPS
       - ASK_HOMEOPS_IP_PER_MINUTE_LIMIT
@@ -20,6 +29,20 @@ services:
       - ASK_HOMEOPS_USER_MAX_IN_FLIGHT
       - GEMINI_INPUT_COST_USD_PER_MILLION_TOKENS
       - GEMINI_OUTPUT_COST_USD_PER_MILLION_TOKENS
+
+  # Shared quota state for the single EC2 deployment. The loopback-only port
+  # binding prevents public access; the backend reaches it through host mode.
+  valkey:
+    image: valkey/valkey:8.0-alpine
+    command: ["valkey-server", "--save", "", "--appendonly", "no", "--bind", "0.0.0.0"]
+    ports:
+      - "127.0.0.1:6379:6379"
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: always
 
   prometheus:
     image: prom/prometheus:v3.2.1

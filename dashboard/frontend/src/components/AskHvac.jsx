@@ -11,11 +11,24 @@ const SUGGESTED_QUESTIONS = [
  * AI diagnostic chat widget for HomeOps.
  * Lets visitors ask natural-language questions about live HVAC data.
  *
- * @param {{ apiUrl: string }} props
+ * Revision history:
+ *   2026-08-21  Added sign-in/configuration gating so the widget never submits
+ *               a predictable unauthenticated request to the API.
+ *
+ * @param {{ apiUrl: string, auth?: object }} props
  */
-export function AskHvac({ apiUrl }) {
+export function AskHvac({ apiUrl, auth = {} }) {
   const [input, setInput] = useState("");
-  const { ask, answer, loading, error, reset } = useAsk(apiUrl);
+  const {
+    configured = true,
+    authenticated = true,
+    loading: authLoading = false,
+    error: authError = null,
+    accessToken = null,
+    login = () => {},
+    handleUnauthorized = () => {},
+  } = auth;
+  const { ask, answer, loading, error, reset } = useAsk(apiUrl, accessToken, handleUnauthorized);
 
   const handleSubmit = (question) => {
     const q = question.trim();
@@ -40,6 +53,36 @@ export function AskHvac({ apiUrl }) {
 
   const showPanel = loading || answer !== null || error !== null;
 
+  const authPanel = () => {
+    if (authLoading) {
+      return <p className="text-sm text-slate-400">Checking sign-in…</p>;
+    }
+    if (authError) {
+      return <p className="text-sm text-orange-400">{authError}</p>;
+    }
+    if (!configured) {
+      return (
+        <p className="text-sm text-orange-400">
+          Ask HomeOps sign-in is not configured for this deployment.
+        </p>
+      );
+    }
+    return (
+      <>
+        <p className="text-sm text-slate-400">
+          Sign in to ask questions about the live HVAC data.
+        </p>
+        <button
+          type="button"
+          onClick={login}
+          className="mt-4 rounded-xl bg-blue-600 px-5 py-2.5 text-sm font-medium text-white transition-colors hover:bg-blue-500"
+        >
+          Sign in to Ask HomeOps
+        </button>
+      </>
+    );
+  };
+
   return (
     <div className="rounded-2xl border border-border bg-card overflow-hidden">
       {/* Header */}
@@ -50,9 +93,13 @@ export function AskHvac({ apiUrl }) {
             <h2 className="text-lg font-semibold text-white">Ask HomeOps</h2>
             <p className="text-xs text-slate-400">Powered by Gemini 2.5 Flash · live HVAC data</p>
           </div>
-        </div>
+      </div>
       </div>
 
+      {!authenticated ? (
+        <div className="px-6 py-6">{authPanel()}</div>
+      ) : (
+        <>
       {/* Suggested question chips */}
       <div className="px-6 py-4 border-b border-border flex flex-wrap gap-2">
         {SUGGESTED_QUESTIONS.map((q) => (
@@ -105,6 +152,8 @@ export function AskHvac({ apiUrl }) {
             )}
           </div>
         </div>
+      )}
+        </>
       )}
     </div>
   );

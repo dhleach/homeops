@@ -8,7 +8,7 @@ React + Vite + Tailwind single-page dashboard for `homeops.now`.
 - Embeds the four provisioned Grafana dashboards from
   `VITE_GRAFANA_URL` (default: `https://api.homeops.now/grafana`).
 - Sends homeowner diagnostic questions to `VITE_API_URL/api/diagnostic`; the
-  endpoint requires a bearer identity once the authentication gate is enabled.
+  endpoint requires a Cognito OIDC access token with the diagnostic scope.
 
 The production build is created by
 `.github/workflows/frontend-deploy.yml`, synced to the private S3 frontend
@@ -23,10 +23,13 @@ npm ci
 npm run dev
 ```
 
-Set `VITE_API_URL` and `VITE_GRAFANA_URL` when pointing the local frontend at a
-different backend or dashboard host. Tests run with `NODE_ENV=test npm test`.
+Set `VITE_API_URL`, `VITE_GRAFANA_URL`, `VITE_OIDC_AUTHORITY`,
+`VITE_OIDC_CLIENT_ID`, and `VITE_OIDC_SCOPE` when pointing the local frontend
+at a different backend or identity configuration. Tests run with
+`NODE_ENV=test npm test`.
 
-The current frontend does not obtain an identity-provider session. The backend
-therefore rejects Ask HomeOps requests until the provider adapter and frontend
-session wiring are deliberately selected; this is an intentional public-demo
-release gate, not an anonymous fallback.
+The browser uses authorization code + PKCE through `oidc-client-ts`; it stores
+the short-lived session in browser session storage and sends only the access
+token to the diagnostic endpoint. No client secret is included in the build.
+If OIDC metadata is absent, the widget shows a configuration message instead
+of issuing a request that would predictably receive `401`.

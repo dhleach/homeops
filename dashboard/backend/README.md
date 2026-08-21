@@ -16,12 +16,13 @@ interface at `https://api.homeops.now`.
 | `GET /openapi.json` | Generated API contract |
 
 `/api/diagnostic` accepts a standard `Authorization: Bearer <token>` header.
-The provider-neutral verifier must return a verified subject with the
-`diagnostic:read` scope; missing/invalid credentials return `401`, and a
-verified identity without that scope returns `403`. The default verifier rejects
-all tokens until an OIDC-compatible provider adapter is configured, so the
-application cannot silently fall back to anonymous access. The threat model and
-quota policy live in [`docs/ask-homeops-threat-model.md`](../../docs/ask-homeops-threat-model.md).
+The configured Cognito OIDC verifier validates the RSA signature, issuer,
+expiry, subject, and app-client `client_id` against the user-pool JWKS. A
+verified subject must carry the configured diagnostic scope; missing/invalid
+credentials return `401`, and a verified identity without that scope returns
+`403`. If OIDC settings are absent or the JWKS is unavailable, authentication
+fails closed with a generic `503`. The threat model and quota policy live in
+[`docs/ask-homeops-threat-model.md`](../../docs/ask-homeops-threat-model.md).
 
 The endpoint rejects blank, oversized, or unexpected request fields; caps
 questions at 1,000 characters and model output at 256 tokens; bounds Prometheus
@@ -34,8 +35,10 @@ are 10 user requests/minute, 30 IP requests/minute, 100 user requests/day, 200
 IP requests/day, and 2/5 user/IP in-flight calls. Quota rejections are HTTP
 `429` responses with `Retry-After` and `RateLimit-*` headers.
 
-`RateLimitStore` is an atomic adapter seam for Redis/Valkey or another shared
-backend. The included memory implementation is explicitly for tests/local
+`RateLimitStore` is backed in production by a loopback-only Valkey container.
+The adapter reserves all dimensions in one Lua script, hashes user/IP material
+before writing keys, and releases only in-flight reservations after the
+request. The included memory implementation is explicitly for tests/local
 development only; the default unconfigured store returns a generic `503` so a
 production deployment cannot accidentally run without shared quota state. The
 process also enforces a 20-call global in-flight limit and a 500-call UTC-day
@@ -70,9 +73,13 @@ The backend expects Prometheus at `http://localhost:9090` and reads
 `GEMINI_API_KEY` only for `/api/diagnostic`. Never commit that key. The
 limiter reference backend can be selected with
 `ASK_HOMEOPS_LIMITER_BACKEND=memory` for local development only. Production
-must provide a real shared `RateLimitStore` adapter and an OIDC-compatible
-bearer verifier before exposing the Bob demo. Configure trusted reverse-proxy
-networks with `ASK_HOMEOPS_TRUSTED_PROXY_IPS` and the hop count with
+uses `ASK_HOMEOPS_LIMITER_BACKEND=redis` and
+`ASK_HOMEOPS_REDIS_URL=redis://127.0.0.1:6379/0`, with the Valkey service
+started by Compose. Configure OIDC with `ASK_HOMEOPS_OIDC_ISSUER`,
+`ASK_HOMEOPS_OIDC_AUDIENCE`, optional `ASK_HOMEOPS_OIDC_JWKS_URL`,
+`ASK_HOMEOPS_OIDC_AUDIENCE_CLAIM=client_id`, and
+`ASK_HOMEOPS_DIAGNOSTIC_SCOPE`. Configure trusted reverse-proxy networks with
+`ASK_HOMEOPS_TRUSTED_PROXY_IPS` and the hop count with
 `ASK_HOMEOPS_TRUSTED_PROXY_HOPS`.
 
 The active production topology, ports, public routes, internal scrape target, and release checks are

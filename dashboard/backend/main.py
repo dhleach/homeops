@@ -15,6 +15,8 @@ Revision history:
   2026-08-21  Added the provider-neutral bearer-principal dependency, trusted
               proxy client-IP extraction, and atomic per-user/IP quota seam;
               defaulting unavailable auth/limiter integrations to fail closed.
+  2026-08-21  Load the configured OIDC/JWKS verifier and shared Redis/Valkey
+              limiter while retaining fail-closed defaults for incomplete deploys.
 """
 
 from __future__ import annotations
@@ -43,20 +45,20 @@ from prometheus_client import (
 )
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from security import (
-    DIAGNOSTIC_SCOPE,
     LIMITER_UNAVAILABLE_ERROR,
     Principal,
     QuotaPolicy,
     RateLimitDecision,
     RateLimitStore,
-    RejectingTokenVerifier,
     TokenVerifier,
     authenticate_bearer,
     build_quota_rules,
     extract_client_ip,
+    load_diagnostic_scope,
     load_proxy_config,
     load_quota_policy,
     load_rate_limit_store,
+    load_token_verifier,
 )
 
 PROMETHEUS_URL = "http://localhost:9090/api/v1/query"
@@ -394,13 +396,14 @@ app = FastAPI(
 # Do NOT add FastAPI CORSMiddleware here — duplicate Access-Control-Allow-Origin
 # headers cause Safari/iOS to reject the response with "Load failed".
 
-# The production application starts with both integrations fail-closed. A real
-# OIDC-compatible verifier and a shared RateLimitStore can replace these seams
-# without changing the diagnostic endpoint's business logic.
-auth_verifier: TokenVerifier = RejectingTokenVerifier()
+# The production application starts with both integrations fail-closed. The
+# configured OIDC-compatible verifier and shared RateLimitStore replace these
+# seams without changing the diagnostic endpoint's business logic.
+auth_verifier: TokenVerifier = load_token_verifier()
 diagnostic_rate_limiter: RateLimitStore = load_rate_limit_store()
 proxy_config = load_proxy_config()
 quota_policy: QuotaPolicy = load_quota_policy()
+diagnostic_scope = load_diagnostic_scope()
 bearer_scheme = HTTPBearer(auto_error=False)
 
 
@@ -411,7 +414,7 @@ def require_diagnostic_principal(
     return authenticate_bearer(
         credentials,
         auth_verifier,
-        required_scope=DIAGNOSTIC_SCOPE,
+        required_scope=diagnostic_scope,
     )
 
 
@@ -766,7 +769,12 @@ async def diagnostic(
             diagnostic_budget.release()
             _refresh_budget_metrics()
         if quota_lease is not None:
-            diagnostic_rate_limiter.release(quota_lease)
+            try:
+                diagnostic_rate_limiter.release(quota_lease)
+            except Exception as exc:  # noqa: BLE001
+                # The request has already completed; do not turn a successful
+                # answer into a 500 when a best-effort release hits an outage.
+                logger.warning("Ask HomeOps rate limiter release failed: %s", type(exc).__name__)
 
 
 @app.get("/health")

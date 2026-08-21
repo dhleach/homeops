@@ -3,6 +3,8 @@
 Revision history:
   2026-08-18  Added healthy-stack and failure-path coverage for the release gate
               so public deployment checks cannot silently regress.
+  2026-08-21  Added an OpenAPI auth/quota contract fixture so deployments cannot
+              pass without the protected diagnostic route being documented.
 """
 
 from __future__ import annotations
@@ -36,7 +38,21 @@ def _responses() -> dict[str, SmokeResponse]:
         "https://api/health": SmokeResponse(200, b'{"status":"ok"}', "https://api/health"),
         "https://api/openapi.json": SmokeResponse(
             200,
-            json.dumps({"paths": {"/health": {}, "/api/current-temps": {}}}).encode(),
+            json.dumps(
+                {
+                    "paths": {
+                        "/health": {},
+                        "/api/current-temps": {},
+                        "/api/diagnostic": {
+                            "post": {
+                                "security": [{"HTTPBearer": []}],
+                                "responses": {"401": {}, "403": {}, "429": {}, "503": {}},
+                            }
+                        },
+                    },
+                    "components": {"securitySchemes": {"HTTPBearer": {"type": "http"}}},
+                }
+            ).encode(),
             "https://api/openapi.json",
         ),
         "https://api/api/current-temps": SmokeResponse(

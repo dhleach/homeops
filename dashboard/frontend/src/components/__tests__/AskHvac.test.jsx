@@ -8,6 +8,7 @@ import { AskHvac } from "../AskHvac.jsx";
 
 const mockAsk = vi.fn();
 const mockReset = vi.fn();
+const mockLogin = vi.fn();
 
 let mockState = { answer: null, loading: false, error: null };
 
@@ -24,6 +25,7 @@ vi.mock("../../hooks/useAsk.js", () => ({
 beforeEach(() => {
   mockAsk.mockReset();
   mockReset.mockReset();
+  mockLogin.mockReset();
   mockState = { answer: null, loading: false, error: null };
 });
 
@@ -75,5 +77,28 @@ describe("AskHvac", () => {
     render(<AskHvac apiUrl="https://api.homeops.now" />);
     const btn = screen.getByRole("button", { name: /…/ });
     expect(btn).toBeDisabled();
+  });
+
+  it("prompts an unauthenticated visitor to sign in", () => {
+    render(
+      <AskHvac
+        apiUrl="https://api.homeops.now"
+        auth={{ configured: true, authenticated: false, login: mockLogin }}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Sign in to Ask HomeOps" }));
+    expect(mockLogin).toHaveBeenCalledOnce();
+  });
+
+  it("reports missing deployment authentication configuration", () => {
+    render(
+      <AskHvac
+        apiUrl="https://api.homeops.now"
+        auth={{ configured: false, authenticated: false }}
+      />,
+    );
+    expect(
+      screen.getByText("Ask HomeOps sign-in is not configured for this deployment."),
+    ).toBeInTheDocument();
   });
 });
