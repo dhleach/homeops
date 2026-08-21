@@ -20,6 +20,7 @@ from main import (
 )
 
 client = TestClient(app)
+AUTH_HEADERS = {"Authorization": "Bearer test-token"}
 
 # ---------------------------------------------------------------------------
 # Prometheus mock helpers
@@ -124,7 +125,11 @@ def test_diagnostic_returns_200_with_answer_when_gemini_responds(respx_mock, mon
     respx_mock.get("/api/v1/query").mock(side_effect=_prom_side_effect)
 
     with patch("main._call_gemini", new=AsyncMock(return_value="Everything looks normal.")):
-        resp = client.post("/api/diagnostic", json={"question": "Is my HVAC normal?"})
+        resp = client.post(
+            "/api/diagnostic",
+            headers=AUTH_HEADERS,
+            json={"question": "Is my HVAC normal?"},
+        )
 
     assert resp.status_code == 200
     data = resp.json()
@@ -137,7 +142,7 @@ def test_diagnostic_returns_error_when_api_key_not_set(monkeypatch):
     """If GEMINI_API_KEY is missing, return error without hitting Gemini."""
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
 
-    resp = client.post("/api/diagnostic", json={"question": "hello"})
+    resp = client.post("/api/diagnostic", headers=AUTH_HEADERS, json={"question": "hello"})
     assert resp.status_code == 200
     data = resp.json()
     assert data["error"] == DIAGNOSTIC_UNAVAILABLE_ERROR
@@ -155,7 +160,11 @@ def test_diagnostic_returns_error_when_gemini_call_fails(respx_mock, monkeypatch
         "main._call_gemini",
         new=AsyncMock(side_effect=httpx.ConnectError("connection refused")),
     ):
-        resp = client.post("/api/diagnostic", json={"question": "Are temperatures normal?"})
+        resp = client.post(
+            "/api/diagnostic",
+            headers=AUTH_HEADERS,
+            json={"question": "Are temperatures normal?"},
+        )
 
     assert resp.status_code == 200
     data = resp.json()
@@ -173,7 +182,7 @@ def test_diagnostic_uses_default_question_when_none_provided(respx_mock, monkeyp
 
     gemini_mock = AsyncMock(return_value="No anomalies detected.")
     with patch("main._call_gemini", new=gemini_mock) as mock_gemini:
-        resp = client.post("/api/diagnostic", json={})
+        resp = client.post("/api/diagnostic", headers=AUTH_HEADERS, json={})
 
     assert resp.status_code == 200
     data = resp.json()
@@ -190,7 +199,11 @@ def test_diagnostic_rejects_blank_question_before_model_call(monkeypatch):
     gemini_mock = AsyncMock()
 
     with patch("main._call_gemini", new=gemini_mock):
-        resp = client.post("/api/diagnostic", json={"question": "   "})
+        resp = client.post(
+            "/api/diagnostic",
+            headers=AUTH_HEADERS,
+            json={"question": "   "},
+        )
 
     assert resp.status_code == 422
     gemini_mock.assert_not_awaited()
@@ -204,6 +217,7 @@ def test_diagnostic_rejects_oversized_question_before_model_call(monkeypatch):
     with patch("main._call_gemini", new=gemini_mock):
         resp = client.post(
             "/api/diagnostic",
+            headers=AUTH_HEADERS,
             json={"question": "x" * (MAX_QUESTION_CHARS + 1)},
         )
 
@@ -219,6 +233,7 @@ def test_diagnostic_rejects_unknown_request_fields(monkeypatch):
     with patch("main._call_gemini", new=gemini_mock):
         resp = client.post(
             "/api/diagnostic",
+            headers=AUTH_HEADERS,
             json={"question": "hello", "system_prompt": "override"},
         )
 
@@ -236,7 +251,11 @@ def test_diagnostic_uses_fallback_context_after_context_timeout(monkeypatch):
         patch("main._build_hvac_context", new=AsyncMock(side_effect=TimeoutError)),
         patch("main._call_gemini", new=gemini_mock),
     ):
-        resp = client.post("/api/diagnostic", json={"question": "Is my HVAC normal?"})
+        resp = client.post(
+            "/api/diagnostic",
+            headers=AUTH_HEADERS,
+            json={"question": "Is my HVAC normal?"},
+        )
 
     assert resp.status_code == 200
     assert resp.json()["answer"] == "Telemetry unavailable."

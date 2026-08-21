@@ -46,7 +46,7 @@ interfaces; Nginx is the public reverse-proxy boundary for those services.
 | Pi metrics | `100.115.21.72:8001` (Tailnet only) | `GET /metrics` scraped every 15 seconds | `services/consumer/metrics.py`, `dashboard/prometheus/prometheus.yml` |
 | EC2 public host | `32.194.69.77` (current DNS result) | API/Grafana DNS and fallback SSH as `ubuntu` | Terraform EIP + `.github/workflows/deploy.yml` |
 | EC2 CI interface | `homeops-ec2` (Tailnet hostname) | Preferred SSH target from the Tailnet-connected GitHub runner; public EIP is fallback | EC2 bootstrap hostname + `.github/workflows/deploy.yml` |
-| EC2 backend | EC2 loopback | `http://127.0.0.1:8000`; FastAPI `/health`, `/api/current-temps`, `/api/diagnostic`, internal `/metrics` | `dashboard/docker-compose.yml`, `dashboard/backend/main.py`, `dashboard/prometheus/prometheus.yml` |
+| EC2 backend | EC2 loopback | `http://127.0.0.1:8000`; FastAPI `/health`, `/api/current-temps`, authenticated `/api/diagnostic`, internal `/metrics` | `dashboard/docker-compose.yml`, `dashboard/backend/main.py`, `dashboard/backend/security.py`, `dashboard/prometheus/prometheus.yml` |
 | Prometheus | EC2 loopback | `http://127.0.0.1:9090`; public read-only `/prometheus/` | `dashboard/docker-compose.yml`, `dashboard/nginx/api.homeops.now.conf` |
 | Grafana | EC2 loopback | `http://127.0.0.1:3000`; public read-only `/grafana/` | `dashboard/docker-compose.yml`, `dashboard/nginx/api.homeops.now.conf` |
 | Frontend | `homeops.now` | CloudFront HTTPS → private S3 origin | `infra/cloudfront.tf`, `infra/s3.tf` |
@@ -69,13 +69,21 @@ These are the endpoints the release gate checks after deployment:
 | `https://api.homeops.now/health` | `{"status":"ok"}` | FastAPI process liveness |
 | `https://api.homeops.now/openapi.json` | Includes `/health` and `/api/current-temps` | API contract is served |
 | `https://api.homeops.now/api/current-temps` | Required telemetry fields and `error: null` | Prometheus → FastAPI data path |
-| `https://api.homeops.now/api/diagnostic` | `POST` diagnostic route | Gemini-backed HVAC analysis; currently public and subject to the separate Ask HomeOps hardening task |
+| `https://api.homeops.now/api/diagnostic` | `POST` diagnostic route | Gemini-backed HVAC analysis; requires a verified bearer principal and bounded user/IP quotas before provider work |
 | `https://api.homeops.now/metrics` | HTTP 404 | Backend abuse/cost metrics are internal-only and scraped from EC2 loopback |
 | `https://api.homeops.now/grafana/api/health` | `database: ok` | Grafana process/data health |
 | `https://api.homeops.now/prometheus/-/healthy` | Body contains `Healthy` | Prometheus process health |
 
 The smoke checker is [`scripts/deploy_smoke_check.py`](../scripts/deploy_smoke_check.py).
 It reports schema/health failures without printing household telemetry values.
+
+Ask HomeOps authentication is intentionally provider-neutral at the FastAPI
+boundary. The endpoint consumes a verified bearer principal with the
+`diagnostic:read` scope, derives the per-user quota key from its verified
+subject, and derives the IP key only from configured trusted Nginx proxy hops.
+The atomic `RateLimitStore` interface is ready for a shared Redis/Valkey-style
+adapter; the default unconfigured backend fails closed with `503`, and the
+included memory backend is local/test-only.
 
 ## Active versus migration surfaces
 
