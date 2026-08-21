@@ -43,6 +43,11 @@ output "cognito_oidc_issuer" {
   value       = local.homeops_cognito_issuer
 }
 
+output "cognito_user_pool_id" {
+  description = "Cognito user-pool ID used to invite Ask HomeOps users"
+  value       = aws_cognito_user_pool.homeops.id
+}
+
 output "cognito_managed_login_authority" {
   description = "Cognito managed-login authority used by the browser"
   value       = local.homeops_cognito_authority

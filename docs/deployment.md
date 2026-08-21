@@ -45,7 +45,19 @@ After applying the Cognito resources:
    `cognito_frontend_client_id`, and `cognito_frontend_scope` into the GitHub
    repository variables `HOMEOPS_OIDC_AUTHORITY`, `HOMEOPS_OIDC_CLIENT_ID`, and
    `HOMEOPS_OIDC_SCOPE`.
-2. Create or invite the intended demo user in the Cognito user pool.
+2. Invite the intended demo user using the pool ID output:
+
+   ```bash
+   POOL_ID="$(terraform output -raw cognito_user_pool_id)"
+   aws cognito-idp admin-create-user \
+     --user-pool-id "$POOL_ID" \
+     --username "you@example.com" \
+     --user-attributes Name=email,Value=you@example.com \
+     --desired-delivery-mediums EMAIL
+   ```
+
+   The user pool is admin-create-only, so an invite is deliberate rather than
+   allowing arbitrary public registrations.
 3. Push/merge the application change so the backend deploy refreshes SSM config
    and the frontend deploy embeds only public OIDC metadata.
 4. Confirm the browser redirects to Cognito managed login, returns to

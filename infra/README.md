@@ -56,8 +56,9 @@ and a `diagnostic:read` custom scope. After applying, copy the outputs
 `cognito_managed_login_authority`, `cognito_frontend_client_id`, and
 `cognito_frontend_scope` into the GitHub repository variables
 `HOMEOPS_OIDC_AUTHORITY`, `HOMEOPS_OIDC_CLIENT_ID`, and `HOMEOPS_OIDC_SCOPE`.
-Create or invite the allowed demo users in the Cognito user pool before
-enabling the frontend login.
+Use `terraform output -raw cognito_user_pool_id` with
+`aws cognito-idp admin-create-user` to invite the allowed demo users before
+enabling the frontend login. Public self-registration is disabled.
 
 ## CI SSH identity
 
