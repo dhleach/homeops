@@ -28,6 +28,14 @@ The separate frontend workflow runs `npm ci`, builds with
 `VITE_API_URL=https://api.homeops.now`, syncs the private S3 bucket, invalidates
 CloudFront, and runs the same public smoke checks.
 
+### Terraform drift guard
+
+The production EC2 instance currently has AMI and bootstrap `user_data` drift
+from the Terraform state. A normal root-module apply is intentionally not an
+approved deployment path because it would replace the instance and its EIP.
+The additive Ask HomeOps provisioning procedure and the exact deferred changes
+are recorded in [`infra/terraform-deferred.md`](../infra/terraform-deferred.md).
+
 ## Ask HomeOps authentication and quota runtime
 
 Terraform provisions the Cognito user pool, managed-login domain, public

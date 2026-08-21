@@ -60,19 +60,19 @@ resource "aws_iam_role_policy_attachment" "s3_config_read" {
   policy_arn = aws_iam_policy.s3_config_read.arn
 }
 
-# SSM — bootstrap secrets plus Ask HomeOps runtime configuration. EC2 reads
-# these during bootstrap and each owner-scoped deployment refresh.
+# SSM — bootstrap secrets. Keep this legacy policy stable: changing its
+# description or policy document forces replacement of the existing named IAM
+# policy. Ask HomeOps runtime reads use the additive policy below instead.
 data "aws_iam_policy_document" "ssm_k3s_token_read" {
   statement {
     sid     = "ReadBootstrapSecrets"
     effect  = "Allow"
     actions = ["ssm:GetParameter"]
-    # EC2 reads bootstrap secrets and non-secret Ask HomeOps settings.
+    # EC2 reads k3s token, Gemini API key, and Tailscale auth key.
     resources = [
       "arn:aws:ssm:${var.aws_region}:*:parameter/homeops/${var.environment}/k3s-node-token",
       "arn:aws:ssm:${var.aws_region}:*:parameter/homeops/${var.environment}/gemini-api-key",
-      "arn:aws:ssm:${var.aws_region}:*:parameter/homeops/${var.environment}/tailscale-authkey",
-      "arn:aws:ssm:${var.aws_region}:*:parameter/homeops/${var.environment}/ask-homeops-*"
+      "arn:aws:ssm:${var.aws_region}:*:parameter/homeops/${var.environment}/tailscale-authkey"
     ]
   }
   # Needed to decrypt SecureString params (AWS-managed key aws/ssm)
@@ -91,7 +91,7 @@ data "aws_iam_policy_document" "ssm_k3s_token_read" {
 
 resource "aws_iam_policy" "ssm_k3s_token_read" {
   name        = "homeops-ec2-ssm-k3s-token-${var.environment}"
-  description = "Allow EC2 to read HomeOps bootstrap secrets and Ask HomeOps runtime settings"
+  description = "Allow EC2 to read k3s node token from SSM for automated cluster join"
   policy      = data.aws_iam_policy_document.ssm_k3s_token_read.json
 
   tags = {
@@ -103,6 +103,36 @@ resource "aws_iam_policy" "ssm_k3s_token_read" {
 resource "aws_iam_role_policy_attachment" "ssm_k3s_token_read" {
   role       = aws_iam_role.homeops_ec2.name
   policy_arn = aws_iam_policy.ssm_k3s_token_read.arn
+}
+
+# Ask HomeOps runtime configuration is deliberately additive. Updating the
+# existing named bootstrap policy changes its description and forces an IAM
+# policy replacement, which is not part of the safe auth rollout.
+data "aws_iam_policy_document" "ask_homeops_runtime_read" {
+  statement {
+    sid       = "ReadAskHomeOpsRuntime"
+    effect    = "Allow"
+    actions   = ["ssm:GetParameter"]
+    resources = [
+      "arn:aws:ssm:${var.aws_region}:*:parameter/homeops/${var.environment}/ask-homeops-*"
+    ]
+  }
+}
+
+resource "aws_iam_policy" "ask_homeops_runtime_read" {
+  name        = "homeops-ec2-ask-homeops-runtime-${var.environment}"
+  description = "Allow EC2 to read Ask HomeOps OIDC and limiter runtime settings"
+  policy      = data.aws_iam_policy_document.ask_homeops_runtime_read.json
+
+  tags = {
+    Environment = var.environment
+    Project     = "homeops"
+  }
+}
+
+resource "aws_iam_role_policy_attachment" "ask_homeops_runtime_read" {
+  role       = aws_iam_role.homeops_ec2.name
+  policy_arn = aws_iam_policy.ask_homeops_runtime_read.arn
 }
 
 # SSM write — allow homeops-deploy IAM user (used on Pi) to store k3s token
@@ -145,10 +175,9 @@ resource "aws_iam_policy" "ssm_k3s_token_write" {
   }
 }
 
-resource "aws_iam_user_policy_attachment" "ssm_k3s_token_write" {
-  user       = "homeops-deploy"
-  policy_arn = aws_iam_policy.ssm_k3s_token_write.arn
-}
+# The attachment was an older, unapplied Terraform change. It is intentionally
+# left out of the active graph until the deploy-user permission and AWS state
+# are reviewed together; see terraform-deferred.md.
 
 # ── Instance Profile ──────────────────────────────────────────────────────────
 
