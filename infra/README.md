@@ -44,15 +44,22 @@ terraform init
 # 3. Plan (review what will be created — ~$10/month)
 terraform plan
 
-# 4. Apply
-terraform apply
+# 4. STOP before a generic apply
+# The current production instance has known AMI/bootstrap drift. Read
+# terraform-deferred.md and use its allowlisted Ask HomeOps plan instead.
 
-# 5. Note the outputs — you'll need these for CI/CD
+# 5. Note the outputs — you'll need these for CI/CD after the safe rollout
 terraform output
 ```
 
+The normal full-root apply is intentionally deferred while the live EC2
+instance is protected by the AMI/user-data drift guard. The safe Ask HomeOps
+rollout is documented in
+[`terraform-deferred.md`](terraform-deferred.md); its plan must contain no EC2
+instance or Elastic IP actions.
+
 The Cognito resources create a public app client for authorization code + PKCE
-and a `diagnostic:read` custom scope. After applying, copy the outputs
+and a `diagnostic:read` custom scope. After the safe additive rollout, copy the outputs
 `cognito_managed_login_authority`, `cognito_frontend_client_id`, and
 `cognito_frontend_scope` into the GitHub repository variables
 `HOMEOPS_OIDC_AUTHORITY`, `HOMEOPS_OIDC_CLIENT_ID`, and `HOMEOPS_OIDC_SCOPE`.
@@ -85,7 +92,7 @@ terraform plan  # should show 0 changes for the zone
 
 ## Outputs
 
-After `terraform apply`:
+After the reviewed additive rollout:
 
 | Output | Use |
 |---|---|
@@ -93,6 +100,10 @@ After `terraform apply`:
 | `cloudfront_distribution_id` | GitHub Actions cache invalidation |
 | `s3_bucket_name` | GitHub Actions `aws s3 sync` target |
 | `ssh_connect` | Ready-to-run SSH command |
+| `cognito_user_pool_id` | User-pool ID for the admin invite command |
+| `cognito_managed_login_authority` | Browser OIDC authority |
+| `cognito_frontend_client_id` | Public browser OIDC client ID |
+| `cognito_frontend_scope` | Browser OAuth scope string |
 
 ## Current interfaces
 

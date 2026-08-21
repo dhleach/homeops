@@ -43,6 +43,7 @@ resource "aws_instance" "homeops" {
   iam_instance_profile   = aws_iam_instance_profile.homeops_ec2.name
   depends_on = [
     aws_iam_role_policy_attachment.ssm_k3s_token_read,
+    aws_iam_role_policy_attachment.ask_homeops_runtime_read,
     aws_ssm_parameter.ask_homeops_oidc_issuer,
     aws_ssm_parameter.ask_homeops_oidc_audience,
     aws_ssm_parameter.ask_homeops_oidc_audience_claim,
@@ -51,6 +52,14 @@ resource "aws_instance" "homeops" {
     aws_ssm_parameter.ask_homeops_limiter_backend,
     aws_ssm_parameter.ask_homeops_redis_url,
   ]
+
+  # The live instance predates the current AMI and bootstrap source. Both
+  # attributes force replacement, so keep the existing host while additive
+  # Cognito/SSM/IAM resources are rolled out. Remove this guard only during a
+  # reviewed maintenance window after the AMI/state drift is reconciled.
+  lifecycle {
+    ignore_changes = [ami, user_data]
+  }
 
   root_block_device {
     volume_type           = "gp3"
