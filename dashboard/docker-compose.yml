@@ -7,6 +7,10 @@ services:
     restart: always
     environment:
       - GEMINI_API_KEY
+      - ASK_HOMEOPS_GLOBAL_MAX_IN_FLIGHT
+      - ASK_HOMEOPS_GLOBAL_DAILY_CALL_LIMIT
+      - GEMINI_INPUT_COST_USD_PER_MILLION_TOKENS
+      - GEMINI_OUTPUT_COST_USD_PER_MILLION_TOKENS
 
   prometheus:
     image: prom/prometheus:v3.2.1

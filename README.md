@@ -2,7 +2,7 @@
 
 **Live dashboard → [homeops.now](https://homeops.now) · API → [api.homeops.now/api/current-temps](https://api.homeops.now/api/current-temps)**
 
-A full-stack observability platform for a 3-zone home HVAC system — event-driven Python pipeline on a Raspberry Pi 5, live metrics in Prometheus + Grafana on AWS EC2, React dashboard on S3 + CloudFront, FastAPI backend, all provisioned with Terraform. 25 derived event types, 846 Python tests, and 30 React component tests.
+A full-stack observability platform for a 3-zone home HVAC system — event-driven Python pipeline on a Raspberry Pi 5, live metrics in Prometheus + Grafana on AWS EC2, React dashboard on S3 + CloudFront, FastAPI backend, all provisioned with Terraform. 25 derived event types, 852 Python tests, and 30 React component tests.
 
 ## The Problem
 
@@ -19,7 +19,7 @@ Home Assistant alone can't prevent this. It sees state changes; it doesn't reaso
 - **Event-driven pipeline** — observer writes raw `state_changed` events to JSONL; consumer tails that file and emits semantically rich derived events downstream
 - **Schema-versioned events** — every event carries a `schema` field (e.g. `homeops.consumer.floor_2_long_call_warning.v1`) for safe downstream evolution
 - **Production-grade operations** — runs as `systemd` services on the Pi, log rotation via `logrotate`, exponential-backoff reconnects on the WebSocket
-- **846 Python tests + 30 React component tests**, GitHub Actions CI, Ruff lint/format enforcement on every PR, and post-deploy public smoke checks
+- **852 Python tests + 30 React component tests**, GitHub Actions CI, Ruff lint/format enforcement on every PR, and post-deploy public smoke checks
 
 ## Architecture
 
@@ -73,7 +73,7 @@ checks, see [`docs/deployment.md`](docs/deployment.md).
 
 **Consumer** tails the observer log in real time. It routes each event by entity ID, maintains per-zone heating session state, emits higher-level derived events, and exports live Prometheus metrics via `/metrics`.
 
-**EC2 dashboard stack** — Prometheus scrapes the Pi's `/metrics` endpoint every 15 seconds over Tailscale. Grafana reads from Prometheus and serves 4 provisioned dashboards. FastAPI queries Prometheus and exposes structured JSON at `/api/current-temps`. Nginx proxies both behind a TLS subdomain. The active production stack uses Docker Compose with host networking; the Kubernetes manifests are a separate migration surface.
+**EC2 dashboard stack** — Prometheus scrapes the Pi's `/metrics` endpoint every 15 seconds over Tailscale and the backend's internal diagnostic metrics over EC2 loopback. Grafana reads from Prometheus and serves 4 provisioned dashboards. FastAPI queries Prometheus and exposes structured JSON at `/api/current-temps`; Ask HomeOps has a process-wide provider-call backstop and low-cardinality abuse/cost metrics. Nginx proxies the public API surfaces behind a TLS subdomain but does not expose backend `/metrics`. The active production stack uses Docker Compose with host networking; the Kubernetes manifests are a separate migration surface.
 
 **Frontend** — React + Tailwind, built by GitHub Actions and deployed to S3/CloudFront when frontend files or its deploy workflow change on `master`.
 
@@ -326,7 +326,7 @@ PYTHONPATH=services/consumer:services/observer:services/insights:dashboard/backe
 NODE_ENV=test npm --prefix dashboard/frontend test
 ```
 
-846 Python tests cover observer reconnect logic, consumer event derivation, floor-2 long-call warning and escalation, thermostat tracking, heating cycle analytics, consumer state persistence, Prometheus metrics gauge updates, the FastAPI backend, deployment smoke checks, insights engine rules, and test-count validation. The frontend has 30 React component tests. The canonical counts live in [`docs/test-counts.json`](docs/test-counts.json) and are verified against CI runner output.
+852 Python tests cover observer reconnect logic, consumer event derivation, floor-2 long-call warning and escalation, thermostat tracking, heating cycle analytics, consumer state persistence, Prometheus metrics gauge updates, the FastAPI backend, Ask HomeOps budget/observability guards, deployment smoke checks, insights engine rules, and test-count validation. The frontend has 30 React component tests. The canonical counts live in [`docs/test-counts.json`](docs/test-counts.json) and are verified against CI runner output.
 
 ### CI
 

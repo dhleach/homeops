@@ -12,6 +12,7 @@ interface at `https://api.homeops.now`.
 | `GET /health` | Process liveness; returns `{"status":"ok"}` |
 | `GET /api/current-temps` | Current floor/outdoor temperatures, setpoints, calls, furnace state, and freshness timestamp |
 | `POST /api/diagnostic` | Gemini-backed HVAC diagnostic using live Prometheus context |
+| `GET /metrics` | Internal diagnostic abuse/cost metrics for EC2-local Prometheus; not a public route |
 | `GET /openapi.json` | Generated API contract |
 
 `/api/diagnostic` is currently a public, read-only endpoint. Authentication,
@@ -24,6 +25,19 @@ reject blank, oversized, or unexpected request fields; cap questions at 1,000
 characters and model output at 256 tokens; bound Prometheus context assembly to
 5 seconds; and bound each Gemini request to 10 seconds. Provider and missing
 configuration failures return a generic safe error rather than exception text.
+The process also enforces a 20-call global in-flight limit and a 500-call UTC-day
+provider budget. Rejections are HTTP 429 responses with `Retry-After` and
+`RateLimit-*` headers. These are a final single-instance cost backstop, not a
+replacement for the planned shared IP/user limiter.
+
+The backend publishes low-cardinality request/provider outcome, latency, input
+size, estimated output-token, in-flight, daily-budget, model, and approximate
+cost metrics. The Prometheus scrape is bound to EC2 loopback; Nginx explicitly
+returns 404 for public `/metrics` requests.
+The quota defaults can be overridden with `ASK_HOMEOPS_GLOBAL_MAX_IN_FLIGHT`
+and `ASK_HOMEOPS_GLOBAL_DAILY_CALL_LIMIT`; the approximate cost estimator uses
+the optional `GEMINI_INPUT_COST_USD_PER_MILLION_TOKENS` and
+`GEMINI_OUTPUT_COST_USD_PER_MILLION_TOKENS` overrides.
 
 `/api/current-temps` returns a structured response with nullable telemetry
 fields. A non-null `error` means Prometheus was unreachable; the deployment
@@ -44,6 +58,6 @@ uvicorn main:app --reload --host 127.0.0.1 --port 8000
 The backend expects Prometheus at `http://localhost:9090` and reads
 `GEMINI_API_KEY` only for `/api/diagnostic`. Never commit that key.
 
-The active production topology, ports, public routes, and release checks are
+The active production topology, ports, public routes, internal scrape target, and release checks are
 documented in [`docs/architecture.md`](../../docs/architecture.md) and
 [`docs/deployment.md`](../../docs/deployment.md).

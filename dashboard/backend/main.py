@@ -2,29 +2,57 @@
 
 Queries EC2-local Prometheus for live HVAC telemetry and exposes it
 at GET /api/current-temps.  Returns nulls (not 500) when Prometheus
-is unreachable so the frontend can show a degraded-mode UI.
+is unreachable so the frontend can show a degraded-mode UI.  The
+diagnostic endpoint also exposes an internal-only Prometheus metrics
+endpoint and enforces a process-wide provider-call backstop.
+
+Revision history:
+  2026-08-20  Added low-cardinality diagnostic metrics, a process-local global
+              provider-call budget, internal metrics exposition, and safe 429
+              responses so repeated public requests cannot create unbounded
+              Gemini work before shared authentication/limiting is selected.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import os
-from datetime import UTC, datetime
+import threading
+import time
+from collections.abc import Callable
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 
 import httpx
-from fastapi import FastAPI
+from fastapi import FastAPI, Response
+from fastapi.responses import JSONResponse
+from prometheus_client import (
+    CONTENT_TYPE_LATEST,
+    CollectorRegistry,
+    Counter,
+    Gauge,
+    Histogram,
+    generate_latest,
+)
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 PROMETHEUS_URL = "http://localhost:9090/api/v1/query"
 PROMETHEUS_QUERY_TIMEOUT_SECONDS = 2.0
 PROMETHEUS_CONTEXT_TIMEOUT_SECONDS = 5.0
 GEMINI_REQUEST_TIMEOUT_SECONDS = 10.0
+GEMINI_MODEL = "gemini-2.5-flash"
 MAX_QUESTION_CHARS = 1_000
 MAX_CONTEXT_CHARS = 4_000
 MAX_OUTPUT_TOKENS = 256
+DEFAULT_GLOBAL_MAX_IN_FLIGHT = 20
+DEFAULT_GLOBAL_DAILY_CALL_LIMIT = 500
+GEMINI_INPUT_COST_USD_PER_MILLION_TOKENS = 0.30
+GEMINI_OUTPUT_COST_USD_PER_MILLION_TOKENS = 2.50
 
 DIAGNOSTIC_UNAVAILABLE_ERROR = "Diagnostic service temporarily unavailable"
+DIAGNOSTIC_RATE_LIMIT_ERROR = "Diagnostic capacity temporarily exhausted"
 _CONTEXT_TRUNCATION_MARKER = "\n[Telemetry context truncated]"
 _TELEMETRY_UNAVAILABLE_CONTEXT = (
     "=== HomeOps HVAC Snapshot ===\n"
@@ -32,6 +60,260 @@ _TELEMETRY_UNAVAILABLE_CONTEXT = (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _positive_int_env(name: str, default: int) -> int:
+    """Read a positive integer environment override without breaking startup."""
+    try:
+        value = int(os.environ.get(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+    return value if value > 0 else default
+
+
+def _non_negative_float_env(name: str, default: float) -> float:
+    """Read a finite non-negative float environment override."""
+    try:
+        value = float(os.environ.get(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+    return value if math.isfinite(value) and value >= 0 else default
+
+
+def _estimate_tokens(text: str) -> int:
+    """Estimate text tokens for observability when provider usage is unavailable."""
+    return max(1, math.ceil(len(text) / 4))
+
+
+def _gemini_prompt(context: str, question: str) -> str:
+    """Build the exact user content sent to Gemini."""
+    return f"HVAC DATA:\n{context}\n\nQUESTION: {question}"
+
+
+# Use a private registry so /metrics exposes only deliberate application
+# telemetry, not process/runtime metrics that could leak deployment details.
+METRICS_REGISTRY = CollectorRegistry()
+DIAGNOSTIC_REQUESTS = Counter(
+    "homeops_diagnostic_requests_total",
+    "Diagnostic requests by aggregate outcome and authentication state.",
+    labelnames=("outcome", "auth_state"),
+    registry=METRICS_REGISTRY,
+)
+DIAGNOSTIC_REQUEST_LATENCY = Histogram(
+    "homeops_diagnostic_request_latency_seconds",
+    "End-to-end diagnostic request latency by aggregate outcome.",
+    labelnames=("outcome", "auth_state"),
+    registry=METRICS_REGISTRY,
+)
+DIAGNOSTIC_RATE_LIMITED = Counter(
+    "homeops_diagnostic_rate_limited_total",
+    "Diagnostic requests rejected by the global safety backstop.",
+    labelnames=("scope",),
+    registry=METRICS_REGISTRY,
+)
+DIAGNOSTIC_PROVIDER_CALLS = Counter(
+    "homeops_diagnostic_provider_calls_total",
+    "Gemini provider calls by aggregate outcome.",
+    labelnames=("outcome",),
+    registry=METRICS_REGISTRY,
+)
+DIAGNOSTIC_PROVIDER_LATENCY = Histogram(
+    "homeops_diagnostic_provider_latency_seconds",
+    "Gemini provider-call latency.",
+    registry=METRICS_REGISTRY,
+)
+DIAGNOSTIC_INPUT_CHARS = Histogram(
+    "homeops_diagnostic_input_chars",
+    "Characters submitted to the Gemini provider, including system context.",
+    registry=METRICS_REGISTRY,
+)
+DIAGNOSTIC_OUTPUT_TOKENS = Histogram(
+    "homeops_diagnostic_output_tokens",
+    "Estimated Gemini output tokens; provider usage metadata is not exposed here.",
+    registry=METRICS_REGISTRY,
+)
+DIAGNOSTIC_INFLIGHT = Gauge(
+    "homeops_diagnostic_inflight",
+    "Current Gemini provider calls in flight.",
+    registry=METRICS_REGISTRY,
+)
+DIAGNOSTIC_DAILY_CALLS = Gauge(
+    "homeops_diagnostic_daily_calls",
+    "Gemini provider calls reserved in the current UTC day.",
+    registry=METRICS_REGISTRY,
+)
+DIAGNOSTIC_DAILY_LIMIT = Gauge(
+    "homeops_diagnostic_daily_call_limit",
+    "Configured global Gemini provider-call limit for the current UTC day.",
+    registry=METRICS_REGISTRY,
+)
+DIAGNOSTIC_DAILY_REMAINING = Gauge(
+    "homeops_diagnostic_daily_calls_remaining",
+    "Remaining global Gemini provider-call budget in the current UTC day.",
+    registry=METRICS_REGISTRY,
+)
+DIAGNOSTIC_ESTIMATED_COST = Counter(
+    "homeops_diagnostic_estimated_cost_usd_total",
+    "Approximate Gemini text cost using configured per-million-token rates.",
+    registry=METRICS_REGISTRY,
+)
+DIAGNOSTIC_MODEL_INFO = Gauge(
+    "homeops_diagnostic_model_info",
+    "Gemini model used by Ask HomeOps.",
+    labelnames=("model",),
+    registry=METRICS_REGISTRY,
+)
+DIAGNOSTIC_MODEL_INFO.labels(GEMINI_MODEL).set(1)
+
+
+@dataclass(frozen=True)
+class BudgetDecision:
+    """Result of attempting to reserve one global provider call."""
+
+    allowed: bool
+    reason: str | None
+    remaining: int
+    reset_at: int
+    retry_after: int
+
+
+@dataclass(frozen=True)
+class BudgetSnapshot:
+    """Read-only view of the process-wide provider budget."""
+
+    in_flight: int
+    daily_calls: int
+    daily_limit: int
+    max_in_flight: int
+    remaining: int
+    reset_at: int
+
+
+class DiagnosticBudget:
+    """Thread-safe, process-local global provider-call budget.
+
+    This is deliberately only the final single-instance safety backstop. The
+    release gate still requires a shared limiter for authenticated user/IP
+    quotas before the public Bob demo is exposed.
+    """
+
+    def __init__(
+        self,
+        *,
+        max_in_flight: int = DEFAULT_GLOBAL_MAX_IN_FLIGHT,
+        daily_limit: int = DEFAULT_GLOBAL_DAILY_CALL_LIMIT,
+        clock: Callable[[], datetime] | None = None,
+    ) -> None:
+        if max_in_flight < 1 or daily_limit < 1:
+            raise ValueError("diagnostic budget limits must be positive")
+        self.max_in_flight = max_in_flight
+        self.daily_limit = daily_limit
+        self._clock = clock or (lambda: datetime.now(UTC))
+        self._lock = threading.Lock()
+        self._window_day = self._now().date()
+        self._daily_calls = 0
+        self._in_flight = 0
+
+    def _now(self) -> datetime:
+        """Return the injected clock value normalized to UTC."""
+        value = self._clock()
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=UTC)
+        return value.astimezone(UTC)
+
+    def _reset_at(self, current_day) -> int:
+        next_day = current_day + timedelta(days=1)
+        return int(datetime(next_day.year, next_day.month, next_day.day, tzinfo=UTC).timestamp())
+
+    def _rollover_locked(self, current_day) -> None:
+        if current_day != self._window_day:
+            self._window_day = current_day
+            self._daily_calls = 0
+
+    def try_reserve(self) -> BudgetDecision:
+        """Reserve one provider call, or return the stable rejection reason."""
+        with self._lock:
+            now = self._now()
+            self._rollover_locked(now.date())
+            reset_at = self._reset_at(now.date())
+            remaining = max(0, self.daily_limit - self._daily_calls)
+            if self._in_flight >= self.max_in_flight:
+                return BudgetDecision(False, "global_inflight", remaining, reset_at, 1)
+            if self._daily_calls >= self.daily_limit:
+                retry_after = max(1, int(reset_at - now.timestamp()))
+                return BudgetDecision(
+                    False,
+                    "global_daily",
+                    0,
+                    reset_at,
+                    retry_after,
+                )
+            self._in_flight += 1
+            self._daily_calls += 1
+            return BudgetDecision(
+                True,
+                None,
+                self.daily_limit - self._daily_calls,
+                reset_at,
+                0,
+            )
+
+    def release(self) -> None:
+        """Release one in-flight provider reservation."""
+        with self._lock:
+            self._in_flight = max(0, self._in_flight - 1)
+
+    def snapshot(self) -> BudgetSnapshot:
+        """Return current budget state and roll the UTC day if needed."""
+        with self._lock:
+            now = self._now()
+            self._rollover_locked(now.date())
+            return BudgetSnapshot(
+                in_flight=self._in_flight,
+                daily_calls=self._daily_calls,
+                daily_limit=self.daily_limit,
+                max_in_flight=self.max_in_flight,
+                remaining=max(0, self.daily_limit - self._daily_calls),
+                reset_at=self._reset_at(now.date()),
+            )
+
+
+diagnostic_budget = DiagnosticBudget(
+    max_in_flight=_positive_int_env(
+        "ASK_HOMEOPS_GLOBAL_MAX_IN_FLIGHT", DEFAULT_GLOBAL_MAX_IN_FLIGHT
+    ),
+    daily_limit=_positive_int_env(
+        "ASK_HOMEOPS_GLOBAL_DAILY_CALL_LIMIT", DEFAULT_GLOBAL_DAILY_CALL_LIMIT
+    ),
+)
+
+
+def _refresh_budget_metrics() -> None:
+    """Publish the current global budget state without high-cardinality labels."""
+    snapshot = diagnostic_budget.snapshot()
+    DIAGNOSTIC_INFLIGHT.set(snapshot.in_flight)
+    DIAGNOSTIC_DAILY_CALLS.set(snapshot.daily_calls)
+    DIAGNOSTIC_DAILY_LIMIT.set(snapshot.daily_limit)
+    DIAGNOSTIC_DAILY_REMAINING.set(snapshot.remaining)
+
+
+_refresh_budget_metrics()
+
+
+def _rate_limit_response(decision: BudgetDecision) -> JSONResponse:
+    """Build the stable 429 response used by the global provider backstop."""
+    headers = {
+        "Retry-After": str(decision.retry_after),
+        "RateLimit-Limit": str(diagnostic_budget.daily_limit),
+        "RateLimit-Remaining": str(decision.remaining),
+        "RateLimit-Reset": str(decision.reset_at),
+    }
+    return JSONResponse(
+        status_code=429,
+        content={"detail": DIAGNOSTIC_RATE_LIMIT_ERROR},
+        headers=headers,
+    )
+
 
 FLOORS = ["floor_1", "floor_2", "floor_3"]
 
@@ -260,13 +542,11 @@ def _limit_context(context: str) -> str:
 
 async def _call_gemini(context: str, question: str, api_key: str) -> str:
     """Call Gemini REST API and return the response text."""
-    url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
     bounded_context = _limit_context(context)
     payload = {
         "system_instruction": {"parts": [{"text": SYSTEM_PROMPT}]},
-        "contents": [
-            {"parts": [{"text": f"HVAC DATA:\n{bounded_context}\n\nQUESTION: {question}"}]}
-        ],
+        "contents": [{"parts": [{"text": _gemini_prompt(bounded_context, question)}]}],
         "generationConfig": {"maxOutputTokens": MAX_OUTPUT_TOKENS},
     }
     async with httpx.AsyncClient() as client:
@@ -285,12 +565,27 @@ async def _call_gemini(context: str, question: str, api_key: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-@app.post("/api/diagnostic", response_model=DiagnosticResponse)
-async def diagnostic(request: DiagnosticRequest) -> DiagnosticResponse:
+@app.post(
+    "/api/diagnostic",
+    response_model=DiagnosticResponse,
+    responses={429: {"description": "Global diagnostic capacity is exhausted."}},
+)
+async def diagnostic(request: DiagnosticRequest) -> DiagnosticResponse | JSONResponse:
     """Ask an AI question about the current HVAC state using live Prometheus data."""
+    request_started = time.perf_counter()
+    auth_state = "anonymous"
+
+    def record_request(outcome: str) -> None:
+        DIAGNOSTIC_REQUESTS.labels(outcome=outcome, auth_state=auth_state).inc()
+        DIAGNOSTIC_REQUEST_LATENCY.labels(
+            outcome=outcome,
+            auth_state=auth_state,
+        ).observe(time.perf_counter() - request_started)
+
     api_key = os.environ.get("GEMINI_API_KEY", "")
     if not api_key:
         logger.error("Ask HomeOps provider key is not configured")
+        record_request("configuration_error")
         return DiagnosticResponse(answer="", context_chars=0, error=DIAGNOSTIC_UNAVAILABLE_ERROR)
 
     try:
@@ -305,23 +600,80 @@ async def diagnostic(request: DiagnosticRequest) -> DiagnosticResponse:
         context = _TELEMETRY_UNAVAILABLE_CONTEXT
     context = _limit_context(context)
 
+    decision = diagnostic_budget.try_reserve()
+    _refresh_budget_metrics()
+    if not decision.allowed:
+        DIAGNOSTIC_RATE_LIMITED.labels(scope=decision.reason or "global").inc()
+        record_request("rate_limited")
+        return _rate_limit_response(decision)
+
+    provider_prompt = _gemini_prompt(context, request.question)
+    input_tokens = _estimate_tokens(SYSTEM_PROMPT + provider_prompt)
+    DIAGNOSTIC_INPUT_CHARS.observe(len(SYSTEM_PROMPT + provider_prompt))
+    output_tokens = 0
+    provider_started = time.perf_counter()
     try:
         answer = await _call_gemini(context, request.question, api_key)
     except Exception as exc:  # noqa: BLE001
         logger.warning("Ask HomeOps provider call failed: %s", type(exc).__name__)
+        DIAGNOSTIC_PROVIDER_CALLS.labels(outcome="error").inc()
+        DIAGNOSTIC_PROVIDER_LATENCY.observe(time.perf_counter() - provider_started)
+        DIAGNOSTIC_OUTPUT_TOKENS.observe(output_tokens)
+        DIAGNOSTIC_ESTIMATED_COST.inc(
+            input_tokens
+            * _non_negative_float_env(
+                "GEMINI_INPUT_COST_USD_PER_MILLION_TOKENS",
+                GEMINI_INPUT_COST_USD_PER_MILLION_TOKENS,
+            )
+            / 1_000_000
+        )
+        record_request("provider_error")
         return DiagnosticResponse(
             answer="",
             context_chars=len(context),
             error=DIAGNOSTIC_UNAVAILABLE_ERROR,
         )
-
-    return DiagnosticResponse(answer=answer, context_chars=len(context))
+    else:
+        output_tokens = _estimate_tokens(answer)
+        DIAGNOSTIC_PROVIDER_CALLS.labels(outcome="success").inc()
+        DIAGNOSTIC_PROVIDER_LATENCY.observe(time.perf_counter() - provider_started)
+        DIAGNOSTIC_OUTPUT_TOKENS.observe(output_tokens)
+        DIAGNOSTIC_ESTIMATED_COST.inc(
+            input_tokens
+            * _non_negative_float_env(
+                "GEMINI_INPUT_COST_USD_PER_MILLION_TOKENS",
+                GEMINI_INPUT_COST_USD_PER_MILLION_TOKENS,
+            )
+            / 1_000_000
+            + output_tokens
+            * _non_negative_float_env(
+                "GEMINI_OUTPUT_COST_USD_PER_MILLION_TOKENS",
+                GEMINI_OUTPUT_COST_USD_PER_MILLION_TOKENS,
+            )
+            / 1_000_000
+        )
+        record_request("success")
+        return DiagnosticResponse(answer=answer, context_chars=len(context))
+    finally:
+        # Always release the reservation, including task cancellation and
+        # unexpected metric/serialization errors after Gemini returns.
+        diagnostic_budget.release()
+        _refresh_budget_metrics()
 
 
 @app.get("/health")
 def health() -> dict:
     """Liveness probe — always 200 if the process is up."""
     return {"status": "ok"}
+
+
+@app.get("/metrics", include_in_schema=False)
+def metrics() -> Response:
+    """Expose deliberate application metrics for EC2-local Prometheus only."""
+    return Response(
+        content=generate_latest(METRICS_REGISTRY),
+        media_type=CONTENT_TYPE_LATEST,
+    )
 
 
 @app.get("/api/current-temps", response_model=CurrentTempsResponse)

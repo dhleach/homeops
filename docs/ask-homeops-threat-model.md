@@ -1,7 +1,7 @@
 # Ask HomeOps threat model and quota policy
 
 **Policy version:** `homeops.ask-homeops-policy.v1`  
-**Status:** Proposed baseline for the pre-Bob-demo security gate  
+**Status:** Proposed baseline for the pre-Bob-demo security gate; global provider backstop and metrics implemented in the follow-up issue
 **Last reviewed:** 2026-08-20  
 **Applies to:** `POST https://api.homeops.now/api/diagnostic`
 
@@ -110,6 +110,26 @@ PR #226 merged the non-authenticated request guardrails:
 These controls reduce blast radius but do not identify callers or stop repeated
 requests. They are necessary, not sufficient, for public Bob exposure.
 
+## Controls implemented by the observability follow-up
+
+The global provider backstop and its telemetry are now implemented as a
+process-local safety layer. It reserves provider work before Gemini, rejects
+new work with a generic HTTP 429 when either 20 calls are already in flight or
+500 calls have been reserved in the current UTC day, and always releases an
+in-flight reservation on provider success, failure, or cancellation. The
+daily cap counts attempted provider calls, including provider failures.
+
+The backend publishes the required low-cardinality request outcome, rate-limit
+scope, provider outcome, provider/request latency, input character,
+estimated-output-token, in-flight, daily-budget, model, and approximate-cost
+metrics. Prometheus scrapes `/metrics` through EC2 loopback; Nginx returns 404
+for the public `/metrics` route. Regression tests cover daily rollover,
+daily-cap rejection, concurrent-cap rejection before Gemini, label safety, and
+the Nginx/Prometheus contracts.
+
+The layer is intentionally process-local and is not the shared authenticated
+user/IP limiter required by the public Bob-demo gate.
+
 ## Proposed initial quota policy
 
 These are deliberately conservative starting values for a single-home,
@@ -213,7 +233,7 @@ Do not:
 
 ## Required metrics and alerts
 
-The abuse/cost follow-up should add low-cardinality metrics equivalent to:
+The abuse/cost implementation exposes low-cardinality metrics equivalent to:
 
 - `homeops_diagnostic_requests_total{outcome,auth_state}`
 - `homeops_diagnostic_rate_limited_total{scope}`
