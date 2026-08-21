@@ -5,7 +5,7 @@ separate from the recruiter-facing overview in [`README.md`](../README.md) so
 future changes can update concrete interfaces without turning the landing page
 into a runbook.
 
-Last verified: **2026-08-18** from the repository, public DNS, and public HTTP
+Last verified: **2026-08-21** from the repository, public DNS, and public HTTP
 health checks. Addresses and host paths are implementation details, not
 credentials; tokens and private keys must never be added here.
 
@@ -25,6 +25,7 @@ consumer.py ──► state/consumer/events.jsonl
                          ┌──────────────────────┴──────────────────────┐
                          ▼                                             ▼
                   Grafana (:3000)                                FastAPI (:8000)
+                                                                       ├── Valkey (:6379, loopback)
                          │                                             │
                          └──────────── Nginx :80/:443 ──────────────────┘
                                           │
@@ -47,6 +48,8 @@ interfaces; Nginx is the public reverse-proxy boundary for those services.
 | EC2 public host | `32.194.69.77` (current DNS result) | API/Grafana DNS and fallback SSH as `ubuntu` | Terraform EIP + `.github/workflows/deploy.yml` |
 | EC2 CI interface | `homeops-ec2` (Tailnet hostname) | Preferred SSH target from the Tailnet-connected GitHub runner; public EIP is fallback | EC2 bootstrap hostname + `.github/workflows/deploy.yml` |
 | EC2 backend | EC2 loopback | `http://127.0.0.1:8000`; FastAPI `/health`, `/api/current-temps`, authenticated `/api/diagnostic`, internal `/metrics` | `dashboard/docker-compose.yml`, `dashboard/backend/main.py`, `dashboard/backend/security.py`, `dashboard/prometheus/prometheus.yml` |
+| Ask HomeOps quota store | EC2 loopback | Valkey `redis://127.0.0.1:6379/0`; atomic per-user/IP windows | `dashboard/docker-compose.yml`, `dashboard/backend/security.py` |
+| Ask HomeOps identity | Cognito managed login | Browser authorization-code + PKCE; backend verifies access-token JWKS | `infra/cognito.tf`, `dashboard/frontend/src/auth/oidc.js`, `dashboard/backend/security.py` |
 | Prometheus | EC2 loopback | `http://127.0.0.1:9090`; public read-only `/prometheus/` | `dashboard/docker-compose.yml`, `dashboard/nginx/api.homeops.now.conf` |
 | Grafana | EC2 loopback | `http://127.0.0.1:3000`; public read-only `/grafana/` | `dashboard/docker-compose.yml`, `dashboard/nginx/api.homeops.now.conf` |
 | Frontend | `homeops.now` | CloudFront HTTPS → private S3 origin | `infra/cloudfront.tf`, `infra/s3.tf` |
@@ -77,13 +80,13 @@ These are the endpoints the release gate checks after deployment:
 The smoke checker is [`scripts/deploy_smoke_check.py`](../scripts/deploy_smoke_check.py).
 It reports schema/health failures without printing household telemetry values.
 
-Ask HomeOps authentication is intentionally provider-neutral at the FastAPI
-boundary. The endpoint consumes a verified bearer principal with the
-`diagnostic:read` scope, derives the per-user quota key from its verified
-subject, and derives the IP key only from configured trusted Nginx proxy hops.
-The atomic `RateLimitStore` interface is ready for a shared Redis/Valkey-style
-adapter; the default unconfigured backend fails closed with `503`, and the
-included memory backend is local/test-only.
+Ask HomeOps uses Cognito as its OIDC identity provider. The browser obtains an
+access token through authorization code + PKCE; FastAPI verifies its signature,
+issuer, expiry, `client_id`, subject, and configured diagnostic scope against
+Cognito's JWKS. The per-user quota key comes from the verified subject, while
+the IP key comes only from configured trusted Nginx proxy hops. Valkey stores
+all quota dimensions atomically; the default unconfigured backend still fails
+closed with `503`, and the included memory backend is local/test-only.
 
 ## Active versus migration surfaces
 

@@ -17,3 +17,6 @@ agent_ip = "YOUR_AGENT_IP"
 
 # Tailscale auth key for EC2 to join Tailnet (generate at https://login.tailscale.com/admin/settings/keys)
 tailscale_authkey = "tskey-auth-..."
+
+# Optional: change if this Cognito managed-login prefix is already taken.
+cognito_domain_prefix = "homeops-production"

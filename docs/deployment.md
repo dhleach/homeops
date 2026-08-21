@@ -28,6 +28,35 @@ The separate frontend workflow runs `npm ci`, builds with
 `VITE_API_URL=https://api.homeops.now`, syncs the private S3 bucket, invalidates
 CloudFront, and runs the same public smoke checks.
 
+## Ask HomeOps authentication and quota runtime
+
+Terraform provisions the Cognito user pool, managed-login domain, public
+authorization-code + PKCE app client, and the
+`https://api.homeops.now/diagnostic:read` custom scope. It also writes the
+non-secret OIDC and Valkey settings to
+`/homeops/production/ask-homeops-*` SSM parameters. The EC2 deploy script reads
+those values with the instance role and refreshes the ignored, mode-0600
+`dashboard/.env` before recreating the backend. The Gemini key remains in its
+existing encrypted SSM parameter.
+
+After applying the Cognito resources:
+
+1. Copy `terraform output -raw cognito_managed_login_authority`,
+   `cognito_frontend_client_id`, and `cognito_frontend_scope` into the GitHub
+   repository variables `HOMEOPS_OIDC_AUTHORITY`, `HOMEOPS_OIDC_CLIENT_ID`, and
+   `HOMEOPS_OIDC_SCOPE`.
+2. Create or invite the intended demo user in the Cognito user pool.
+3. Push/merge the application change so the backend deploy refreshes SSM config
+   and the frontend deploy embeds only public OIDC metadata.
+4. Confirm the browser redirects to Cognito managed login, returns to
+   `/auth/callback`, and sends an access token on `POST /api/diagnostic`.
+
+The backend accepts Cognito's `client_id` access-token claim and verifies the
+signature, issuer, expiry, subject, and configured scope against the pool JWKS.
+Valkey listens only on EC2 loopback; the backend performs all per-user/IP
+window reservations in one atomic Lua script. Missing OIDC or Valkey settings
+remain a safe `401`/`503` failure rather than enabling anonymous access.
+
 ## Pi permission model
 
 The original deploy failure occurred because `github-deploy` ran `git pull` in a

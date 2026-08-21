@@ -1,9 +1,16 @@
+/**
+ * Revision history:
+ *   2026-08-21  Connected the Cognito OIDC session to the dashboard header and
+ *               Ask HomeOps diagnostic widget.
+ */
+
 import { useTemps } from "./hooks/useTemps.js";
 import { TempCard } from "./components/TempCard.jsx";
 import { OutdoorCard } from "./components/OutdoorCard.jsx";
 import { LiveIndicator } from "./components/LiveIndicator.jsx";
 import { ErrorBanner } from "./components/ErrorBanner.jsx";
 import { AskHvac } from "./components/AskHvac.jsx";
+import { useAuth } from "./hooks/useAuth.js";
 
 const GRAFANA_BASE = import.meta.env.VITE_GRAFANA_URL ?? "https://api.homeops.now/grafana";
 const GRAFANA_URL = `${GRAFANA_BASE}/d/homeops-temps`;
@@ -19,6 +26,7 @@ const ZONE_ORDER = ["floor_3", "floor_2", "floor_1"];
 
 export default function App() {
   const { data, loading, error, lastUpdated, refresh } = useTemps();
+  const auth = useAuth();
 
   return (
     <div className="flex min-h-screen flex-col bg-surface">
@@ -37,26 +45,37 @@ export default function App() {
             </div>
           </div>
 
-          <a
-            href={GRAFANA_URL}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="flex items-center gap-2 rounded-xl border border-blue-500/40 bg-blue-500/10 px-4 py-2 text-sm font-medium text-blue-400 transition-colors hover:bg-blue-500/20 hover:text-blue-300"
-          >
-            View Full Dashboard
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              viewBox="0 0 20 20"
-              fill="currentColor"
-              className="h-4 w-4"
+          <div className="flex items-center gap-3">
+            {auth.configured && !auth.loading && (
+              <button
+                type="button"
+                onClick={auth.authenticated ? auth.logout : auth.login}
+                className="rounded-xl border border-border px-4 py-2 text-sm font-medium text-slate-300 transition-colors hover:border-blue-500/50 hover:text-blue-300"
+              >
+                {auth.authenticated ? "Sign out" : "Sign in"}
+              </button>
+            )}
+            <a
+              href={GRAFANA_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-2 rounded-xl border border-blue-500/40 bg-blue-500/10 px-4 py-2 text-sm font-medium text-blue-400 transition-colors hover:bg-blue-500/20 hover:text-blue-300"
             >
-              <path
-                fillRule="evenodd"
-                d="M5.22 14.78a.75.75 0 0 0 1.06 0l7.22-7.22v5.69a.75.75 0 0 0 1.5 0v-7.5a.75.75 0 0 0-.75-.75h-7.5a.75.75 0 0 0 0 1.5h5.69l-7.22 7.22a.75.75 0 0 0 0 1.06Z"
-                clipRule="evenodd"
-              />
-            </svg>
-          </a>
+              View Full Dashboard
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                viewBox="0 0 20 20"
+                fill="currentColor"
+                className="h-4 w-4"
+              >
+                <path
+                  fillRule="evenodd"
+                  d="M5.22 14.78a.75.75 0 0 0 1.06 0l7.22-7.22v5.69a.75.75 0 0 0 1.5 0v-7.5a.75.75 0 0 0-.75 0h-7.5a.75.75 0 0 0 0 1.5h5.69l-7.22 7.22a.75.75 0 0 0 0 1.06Z"
+                  clipRule="evenodd"
+                />
+              </svg>
+            </a>
+          </div>
         </div>
       </header>
 
@@ -117,7 +136,7 @@ export default function App() {
 
         {/* AI Diagnostic */}
         <section className="mt-16 border-t border-border pt-12">
-          <AskHvac apiUrl={API_URL} />
+          <AskHvac apiUrl={API_URL} auth={auth} />
         </section>
 
         {/* Grafana dashboards */}

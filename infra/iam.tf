@@ -60,17 +60,19 @@ resource "aws_iam_role_policy_attachment" "s3_config_read" {
   policy_arn = aws_iam_policy.s3_config_read.arn
 }
 
-# SSM — k3s node token: EC2 reads it during bootstrap; homeops-deploy user writes it from Pi
+# SSM — bootstrap secrets plus Ask HomeOps runtime configuration. EC2 reads
+# these during bootstrap and each owner-scoped deployment refresh.
 data "aws_iam_policy_document" "ssm_k3s_token_read" {
   statement {
     sid     = "ReadBootstrapSecrets"
     effect  = "Allow"
     actions = ["ssm:GetParameter"]
-    # EC2 reads k3s token + Gemini API key during bootstrap
+    # EC2 reads bootstrap secrets and non-secret Ask HomeOps settings.
     resources = [
       "arn:aws:ssm:${var.aws_region}:*:parameter/homeops/${var.environment}/k3s-node-token",
       "arn:aws:ssm:${var.aws_region}:*:parameter/homeops/${var.environment}/gemini-api-key",
-      "arn:aws:ssm:${var.aws_region}:*:parameter/homeops/${var.environment}/tailscale-authkey"
+      "arn:aws:ssm:${var.aws_region}:*:parameter/homeops/${var.environment}/tailscale-authkey",
+      "arn:aws:ssm:${var.aws_region}:*:parameter/homeops/${var.environment}/ask-homeops-*"
     ]
   }
   # Needed to decrypt SecureString params (AWS-managed key aws/ssm)
@@ -89,7 +91,7 @@ data "aws_iam_policy_document" "ssm_k3s_token_read" {
 
 resource "aws_iam_policy" "ssm_k3s_token_read" {
   name        = "homeops-ec2-ssm-k3s-token-${var.environment}"
-  description = "Allow EC2 to read k3s node token from SSM for automated cluster join"
+  description = "Allow EC2 to read HomeOps bootstrap secrets and Ask HomeOps runtime settings"
   policy      = data.aws_iam_policy_document.ssm_k3s_token_read.json
 
   tags = {

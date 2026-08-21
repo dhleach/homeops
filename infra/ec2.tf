@@ -41,6 +41,16 @@ resource "aws_instance" "homeops" {
   key_name               = aws_key_pair.homeops.key_name
   vpc_security_group_ids = [aws_security_group.homeops_ec2.id]
   iam_instance_profile   = aws_iam_instance_profile.homeops_ec2.name
+  depends_on = [
+    aws_iam_role_policy_attachment.ssm_k3s_token_read,
+    aws_ssm_parameter.ask_homeops_oidc_issuer,
+    aws_ssm_parameter.ask_homeops_oidc_audience,
+    aws_ssm_parameter.ask_homeops_oidc_audience_claim,
+    aws_ssm_parameter.ask_homeops_oidc_jwks_url,
+    aws_ssm_parameter.ask_homeops_diagnostic_scope,
+    aws_ssm_parameter.ask_homeops_limiter_backend,
+    aws_ssm_parameter.ask_homeops_redis_url,
+  ]
 
   root_block_device {
     volume_type           = "gp3"
@@ -182,7 +192,9 @@ systemctl start certbot.timer >> $LOG 2>&1 || true
 # ── 6. Docker Compose (homeops stack) ────────────────────────────────────
 if [ -f /home/ubuntu/homeops/dashboard/docker-compose.yml ]; then
   cd /home/ubuntu/homeops/dashboard
-  # Pull GEMINI_API_KEY from SSM — required by backend container
+  # Pull backend secrets and non-secret auth/runtime settings from SSM. The
+  # ignored file is mode 0600 so later owner-scoped deploys can recreate the
+  # container without putting credentials in the repository or command line.
   GEMINI_API_KEY=$(/usr/local/bin/aws ssm get-parameter \
     --name "/homeops/${var.environment}/gemini-api-key" \
     --with-decryption \
@@ -192,7 +204,29 @@ if [ -f /home/ubuntu/homeops/dashboard/docker-compose.yml ]; then
   if [ -z "$GEMINI_API_KEY" ]; then
     echo "[WARN] GEMINI_API_KEY not found in SSM — backend container will fail. Add to SSM: /homeops/${var.environment}/gemini-api-key" >> $LOG
   fi
-  GEMINI_API_KEY="$GEMINI_API_KEY" docker compose up -d >> $LOG 2>&1 \
+
+  ASK_HOMEOPS_OIDC_ISSUER=$(/usr/local/bin/aws ssm get-parameter --name "/homeops/${var.environment}/ask-homeops-oidc-issuer" --with-decryption --query 'Parameter.Value' --output text --region ${var.aws_region} 2>/dev/null)
+  ASK_HOMEOPS_OIDC_AUDIENCE=$(/usr/local/bin/aws ssm get-parameter --name "/homeops/${var.environment}/ask-homeops-oidc-audience" --with-decryption --query 'Parameter.Value' --output text --region ${var.aws_region} 2>/dev/null)
+  ASK_HOMEOPS_OIDC_AUDIENCE_CLAIM=$(/usr/local/bin/aws ssm get-parameter --name "/homeops/${var.environment}/ask-homeops-oidc-audience-claim" --with-decryption --query 'Parameter.Value' --output text --region ${var.aws_region} 2>/dev/null)
+  ASK_HOMEOPS_OIDC_JWKS_URL=$(/usr/local/bin/aws ssm get-parameter --name "/homeops/${var.environment}/ask-homeops-oidc-jwks-url" --with-decryption --query 'Parameter.Value' --output text --region ${var.aws_region} 2>/dev/null)
+  ASK_HOMEOPS_DIAGNOSTIC_SCOPE=$(/usr/local/bin/aws ssm get-parameter --name "/homeops/${var.environment}/ask-homeops-diagnostic-scope" --with-decryption --query 'Parameter.Value' --output text --region ${var.aws_region} 2>/dev/null)
+  ASK_HOMEOPS_LIMITER_BACKEND=$(/usr/local/bin/aws ssm get-parameter --name "/homeops/${var.environment}/ask-homeops-limiter-backend" --with-decryption --query 'Parameter.Value' --output text --region ${var.aws_region} 2>/dev/null)
+  ASK_HOMEOPS_REDIS_URL=$(/usr/local/bin/aws ssm get-parameter --name "/homeops/${var.environment}/ask-homeops-redis-url" --with-decryption --query 'Parameter.Value' --output text --region ${var.aws_region} 2>/dev/null)
+
+  umask 077
+  cat > .env << ENVEOF
+GEMINI_API_KEY=$GEMINI_API_KEY
+ASK_HOMEOPS_OIDC_ISSUER=$ASK_HOMEOPS_OIDC_ISSUER
+ASK_HOMEOPS_OIDC_AUDIENCE=$ASK_HOMEOPS_OIDC_AUDIENCE
+ASK_HOMEOPS_OIDC_AUDIENCE_CLAIM=$ASK_HOMEOPS_OIDC_AUDIENCE_CLAIM
+ASK_HOMEOPS_OIDC_JWKS_URL=$ASK_HOMEOPS_OIDC_JWKS_URL
+ASK_HOMEOPS_DIAGNOSTIC_SCOPE=$ASK_HOMEOPS_DIAGNOSTIC_SCOPE
+ASK_HOMEOPS_LIMITER_BACKEND=$ASK_HOMEOPS_LIMITER_BACKEND
+ASK_HOMEOPS_REDIS_URL=$ASK_HOMEOPS_REDIS_URL
+ENVEOF
+  chmod 600 .env
+
+  docker compose up -d >> $LOG 2>&1 \
     && echo "[OK] docker compose up" >> $LOG \
     || echo "[WARN] docker compose failed — check secrets/env" >> $LOG
 else

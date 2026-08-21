@@ -3,18 +3,26 @@
 Revision history:
   2026-08-21  Added bearer-auth error contracts, trusted-proxy/IP regressions,
               atomic quota-store tests, and endpoint fail-closed coverage.
+  2026-08-21  Added signed Cognito-style JWT, JWKS outage, and Redis/Valkey
+              adapter configuration coverage for the production wiring.
 """
 
 from __future__ import annotations
 
 import ipaddress
+import json
 from unittest.mock import AsyncMock, patch
 
+import httpx
+import jwt
 import main
 import pytest
+import security
+from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi import HTTPException
 from fastapi.security import HTTPAuthorizationCredentials
 from fastapi.testclient import TestClient
+from jwt.algorithms import RSAAlgorithm
 from security import (
     AUTH_FORBIDDEN_ERROR,
     AUTH_REQUIRED_ERROR,
@@ -23,15 +31,18 @@ from security import (
     LIMITER_UNAVAILABLE_ERROR,
     AuthenticationUnavailable,
     InMemoryRateLimitStore,
+    JwksTokenVerifier,
     Principal,
     ProxyConfig,
     QuotaPolicy,
     QuotaRule,
+    RedisRateLimitStore,
     RejectingTokenVerifier,
     UnavailableRateLimitStore,
     authenticate_bearer,
     build_quota_rules,
     extract_client_ip,
+    load_token_verifier,
 )
 
 client = TestClient(main.app)
@@ -51,8 +62,159 @@ class MappingVerifier:
         return self.principal if token == "good-token" else None
 
 
+class JwksClient:
+    """HTTP double for the OIDC discovery key set."""
+
+    def __init__(self, jwks: dict):
+        self.jwks = jwks
+        self.calls = 0
+
+    def get(self, url: str) -> httpx.Response:
+        self.calls += 1
+        return httpx.Response(200, json=self.jwks, request=httpx.Request("GET", url))
+
+
+class ScriptRedisClient:
+    """Redis double that captures script registration and invocation arguments."""
+
+    def __init__(self):
+        self.scripts: list[str] = []
+        self.calls: list[dict] = []
+
+    def register_script(self, source: str):
+        self.scripts.append(source)
+
+        def run(**kwargs):
+            self.calls.append(kwargs)
+            return [1, "", 3, 5, 1_700_000_060, 0]
+
+        return run
+
+
+def _signed_access_token(*, issuer: str, audience: str, scope: str) -> tuple[str, dict]:
+    private_key = rsa.generate_private_key(public_exponent=65_537, key_size=2_048)
+    public_jwk = json.loads(RSAAlgorithm.to_jwk(private_key.public_key()))
+    public_jwk.update({"kid": "test-key", "alg": "RS256", "use": "sig"})
+    token = jwt.encode(
+        {
+            "iss": issuer,
+            "sub": "cognito-user-1",
+            "client_id": audience,
+            "scope": scope,
+            "exp": 1_800_000_000,
+        },
+        private_key,
+        algorithm="RS256",
+        headers={"kid": "test-key"},
+    )
+    return token, {"keys": [public_jwk]}
+
+
 def _credentials(token: str = "good-token") -> HTTPAuthorizationCredentials:
     return HTTPAuthorizationCredentials(scheme="Bearer", credentials=token)
+
+
+def test_jwks_verifier_accepts_signed_cognito_access_token() -> None:
+    issuer = "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_test"
+    audience = "client-id"
+    token, jwks = _signed_access_token(
+        issuer=issuer,
+        audience=audience,
+        scope="openid https://api.homeops.now/diagnostic:read",
+    )
+    verifier = JwksTokenVerifier(
+        issuer=issuer,
+        audience=audience,
+        audience_claim="client_id",
+        http_client=JwksClient(jwks),
+        clock=lambda: 1_700_000_000.0,
+    )
+
+    principal = verifier.verify(token)
+
+    assert principal == Principal(
+        "cognito-user-1",
+        frozenset({"openid", "https://api.homeops.now/diagnostic:read"}),
+    )
+
+
+def test_jwks_verifier_rejects_wrong_audience() -> None:
+    issuer = "https://issuer.example.test"
+    token, jwks = _signed_access_token(issuer=issuer, audience="right-client", scope="read")
+    verifier = JwksTokenVerifier(
+        issuer=issuer,
+        audience="wrong-client",
+        audience_claim="client_id",
+        http_client=JwksClient(jwks),
+    )
+
+    assert verifier.verify(token) is None
+
+
+def test_jwks_verifier_translates_jwks_outage_to_authentication_unavailable() -> None:
+    class BrokenClient:
+        def get(self, url: str) -> httpx.Response:
+            raise httpx.HTTPError(f"cannot reach {url}")
+
+    issuer = "https://issuer.example.test"
+    token, _ = _signed_access_token(issuer=issuer, audience="client-id", scope="read")
+    verifier = JwksTokenVerifier(
+        issuer=issuer,
+        audience="client-id",
+        http_client=BrokenClient(),
+    )
+
+    with pytest.raises(AuthenticationUnavailable):
+        verifier.verify(token)
+
+
+def test_load_token_verifier_uses_oidc_configuration(monkeypatch) -> None:
+    monkeypatch.setenv("ASK_HOMEOPS_OIDC_ISSUER", "https://issuer.example.test")
+    monkeypatch.setenv("ASK_HOMEOPS_OIDC_AUDIENCE", "client-id")
+    monkeypatch.setenv("ASK_HOMEOPS_OIDC_AUDIENCE_CLAIM", "client_id")
+
+    verifier = load_token_verifier()
+
+    assert isinstance(verifier, JwksTokenVerifier)
+    assert verifier.issuer == "https://issuer.example.test"
+    assert verifier.audience == "client-id"
+    assert verifier.audience_claim == "client_id"
+
+
+def test_redis_store_uses_atomic_scripts_and_hashed_keys(monkeypatch) -> None:
+    fake_client = ScriptRedisClient()
+    monkeypatch.setattr(security.redis.Redis, "from_url", lambda *args, **kwargs: fake_client)
+
+    store = RedisRateLimitStore("redis://127.0.0.1:6379/0")
+    decision = store.acquire(
+        (
+            QuotaRule("ip", "203.0.113.7", 5, 60, "rate"),
+            QuotaRule("user", "cognito-user-1", 2, 1, "inflight"),
+        ),
+        now=1_700_000_000.0,
+    )
+    store.release(decision.lease)
+
+    assert decision.allowed is True
+    assert len(fake_client.scripts) == 2
+    acquire_call = fake_client.calls[0]
+    release_call = fake_client.calls[1]
+    assert len(acquire_call["keys"]) == 2
+    assert all("203.0.113.7" not in key for key in acquire_call["keys"])
+    assert all("cognito-user-1" not in key for key in acquire_call["keys"])
+    assert len(release_call["keys"]) == 1
+
+
+def test_load_rate_limit_store_selects_configured_redis(monkeypatch) -> None:
+    fake_client = ScriptRedisClient()
+    monkeypatch.setenv("ASK_HOMEOPS_LIMITER_BACKEND", "redis")
+    monkeypatch.setenv("ASK_HOMEOPS_REDIS_URL", "redis://127.0.0.1:6379/0")
+    monkeypatch.setattr(security.redis.Redis, "from_url", lambda *args, **kwargs: fake_client)
+
+    store = security.load_rate_limit_store()
+
+    assert isinstance(store, RedisRateLimitStore)
+    assert store.redis_url == "redis://127.0.0.1:6379/0"
 
 
 def test_authentication_requires_a_bearer_credential() -> None:

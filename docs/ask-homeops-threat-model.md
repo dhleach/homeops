@@ -1,8 +1,8 @@
 # Ask HomeOps threat model and quota policy
 
 **Policy version:** `homeops.ask-homeops-policy.v1`  
-**Status:** Proposed baseline for the pre-Bob-demo security gate; provider-neutral auth/quota boundary, global provider backstop, and metrics implemented, with vendor/store adapters still pending
-**Last reviewed:** 2026-08-20  
+**Status:** Proposed baseline for the pre-Bob-demo security gate; Cognito OIDC/JWKS authentication, shared Valkey quotas, global provider backstop, and metrics implemented
+**Last reviewed:** 2026-08-21
 **Applies to:** `POST https://api.homeops.now/api/diagnostic`
 
 This document defines the security boundary and initial resource policy for
@@ -39,6 +39,8 @@ Nginx on EC2 :443
         │ reverse proxy to localhost:8000
         ▼
 FastAPI /api/diagnostic
+        ├── Cognito OIDC/JWKS token verification
+        ├── atomic per-user/IP quotas in loopback Valkey :6379
         ├── read-only Prometheus queries on EC2 :9090
         └── Gemini generateContent request
                 │ API key stays server-side
@@ -52,22 +54,21 @@ public port. The frontend sends the homeowner's question to the endpoint, and
 the backend builds a current HVAC snapshot from Prometheus before making one
 Gemini request.
 
-The endpoint boundary now requires a standard bearer credential and a verified
-`diagnostic:read` scope; the default verifier rejects all tokens until an
-OIDC-compatible provider adapter is configured. CORS restricts browser origins
+The endpoint boundary requires a standard bearer credential and a verified
+Cognito access token carrying the configured
+`https://api.homeops.now/diagnostic:read` scope. CORS restricts browser origins
 but is not authentication: a non-browser client can call the public HTTPS
-endpoint directly, so token validation and quota state remain explicit server
-controls. The public `/api/current-temps`,
+endpoint directly, so token validation and shared quota state remain explicit
+server controls. The public `/api/current-temps`,
 `/grafana/`, and `/prometheus/` surfaces are related exposure areas but are not
 silently changed by this policy.
 
 ### Edge configuration finding
 
-The current Nginx preflight response advertises `GET, OPTIONS`, while the
-frontend sends `POST /api/diagnostic`. The next endpoint-hardening change must
-verify and correct that contract (and add an automated preflight check) before
-the public Bob demo. This is a browser-compatibility defect, not an
-authentication control.
+The Nginx preflight contract now advertises `GET, POST, OPTIONS`, matching the
+frontend's `POST /api/diagnostic` request. This remains a browser-compatibility
+control, not an authentication control; bearer validation and quota state are
+still enforced by FastAPI.
 
 ## Assets and security objectives
 
@@ -136,11 +137,12 @@ authenticated user/IP limiter required by the public Bob-demo gate.
 ## Controls implemented by the auth/quota boundary
 
 The application now accepts only a standard `Authorization: Bearer` credential
-through a provider-neutral `TokenVerifier` contract. A verified principal must
-carry the `diagnostic:read` scope; missing/invalid credentials return `401`, a
-valid principal without the scope returns `403`, and verifier outages return a
-generic `503`. No verifier exception can downgrade a request to anonymous
-access.
+through a Cognito-backed OIDC/JWKS `TokenVerifier`. The verifier validates the
+RSA signature, issuer, expiry, subject, and app-client `client_id`; a verified
+principal must carry the configured diagnostic scope. Missing/invalid
+credentials return `401`, a valid principal without the scope returns `403`,
+and verifier outages return a generic `503`. No verifier exception can
+downgrade a request to anonymous access.
 
 Before Prometheus context assembly or Gemini work, the endpoint atomically
 checks the policy's independent user and IP dimensions. Client IP extraction
@@ -151,9 +153,11 @@ dimensions together and releases only in-flight reservations after the request
 finishes, preventing a partially applied quota check.
 
 The repository includes a deterministic in-memory store for tests and local
-development. It is not a release backend. Until a shared adapter is selected
-and configured, the default store returns a generic `503`, so a production
-process cannot silently run without distributed quota state.
+development plus a Redis-compatible Valkey adapter for production. Valkey is
+bound to EC2 loopback and all user/IP dimensions are reserved in one atomic
+Lua script. If the shared adapter is missing or unavailable, the default store
+returns a generic `503`, so a production process cannot silently run without
+shared quota state.
 
 ## Proposed initial quota policy
 
@@ -211,14 +215,16 @@ provider/configuration failures. A future status-code change must be versioned
 or coordinated with the frontend; quota rejections must not use that success
 shape because callers need to distinguish throttling from a completed request.
 
-## Authentication contract (provider-neutral)
+## Authentication contract (Cognito OIDC)
 
-The implementation uses an OIDC-compatible provider contract, but the backend
-contract is fixed regardless of vendor:
+The implementation uses Amazon Cognito as the OIDC provider. The browser uses
+the authorization-code flow with PKCE and a public app client; the backend
+consumes the resulting access token:
 
 - Accept a standard bearer token in the `Authorization` header, not an API key
   in the URL and not a user identity in JSON.
-- Validate signature, issuer, audience, expiry, and required subject claims.
+- Validate the RSA signature from Cognito's JWKS, issuer, `client_id` audience,
+  expiry, and required subject claims.
 - Use the stable `sub` claim as the quota subject. Do not use email as the
   primary key; email can change and is more identifying than necessary.
 - Fail closed when the identity provider or key set cannot be validated. Do
@@ -228,9 +234,9 @@ contract is fixed regardless of vendor:
 - Add the security scheme and `401`/`403` responses to the generated OpenAPI
   contract and test the contract in CI.
 
-This document intentionally does not select Clerk, Auth0, Cognito, Supabase,
-or another vendor. That choice remains a product/operational decision before
-the public Bob demo is released.
+The Cognito issuer, app-client ID, JWKS URL, and diagnostic scope are supplied
+through SSM-backed deployment configuration. No Cognito client secret is sent
+to or embedded in the public frontend.
 
 ## Data handling and logging rules
 
@@ -279,10 +285,9 @@ Do not include IP, user subject, question, or prompt text in labels. Alert on:
 
 Do not expose the demo until all boxes are true:
 
-- [ ] Authentication method selected and token validation tested.
+- [x] Cognito authentication method selected and token validation tested.
 - [ ] IP edge limit and verified-user quota enforced before provider work.
-- [ ] Shared limiter state or an explicitly documented single-instance
-      limitation is in place.
+- [x] Shared Valkey limiter state is in place.
 - [ ] Global daily model-call cap and in-flight cap enforced.
 - [ ] `429`, `401`, `403`, and provider failure behavior covered by tests.
 - [ ] Metrics and alerts above are present without high-cardinality labels.
@@ -301,7 +306,6 @@ This policy does not authorize or design:
 - A replacement for Nginx, AWS security groups, SSM, GitHub secret hygiene, or
   provider account billing controls.
 - A claim that prompt instructions alone prevent jailbreaks or data leakage.
-- A decision about the authentication vendor or limiter backing store.
 
 ## References
 

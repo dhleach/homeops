@@ -37,3 +37,28 @@ output "ssh_connect" {
   description = "SSH command to connect to EC2"
   value       = "ssh -i ~/.ssh/id_ed25519 ubuntu@${aws_eip.homeops.public_ip}"
 }
+
+output "cognito_oidc_issuer" {
+  description = "Cognito issuer URL used by the Ask HomeOps backend"
+  value       = local.homeops_cognito_issuer
+}
+
+output "cognito_managed_login_authority" {
+  description = "Cognito managed-login authority used by the browser"
+  value       = local.homeops_cognito_authority
+}
+
+output "cognito_frontend_client_id" {
+  description = "Public Cognito app-client ID used by the frontend"
+  value       = aws_cognito_user_pool_client.frontend.id
+}
+
+output "cognito_diagnostic_scope" {
+  description = "Custom scope requested by the frontend and required by the API"
+  value       = local.homeops_cognito_scope
+}
+
+output "cognito_frontend_scope" {
+  description = "Complete OAuth scope string for the frontend authorization request"
+  value       = "openid email profile ${local.homeops_cognito_scope}"
+}

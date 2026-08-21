@@ -19,6 +19,9 @@ the current GitHub Actions deploy workflow.
 | Route53 records | Apex → CloudFront, `api.*` → EC2, legacy `grafana.*` → EC2 DNS record |
 | Security group | 443/80 public, SSH from the configured `agent_ip`, Prometheus/k3s control traffic from the Pi Tailscale IP |
 | IAM role + profile | CloudWatch agent + S3 read for EC2 |
+| Cognito user pool | OIDC managed login for the browser-facing Ask HomeOps demo |
+| Cognito resource server | `https://api.homeops.now/diagnostic:read` API scope |
+| SSM runtime parameters | OIDC and loopback Valkey settings consumed by the EC2 deploy script |
 
 ## Prerequisites
 
@@ -47,6 +50,14 @@ terraform apply
 # 5. Note the outputs — you'll need these for CI/CD
 terraform output
 ```
+
+The Cognito resources create a public app client for authorization code + PKCE
+and a `diagnostic:read` custom scope. After applying, copy the outputs
+`cognito_managed_login_authority`, `cognito_frontend_client_id`, and
+`cognito_frontend_scope` into the GitHub repository variables
+`HOMEOPS_OIDC_AUTHORITY`, `HOMEOPS_OIDC_CLIENT_ID`, and `HOMEOPS_OIDC_SCOPE`.
+Create or invite the allowed demo users in the Cognito user pool before
+enabling the frontend login.
 
 ## CI SSH identity
 
@@ -94,6 +105,11 @@ After `terraform apply`:
 - The supported Grafana URL is `https://api.homeops.now/grafana/`. The
   Terraform-created `grafana.homeops.now` DNS record is not currently a
   supported virtual host; see [`docs/architecture.md`](../docs/architecture.md).
+- Ask HomeOps quota state uses a loopback-only Valkey container on
+  `127.0.0.1:6379`; the backend selects it through the SSM-managed
+  `redis://127.0.0.1:6379/0` URL.
+- Ask HomeOps bearer tokens are issued by the Cognito user pool and verified by
+  the backend against the pool issuer/JWKS. The browser app client has no secret.
 
 For the complete topology and deployment ownership model, see
 [`docs/architecture.md`](../docs/architecture.md) and

@@ -35,6 +35,12 @@ jobs:
         working-directory: dashboard/frontend
         env:
           VITE_API_URL: https://api.homeops.now
+          # Set these repository variables from `terraform output` after the
+          # Cognito user pool is provisioned. They are public OIDC metadata,
+          # not credentials; the app client intentionally has no secret.
+          VITE_OIDC_AUTHORITY: ${{ vars.HOMEOPS_OIDC_AUTHORITY }}
+          VITE_OIDC_CLIENT_ID: ${{ vars.HOMEOPS_OIDC_CLIENT_ID }}
+          VITE_OIDC_SCOPE: ${{ vars.HOMEOPS_OIDC_SCOPE }}
         run: npm run build
 
       - name: Configure AWS credentials
