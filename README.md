@@ -73,7 +73,7 @@ checks, see [`docs/deployment.md`](docs/deployment.md).
 
 **Consumer** tails the observer log in real time. It routes each event by entity ID, maintains per-zone heating session state, emits higher-level derived events, and exports live Prometheus metrics via `/metrics`.
 
-**EC2 dashboard stack** — Prometheus scrapes the Pi's `/metrics` endpoint every 15 seconds over Tailscale and the backend's internal diagnostic metrics over EC2 loopback. Grafana reads from Prometheus and serves 4 provisioned dashboards. FastAPI queries Prometheus and exposes structured JSON at `/api/current-temps`; Ask HomeOps requires a Cognito-verified bearer principal, independent per-user/IP quota state in loopback-only Valkey, a process-wide provider-call backstop, and low-cardinality abuse/cost metrics. The browser uses authorization code + PKCE and never receives a client secret. Nginx proxies the public API surfaces behind a TLS subdomain but does not expose backend `/metrics`. The active production stack uses Docker Compose with host networking; the Kubernetes manifests are a separate migration surface.
+**EC2 dashboard stack** — Prometheus scrapes the Pi's `/metrics` endpoint every 15 seconds over Tailscale and the backend's internal diagnostic metrics over EC2 loopback. Grafana reads from Prometheus and serves 4 provisioned dashboards. FastAPI queries Prometheus and exposes structured JSON at `/api/current-temps`; Ask HomeOps requires a Cognito-verified bearer principal, independent per-user/IP quota state in loopback-only Valkey, a process-wide provider-call backstop, low-cardinality abuse/cost metrics, and a deterministic read-only prompt-safety boundary. The browser uses authorization code + PKCE and never receives a client secret. Nginx proxies the public API surfaces behind a TLS subdomain but does not expose backend `/metrics`. The active production stack uses Docker Compose with host networking; the Kubernetes manifests are a separate migration surface.
 
 **Frontend** — React + Tailwind, built by GitHub Actions and deployed to S3/CloudFront when frontend files or its deploy workflow change on `master`.
 
@@ -326,7 +326,7 @@ PYTHONPATH=services/consumer:services/observer:services/insights:dashboard/backe
 NODE_ENV=test npm --prefix dashboard/frontend test
 ```
 
-877 Python tests cover observer reconnect logic, consumer event derivation, floor-2 long-call warning and escalation, thermostat tracking, heating cycle analytics, consumer state persistence, Prometheus metrics gauge updates, the FastAPI backend, Ask HomeOps authentication/quota/budget/observability guards, deployment smoke checks, insights engine rules, and test-count validation. The frontend has 34 React component tests. The canonical counts live in [`docs/test-counts.json`](docs/test-counts.json) and are verified against CI runner output.
+886 Python tests cover observer reconnect logic, consumer event derivation, floor-2 long-call warning and escalation, thermostat tracking, heating cycle analytics, consumer state persistence, Prometheus metrics gauge updates, the FastAPI backend, Ask HomeOps authentication/quota/budget/observability/prompt-safety guards, deployment smoke checks, insights engine rules, and test-count validation. The frontend has 34 React component tests. The canonical counts live in [`docs/test-counts.json`](docs/test-counts.json) and are verified against CI runner output.
 
 ### CI
 
