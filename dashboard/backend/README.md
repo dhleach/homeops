@@ -17,8 +17,9 @@ interface at `https://api.homeops.now`.
 `/api/diagnostic` is currently a public, read-only endpoint. Authentication,
 per-user/IP quotas, and the remaining public-assistant controls are tracked in
 the separate Ask HomeOps hardening P0; this endpoint must not be presented as
-an authenticated or unrestricted production assistant. The current
-non-authenticated guardrails
+an authenticated or unrestricted production assistant. The threat model and
+proposed quota policy live in [`docs/ask-homeops-threat-model.md`](../../docs/ask-homeops-threat-model.md).
+The current non-authenticated guardrails
 reject blank, oversized, or unexpected request fields; cap questions at 1,000
 characters and model output at 256 tokens; bound Prometheus context assembly to
 5 seconds; and bound each Gemini request to 10 seconds. Provider and missing
