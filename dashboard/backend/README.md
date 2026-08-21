@@ -15,9 +15,14 @@ interface at `https://api.homeops.now`.
 | `GET /openapi.json` | Generated API contract |
 
 `/api/diagnostic` is currently a public, read-only endpoint. Authentication,
-quotas, input limits, and budget controls are tracked in the separate Ask
-HomeOps hardening P0; this endpoint must not be presented as an authenticated
-or unrestricted production assistant.
+per-user/IP quotas, and the remaining public-assistant controls are tracked in
+the separate Ask HomeOps hardening P0; this endpoint must not be presented as
+an authenticated or unrestricted production assistant. The current
+non-authenticated guardrails
+reject blank, oversized, or unexpected request fields; cap questions at 1,000
+characters and model output at 256 tokens; bound Prometheus context assembly to
+5 seconds; and bound each Gemini request to 10 seconds. Provider and missing
+configuration failures return a generic safe error rather than exception text.
 
 `/api/current-temps` returns a structured response with nullable telemetry
 fields. A non-null `error` means Prometheus was unreachable; the deployment

@@ -7,14 +7,31 @@ is unreachable so the frontend can show a degraded-mode UI.
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import os
 from datetime import UTC, datetime
 
 import httpx
 from fastapi import FastAPI
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 PROMETHEUS_URL = "http://localhost:9090/api/v1/query"
+PROMETHEUS_QUERY_TIMEOUT_SECONDS = 2.0
+PROMETHEUS_CONTEXT_TIMEOUT_SECONDS = 5.0
+GEMINI_REQUEST_TIMEOUT_SECONDS = 10.0
+MAX_QUESTION_CHARS = 1_000
+MAX_CONTEXT_CHARS = 4_000
+MAX_OUTPUT_TOKENS = 256
+
+DIAGNOSTIC_UNAVAILABLE_ERROR = "Diagnostic service temporarily unavailable"
+_CONTEXT_TRUNCATION_MARKER = "\n[Telemetry context truncated]"
+_TELEMETRY_UNAVAILABLE_CONTEXT = (
+    "=== HomeOps HVAC Snapshot ===\n"
+    "Telemetry is temporarily unavailable. Do not infer current HVAC conditions."
+)
+
+logger = logging.getLogger(__name__)
 
 FLOORS = ["floor_1", "floor_2", "floor_3"]
 
@@ -27,12 +44,14 @@ SYSTEM_PROMPT = (
     "no heating is needed and the furnace should be off. This is healthy, not a problem. "
     "Do NOT suggest the system should be cooling or comment on the absence of cooling data. "
     "Do NOT flag above-setpoint temperatures as a problem — that is normal operation. "
-    "On warm days (outdoor temp above ~55°F), expect all zones idle and furnace off. That is healthy. "
+    "On warm days (outdoor temp above ~55°F), expect all zones idle and furnace off. "
+    "That is healthy. "
     "Only flag as unusual: a zone calling for heat on a very warm day, floor 2 running more than "
     "45 minutes continuously (overheating risk — floor 2 only has 3 vents), or the furnace running "
     "when no zones are calling. "
     "Always start with a clear verdict: 'Your system looks healthy' or 'Something worth checking'. "
-    "Be specific about numbers. Keep response under 150 words. Write for a homeowner, not an HVAC tech."
+    "Be specific about numbers. Keep response under 150 words. Write for a homeowner, "
+    "not an HVAC tech."
 )
 
 app = FastAPI(
@@ -86,7 +105,25 @@ _DEFAULT_QUESTION = (
 
 
 class DiagnosticRequest(BaseModel):
-    question: str = _DEFAULT_QUESTION
+    """Validated public input for the unauthenticated diagnostic endpoint."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    question: str = Field(
+        default=_DEFAULT_QUESTION,
+        min_length=1,
+        max_length=MAX_QUESTION_CHARS,
+        description="A concise question about the current HVAC telemetry.",
+    )
+
+    @field_validator("question")
+    @classmethod
+    def question_must_not_be_blank(cls, value: str) -> str:
+        """Reject whitespace-only questions and normalize surrounding whitespace."""
+        value = value.strip()
+        if not value:
+            raise ValueError("question must contain non-whitespace characters")
+        return value
 
 
 class DiagnosticResponse(BaseModel):
@@ -112,7 +149,11 @@ def _first_value(result: list) -> float | None:
 
 async def _query(client: httpx.AsyncClient, promql: str) -> list:
     """Run a single PromQL instant query; return the result list (may be [])."""
-    resp = await client.get(PROMETHEUS_URL, params={"query": promql}, timeout=5.0)
+    resp = await client.get(
+        PROMETHEUS_URL,
+        params={"query": promql},
+        timeout=PROMETHEUS_QUERY_TIMEOUT_SECONDS,
+    )
     resp.raise_for_status()
     return resp.json().get("data", {}).get("result", [])
 
@@ -166,13 +207,14 @@ async def _build_hvac_context() -> str:
 
         prometheus_note = ""
     except Exception as exc:  # noqa: BLE001
+        logger.warning("Prometheus context query failed: %s", type(exc).__name__)
         floor_temps = {f: None for f in FLOORS}
         outdoor = None
         furnace_active = None
         floor_calls = {f: None for f in FLOORS}
         floor_runtimes = {f: None for f in FLOORS}
         floor_setpoints = {f: None for f in FLOORS}
-        prometheus_note = f"\nNote: Prometheus unreachable — data unavailable ({exc})\n"
+        prometheus_note = "\nNote: Prometheus telemetry unavailable.\n"
 
     def _temp_str(floor: str) -> str:
         t = floor_temps.get(floor)
@@ -208,15 +250,32 @@ async def _build_hvac_context() -> str:
     return "\n".join(lines)
 
 
+def _limit_context(context: str) -> str:
+    """Keep model input bounded even if an upstream context grows unexpectedly."""
+    if len(context) <= MAX_CONTEXT_CHARS:
+        return context
+    available_chars = MAX_CONTEXT_CHARS - len(_CONTEXT_TRUNCATION_MARKER)
+    return context[:available_chars] + _CONTEXT_TRUNCATION_MARKER
+
+
 async def _call_gemini(context: str, question: str, api_key: str) -> str:
     """Call Gemini REST API and return the response text."""
     url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
+    bounded_context = _limit_context(context)
     payload = {
         "system_instruction": {"parts": [{"text": SYSTEM_PROMPT}]},
-        "contents": [{"parts": [{"text": f"HVAC DATA:\n{context}\n\nQUESTION: {question}"}]}],
+        "contents": [
+            {"parts": [{"text": f"HVAC DATA:\n{bounded_context}\n\nQUESTION: {question}"}]}
+        ],
+        "generationConfig": {"maxOutputTokens": MAX_OUTPUT_TOKENS},
     }
     async with httpx.AsyncClient() as client:
-        resp = await client.post(url, json=payload, params={"key": api_key}, timeout=30.0)
+        resp = await client.post(
+            url,
+            json=payload,
+            params={"key": api_key},
+            timeout=GEMINI_REQUEST_TIMEOUT_SECONDS,
+        )
         resp.raise_for_status()
         return resp.json()["candidates"][0]["content"]["parts"][0]["text"]
 
@@ -231,14 +290,30 @@ async def diagnostic(request: DiagnosticRequest) -> DiagnosticResponse:
     """Ask an AI question about the current HVAC state using live Prometheus data."""
     api_key = os.environ.get("GEMINI_API_KEY", "")
     if not api_key:
-        return DiagnosticResponse(answer="", context_chars=0, error="GEMINI_API_KEY not configured")
+        logger.error("Ask HomeOps provider key is not configured")
+        return DiagnosticResponse(answer="", context_chars=0, error=DIAGNOSTIC_UNAVAILABLE_ERROR)
 
-    context = await _build_hvac_context()
+    try:
+        context = await asyncio.wait_for(
+            _build_hvac_context(), timeout=PROMETHEUS_CONTEXT_TIMEOUT_SECONDS
+        )
+    except TimeoutError:
+        logger.warning("Prometheus context build exceeded its time budget")
+        context = _TELEMETRY_UNAVAILABLE_CONTEXT
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("HVAC context build failed: %s", type(exc).__name__)
+        context = _TELEMETRY_UNAVAILABLE_CONTEXT
+    context = _limit_context(context)
 
     try:
         answer = await _call_gemini(context, request.question, api_key)
     except Exception as exc:  # noqa: BLE001
-        return DiagnosticResponse(answer="", context_chars=len(context), error=str(exc))
+        logger.warning("Ask HomeOps provider call failed: %s", type(exc).__name__)
+        return DiagnosticResponse(
+            answer="",
+            context_chars=len(context),
+            error=DIAGNOSTIC_UNAVAILABLE_ERROR,
+        )
 
     return DiagnosticResponse(answer=answer, context_chars=len(context))
 
