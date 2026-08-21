@@ -23,6 +23,7 @@ from main import (
 )
 
 client = TestClient(app)
+AUTH_HEADERS = {"Authorization": "Bearer test-token"}
 
 
 def test_budget_resets_daily_window_and_returns_retry_metadata() -> None:
@@ -55,8 +56,16 @@ def test_diagnostic_rejects_daily_budget_before_gemini(monkeypatch) -> None:
         patch("main._build_hvac_context", new=AsyncMock(return_value="snapshot")),
         patch("main._call_gemini", new=gemini_mock),
     ):
-        first = client.post("/api/diagnostic", json={"question": "How is it?"})
-        second = client.post("/api/diagnostic", json={"question": "How is it now?"})
+        first = client.post(
+            "/api/diagnostic",
+            headers=AUTH_HEADERS,
+            json={"question": "How is it?"},
+        )
+        second = client.post(
+            "/api/diagnostic",
+            headers=AUTH_HEADERS,
+            json={"question": "How is it now?"},
+        )
 
     assert first.status_code == 200
     assert second.status_code == 429
@@ -88,12 +97,17 @@ async def test_diagnostic_rejects_concurrent_request_before_gemini(monkeypatch) 
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as async_client:
             first_task = asyncio.create_task(
-                async_client.post("/api/diagnostic", json={"question": "First"})
+                async_client.post(
+                    "/api/diagnostic",
+                    headers=AUTH_HEADERS,
+                    json={"question": "First"},
+                )
             )
             await asyncio.wait_for(provider_started.wait(), timeout=1)
 
             second = await async_client.post(
                 "/api/diagnostic",
+                headers=AUTH_HEADERS,
                 json={"question": "Second"},
             )
             provider_release.set()
@@ -114,7 +128,11 @@ def test_metrics_are_low_cardinality_and_internal(monkeypatch) -> None:
         patch("main._build_hvac_context", new=AsyncMock(return_value="snapshot")),
         patch("main._call_gemini", new=AsyncMock(return_value="Looks healthy.")),
     ):
-        response = client.post("/api/diagnostic", json={"question": "How is it?"})
+        response = client.post(
+            "/api/diagnostic",
+            headers=AUTH_HEADERS,
+            json={"question": "How is it?"},
+        )
 
     metrics = client.get("/metrics")
     assert response.status_code == 200

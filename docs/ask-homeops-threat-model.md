@@ -1,14 +1,14 @@
 # Ask HomeOps threat model and quota policy
 
 **Policy version:** `homeops.ask-homeops-policy.v1`  
-**Status:** Proposed baseline for the pre-Bob-demo security gate; global provider backstop and metrics implemented in the follow-up issue
+**Status:** Proposed baseline for the pre-Bob-demo security gate; provider-neutral auth/quota boundary, global provider backstop, and metrics implemented, with vendor/store adapters still pending
 **Last reviewed:** 2026-08-20  
 **Applies to:** `POST https://api.homeops.now/api/diagnostic`
 
 This document defines the security boundary and initial resource policy for
-Ask HomeOps. It is intentionally provider-agnostic: authentication and rate
-limiting are the next implementation slice, but this document does not choose
-an identity vendor or a storage product for limiter state.
+Ask HomeOps. It remains intentionally provider-agnostic: the application now
+has the bearer-principal and atomic limiter contracts, but this document does
+not choose an identity vendor or a storage product for limiter state.
 
 ## Executive decision
 
@@ -52,9 +52,12 @@ public port. The frontend sends the homeowner's question to the endpoint, and
 the backend builds a current HVAC snapshot from Prometheus before making one
 Gemini request.
 
-The endpoint is currently unauthenticated and has no user or IP quota. CORS
-restricts browser origins but is not authentication: a non-browser client can
-call the public HTTPS endpoint directly. The public `/api/current-temps`,
+The endpoint boundary now requires a standard bearer credential and a verified
+`diagnostic:read` scope; the default verifier rejects all tokens until an
+OIDC-compatible provider adapter is configured. CORS restricts browser origins
+but is not authentication: a non-browser client can call the public HTTPS
+endpoint directly, so token validation and quota state remain explicit server
+controls. The public `/api/current-temps`,
 `/grafana/`, and `/prometheus/` surfaces are related exposure areas but are not
 silently changed by this policy.
 
@@ -127,8 +130,30 @@ for the public `/metrics` route. Regression tests cover daily rollover,
 daily-cap rejection, concurrent-cap rejection before Gemini, label safety, and
 the Nginx/Prometheus contracts.
 
-The layer is intentionally process-local and is not the shared authenticated
-user/IP limiter required by the public Bob-demo gate.
+The global layer is intentionally process-local and is not the shared
+authenticated user/IP limiter required by the public Bob-demo gate.
+
+## Controls implemented by the auth/quota boundary
+
+The application now accepts only a standard `Authorization: Bearer` credential
+through a provider-neutral `TokenVerifier` contract. A verified principal must
+carry the `diagnostic:read` scope; missing/invalid credentials return `401`, a
+valid principal without the scope returns `403`, and verifier outages return a
+generic `503`. No verifier exception can downgrade a request to anonymous
+access.
+
+Before Prometheus context assembly or Gemini work, the endpoint atomically
+checks the policy's independent user and IP dimensions. Client IP extraction
+trusts forwarding headers only when the direct peer is inside the configured
+proxy networks and selects the configured hop from the right; untrusted
+forwarding headers are ignored. The `RateLimitStore` contract reserves all
+dimensions together and releases only in-flight reservations after the request
+finishes, preventing a partially applied quota check.
+
+The repository includes a deterministic in-memory store for tests and local
+development. It is not a release backend. Until a shared adapter is selected
+and configured, the default store returns a generic `503`, so a production
+process cannot silently run without distributed quota state.
 
 ## Proposed initial quota policy
 
@@ -188,7 +213,7 @@ shape because callers need to distinguish throttling from a completed request.
 
 ## Authentication contract (provider-neutral)
 
-The next implementation may use an OIDC-compatible provider, but the backend
+The implementation uses an OIDC-compatible provider contract, but the backend
 contract is fixed regardless of vendor:
 
 - Accept a standard bearer token in the `Authorization` header, not an API key
@@ -204,8 +229,8 @@ contract is fixed regardless of vendor:
   contract and test the contract in CI.
 
 This document intentionally does not select Clerk, Auth0, Cognito, Supabase,
-or another vendor. That choice is a product/operational decision for the next
-implementation task.
+or another vendor. That choice remains a product/operational decision before
+the public Bob demo is released.
 
 ## Data handling and logging rules
 

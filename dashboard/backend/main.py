@@ -3,14 +3,18 @@
 Queries EC2-local Prometheus for live HVAC telemetry and exposes it
 at GET /api/current-temps.  Returns nulls (not 500) when Prometheus
 is unreachable so the frontend can show a degraded-mode UI.  The
-diagnostic endpoint also exposes an internal-only Prometheus metrics
-endpoint and enforces a process-wide provider-call backstop.
+diagnostic endpoint requires a verified bearer principal, enforces
+provider-call and per-user/IP backstops, and exposes internal-only
+Prometheus metrics.
 
 Revision history:
   2026-08-20  Added low-cardinality diagnostic metrics, a process-local global
               provider-call budget, internal metrics exposition, and safe 429
               responses so repeated public requests cannot create unbounded
               Gemini work before shared authentication/limiting is selected.
+  2026-08-21  Added the provider-neutral bearer-principal dependency, trusted
+              proxy client-IP extraction, and atomic per-user/IP quota seam;
+              defaulting unavailable auth/limiter integrations to fail closed.
 """
 
 from __future__ import annotations
@@ -26,8 +30,9 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 import httpx
-from fastapi import FastAPI, Response
+from fastapi import Depends, FastAPI, Request, Response
 from fastapi.responses import JSONResponse
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from prometheus_client import (
     CONTENT_TYPE_LATEST,
     CollectorRegistry,
@@ -37,6 +42,22 @@ from prometheus_client import (
     generate_latest,
 )
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+from security import (
+    DIAGNOSTIC_SCOPE,
+    LIMITER_UNAVAILABLE_ERROR,
+    Principal,
+    QuotaPolicy,
+    RateLimitDecision,
+    RateLimitStore,
+    RejectingTokenVerifier,
+    TokenVerifier,
+    authenticate_bearer,
+    build_quota_rules,
+    extract_client_ip,
+    load_proxy_config,
+    load_quota_policy,
+    load_rate_limit_store,
+)
 
 PROMETHEUS_URL = "http://localhost:9090/api/v1/query"
 PROMETHEUS_QUERY_TIMEOUT_SECONDS = 2.0
@@ -53,6 +74,7 @@ GEMINI_OUTPUT_COST_USD_PER_MILLION_TOKENS = 2.50
 
 DIAGNOSTIC_UNAVAILABLE_ERROR = "Diagnostic service temporarily unavailable"
 DIAGNOSTIC_RATE_LIMIT_ERROR = "Diagnostic capacity temporarily exhausted"
+DIAGNOSTIC_LIMITER_UNAVAILABLE_ERROR = LIMITER_UNAVAILABLE_ERROR
 _CONTEXT_TRUNCATION_MARKER = "\n[Telemetry context truncated]"
 _TELEMETRY_UNAVAILABLE_CONTEXT = (
     "=== HomeOps HVAC Snapshot ===\n"
@@ -107,7 +129,7 @@ DIAGNOSTIC_REQUEST_LATENCY = Histogram(
 )
 DIAGNOSTIC_RATE_LIMITED = Counter(
     "homeops_diagnostic_rate_limited_total",
-    "Diagnostic requests rejected by the global safety backstop.",
+    "Diagnostic requests rejected by a quota or global safety backstop.",
     labelnames=("scope",),
     registry=METRICS_REGISTRY,
 )
@@ -315,6 +337,29 @@ def _rate_limit_response(decision: BudgetDecision) -> JSONResponse:
     )
 
 
+def _quota_rate_limit_response(decision: RateLimitDecision) -> JSONResponse:
+    """Build the stable 429 response for an IP/user quota rejection."""
+    headers = {
+        "Retry-After": str(decision.retry_after),
+        "RateLimit-Limit": str(decision.limit),
+        "RateLimit-Remaining": str(decision.remaining),
+        "RateLimit-Reset": str(decision.reset_at),
+    }
+    return JSONResponse(
+        status_code=429,
+        content={"detail": DIAGNOSTIC_RATE_LIMIT_ERROR},
+        headers=headers,
+    )
+
+
+def _limiter_unavailable_response() -> JSONResponse:
+    """Return a generic fail-closed response when quota state is unavailable."""
+    return JSONResponse(
+        status_code=503,
+        content={"detail": DIAGNOSTIC_LIMITER_UNAVAILABLE_ERROR},
+    )
+
+
 FLOORS = ["floor_1", "floor_2", "floor_3"]
 
 SYSTEM_PROMPT = (
@@ -339,12 +384,35 @@ SYSTEM_PROMPT = (
 app = FastAPI(
     title="HomeOps Dashboard API",
     version="0.1.0",
-    description="Live HVAC data served from EC2-local Prometheus.",
+    description=(
+        "Live HVAC data served from EC2-local Prometheus. Ask HomeOps requires "
+        "a verified bearer identity and bounded request quotas."
+    ),
 )
 
 # CORS is handled entirely by Nginx (api.homeops.now.conf).
 # Do NOT add FastAPI CORSMiddleware here — duplicate Access-Control-Allow-Origin
 # headers cause Safari/iOS to reject the response with "Load failed".
+
+# The production application starts with both integrations fail-closed. A real
+# OIDC-compatible verifier and a shared RateLimitStore can replace these seams
+# without changing the diagnostic endpoint's business logic.
+auth_verifier: TokenVerifier = RejectingTokenVerifier()
+diagnostic_rate_limiter: RateLimitStore = load_rate_limit_store()
+proxy_config = load_proxy_config()
+quota_policy: QuotaPolicy = load_quota_policy()
+bearer_scheme = HTTPBearer(auto_error=False)
+
+
+def require_diagnostic_principal(
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+) -> Principal:
+    """Require a verified bearer principal with diagnostic read access."""
+    return authenticate_bearer(
+        credentials,
+        auth_verifier,
+        required_scope=DIAGNOSTIC_SCOPE,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -387,7 +455,7 @@ _DEFAULT_QUESTION = (
 
 
 class DiagnosticRequest(BaseModel):
-    """Validated public input for the unauthenticated diagnostic endpoint."""
+    """Validated input for the authenticated diagnostic endpoint."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -568,12 +636,21 @@ async def _call_gemini(context: str, question: str, api_key: str) -> str:
 @app.post(
     "/api/diagnostic",
     response_model=DiagnosticResponse,
-    responses={429: {"description": "Global diagnostic capacity is exhausted."}},
+    responses={
+        401: {"description": "A valid bearer token is required."},
+        403: {"description": "The verified identity lacks diagnostic access."},
+        429: {"description": "Diagnostic quota or global capacity is exhausted."},
+        503: {"description": "Authentication or shared quota state is unavailable."},
+    },
 )
-async def diagnostic(request: DiagnosticRequest) -> DiagnosticResponse | JSONResponse:
+async def diagnostic(
+    request: DiagnosticRequest,
+    http_request: Request,
+    principal: Principal = Depends(require_diagnostic_principal),
+) -> DiagnosticResponse | JSONResponse:
     """Ask an AI question about the current HVAC state using live Prometheus data."""
     request_started = time.perf_counter()
-    auth_state = "anonymous"
+    auth_state = "authenticated"
 
     def record_request(outcome: str) -> None:
         DIAGNOSTIC_REQUESTS.labels(outcome=outcome, auth_state=auth_state).inc()
@@ -588,77 +665,108 @@ async def diagnostic(request: DiagnosticRequest) -> DiagnosticResponse | JSONRes
         record_request("configuration_error")
         return DiagnosticResponse(answer="", context_chars=0, error=DIAGNOSTIC_UNAVAILABLE_ERROR)
 
+    client_ip = extract_client_ip(
+        http_request.client.host if http_request.client else None,
+        http_request.headers,
+        proxy_config=proxy_config,
+    )
+    quota_rules = build_quota_rules(principal, client_ip, quota_policy)
+    quota_lease = None
+    global_reserved = False
     try:
-        context = await asyncio.wait_for(
-            _build_hvac_context(), timeout=PROMETHEUS_CONTEXT_TIMEOUT_SECONDS
-        )
-    except TimeoutError:
-        logger.warning("Prometheus context build exceeded its time budget")
-        context = _TELEMETRY_UNAVAILABLE_CONTEXT
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("HVAC context build failed: %s", type(exc).__name__)
-        context = _TELEMETRY_UNAVAILABLE_CONTEXT
-    context = _limit_context(context)
+        try:
+            quota_decision = diagnostic_rate_limiter.acquire(quota_rules)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Ask HomeOps rate limiter failed: %s", type(exc).__name__)
+            DIAGNOSTIC_RATE_LIMITED.labels(scope="limiter_error").inc()
+            record_request("limiter_error")
+            return _limiter_unavailable_response()
 
-    decision = diagnostic_budget.try_reserve()
-    _refresh_budget_metrics()
-    if not decision.allowed:
-        DIAGNOSTIC_RATE_LIMITED.labels(scope=decision.reason or "global").inc()
-        record_request("rate_limited")
-        return _rate_limit_response(decision)
+        if not quota_decision.available:
+            DIAGNOSTIC_RATE_LIMITED.labels(scope="limiter_unavailable").inc()
+            record_request("limiter_unavailable")
+            return _limiter_unavailable_response()
+        if not quota_decision.allowed:
+            DIAGNOSTIC_RATE_LIMITED.labels(scope=quota_decision.scope or "quota").inc()
+            record_request("rate_limited")
+            return _quota_rate_limit_response(quota_decision)
+        quota_lease = quota_decision.lease
 
-    provider_prompt = _gemini_prompt(context, request.question)
-    input_tokens = _estimate_tokens(SYSTEM_PROMPT + provider_prompt)
-    DIAGNOSTIC_INPUT_CHARS.observe(len(SYSTEM_PROMPT + provider_prompt))
-    output_tokens = 0
-    provider_started = time.perf_counter()
-    try:
-        answer = await _call_gemini(context, request.question, api_key)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("Ask HomeOps provider call failed: %s", type(exc).__name__)
-        DIAGNOSTIC_PROVIDER_CALLS.labels(outcome="error").inc()
-        DIAGNOSTIC_PROVIDER_LATENCY.observe(time.perf_counter() - provider_started)
-        DIAGNOSTIC_OUTPUT_TOKENS.observe(output_tokens)
-        DIAGNOSTIC_ESTIMATED_COST.inc(
-            input_tokens
-            * _non_negative_float_env(
-                "GEMINI_INPUT_COST_USD_PER_MILLION_TOKENS",
-                GEMINI_INPUT_COST_USD_PER_MILLION_TOKENS,
-            )
-            / 1_000_000
-        )
-        record_request("provider_error")
-        return DiagnosticResponse(
-            answer="",
-            context_chars=len(context),
-            error=DIAGNOSTIC_UNAVAILABLE_ERROR,
-        )
-    else:
-        output_tokens = _estimate_tokens(answer)
-        DIAGNOSTIC_PROVIDER_CALLS.labels(outcome="success").inc()
-        DIAGNOSTIC_PROVIDER_LATENCY.observe(time.perf_counter() - provider_started)
-        DIAGNOSTIC_OUTPUT_TOKENS.observe(output_tokens)
-        DIAGNOSTIC_ESTIMATED_COST.inc(
-            input_tokens
-            * _non_negative_float_env(
-                "GEMINI_INPUT_COST_USD_PER_MILLION_TOKENS",
-                GEMINI_INPUT_COST_USD_PER_MILLION_TOKENS,
-            )
-            / 1_000_000
-            + output_tokens
-            * _non_negative_float_env(
-                "GEMINI_OUTPUT_COST_USD_PER_MILLION_TOKENS",
-                GEMINI_OUTPUT_COST_USD_PER_MILLION_TOKENS,
-            )
-            / 1_000_000
-        )
-        record_request("success")
-        return DiagnosticResponse(answer=answer, context_chars=len(context))
-    finally:
-        # Always release the reservation, including task cancellation and
-        # unexpected metric/serialization errors after Gemini returns.
-        diagnostic_budget.release()
+        decision = diagnostic_budget.try_reserve()
         _refresh_budget_metrics()
+        if not decision.allowed:
+            DIAGNOSTIC_RATE_LIMITED.labels(scope=decision.reason or "global").inc()
+            record_request("rate_limited")
+            return _rate_limit_response(decision)
+        global_reserved = True
+
+        try:
+            context = await asyncio.wait_for(
+                _build_hvac_context(), timeout=PROMETHEUS_CONTEXT_TIMEOUT_SECONDS
+            )
+        except TimeoutError:
+            logger.warning("Prometheus context build exceeded its time budget")
+            context = _TELEMETRY_UNAVAILABLE_CONTEXT
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("HVAC context build failed: %s", type(exc).__name__)
+            context = _TELEMETRY_UNAVAILABLE_CONTEXT
+        context = _limit_context(context)
+
+        provider_prompt = _gemini_prompt(context, request.question)
+        input_tokens = _estimate_tokens(SYSTEM_PROMPT + provider_prompt)
+        DIAGNOSTIC_INPUT_CHARS.observe(len(SYSTEM_PROMPT + provider_prompt))
+        output_tokens = 0
+        provider_started = time.perf_counter()
+        try:
+            answer = await _call_gemini(context, request.question, api_key)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Ask HomeOps provider call failed: %s", type(exc).__name__)
+            DIAGNOSTIC_PROVIDER_CALLS.labels(outcome="error").inc()
+            DIAGNOSTIC_PROVIDER_LATENCY.observe(time.perf_counter() - provider_started)
+            DIAGNOSTIC_OUTPUT_TOKENS.observe(output_tokens)
+            DIAGNOSTIC_ESTIMATED_COST.inc(
+                input_tokens
+                * _non_negative_float_env(
+                    "GEMINI_INPUT_COST_USD_PER_MILLION_TOKENS",
+                    GEMINI_INPUT_COST_USD_PER_MILLION_TOKENS,
+                )
+                / 1_000_000
+            )
+            record_request("provider_error")
+            return DiagnosticResponse(
+                answer="",
+                context_chars=len(context),
+                error=DIAGNOSTIC_UNAVAILABLE_ERROR,
+            )
+        else:
+            output_tokens = _estimate_tokens(answer)
+            DIAGNOSTIC_PROVIDER_CALLS.labels(outcome="success").inc()
+            DIAGNOSTIC_PROVIDER_LATENCY.observe(time.perf_counter() - provider_started)
+            DIAGNOSTIC_OUTPUT_TOKENS.observe(output_tokens)
+            DIAGNOSTIC_ESTIMATED_COST.inc(
+                input_tokens
+                * _non_negative_float_env(
+                    "GEMINI_INPUT_COST_USD_PER_MILLION_TOKENS",
+                    GEMINI_INPUT_COST_USD_PER_MILLION_TOKENS,
+                )
+                / 1_000_000
+                + output_tokens
+                * _non_negative_float_env(
+                    "GEMINI_OUTPUT_COST_USD_PER_MILLION_TOKENS",
+                    GEMINI_OUTPUT_COST_USD_PER_MILLION_TOKENS,
+                )
+                / 1_000_000
+            )
+            record_request("success")
+            return DiagnosticResponse(answer=answer, context_chars=len(context))
+    finally:
+        # Always release reservations, including task cancellation and
+        # unexpected metric/serialization errors after Gemini returns.
+        if global_reserved:
+            diagnostic_budget.release()
+            _refresh_budget_metrics()
+        if quota_lease is not None:
+            diagnostic_rate_limiter.release(quota_lease)
 
 
 @app.get("/health")
