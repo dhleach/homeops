@@ -8,3 +8,9 @@ scrape_configs:
       - targets: ["100.115.21.72:8001"]
     metrics_path: /metrics
     scrape_interval: 15s
+
+  - job_name: "homeops-dashboard-backend"
+    static_configs:
+      - targets: ["127.0.0.1:8000"]
+    metrics_path: /metrics
+    scrape_interval: 15s
