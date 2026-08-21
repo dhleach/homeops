@@ -2,12 +2,22 @@
 
 from __future__ import annotations
 
+import json
 from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
 from fastapi.testclient import TestClient
-from main import _build_hvac_context, app
+from main import (
+    _TELEMETRY_UNAVAILABLE_CONTEXT,
+    DIAGNOSTIC_UNAVAILABLE_ERROR,
+    MAX_CONTEXT_CHARS,
+    MAX_OUTPUT_TOKENS,
+    MAX_QUESTION_CHARS,
+    _build_hvac_context,
+    _call_gemini,
+    app,
+)
 
 client = TestClient(app)
 
@@ -130,14 +140,14 @@ def test_diagnostic_returns_error_when_api_key_not_set(monkeypatch):
     resp = client.post("/api/diagnostic", json={"question": "hello"})
     assert resp.status_code == 200
     data = resp.json()
-    assert data["error"] == "GEMINI_API_KEY not configured"
+    assert data["error"] == DIAGNOSTIC_UNAVAILABLE_ERROR
     assert data["answer"] == ""
     assert data["context_chars"] == 0
 
 
 @pytest.mark.respx(base_url="http://localhost:9090")
 def test_diagnostic_returns_error_when_gemini_call_fails(respx_mock, monkeypatch):
-    """If the Gemini call raises, return error field with exception message."""
+    """If the Gemini call raises, return a generic error without provider details."""
     monkeypatch.setenv("GEMINI_API_KEY", "test-key-abc")
     respx_mock.get("/api/v1/query").mock(side_effect=_prom_side_effect)
 
@@ -149,8 +159,8 @@ def test_diagnostic_returns_error_when_gemini_call_fails(respx_mock, monkeypatch
 
     assert resp.status_code == 200
     data = resp.json()
-    assert data["error"] is not None
-    assert "connection refused" in data["error"]
+    assert data["error"] == DIAGNOSTIC_UNAVAILABLE_ERROR
+    assert "connection refused" not in data["error"]
     assert data["answer"] == ""
     assert data["context_chars"] > 0
 
@@ -172,3 +182,86 @@ def test_diagnostic_uses_default_question_when_none_provided(respx_mock, monkeyp
     # Verify the default question was passed
     call_args = mock_gemini.call_args
     assert "Analyze the current HVAC behavior" in call_args[0][1]
+
+
+def test_diagnostic_rejects_blank_question_before_model_call(monkeypatch):
+    """Whitespace-only public input is rejected before any provider work."""
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key-abc")
+    gemini_mock = AsyncMock()
+
+    with patch("main._call_gemini", new=gemini_mock):
+        resp = client.post("/api/diagnostic", json={"question": "   "})
+
+    assert resp.status_code == 422
+    gemini_mock.assert_not_awaited()
+
+
+def test_diagnostic_rejects_oversized_question_before_model_call(monkeypatch):
+    """Oversized public input is rejected before any provider work."""
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key-abc")
+    gemini_mock = AsyncMock()
+
+    with patch("main._call_gemini", new=gemini_mock):
+        resp = client.post(
+            "/api/diagnostic",
+            json={"question": "x" * (MAX_QUESTION_CHARS + 1)},
+        )
+
+    assert resp.status_code == 422
+    gemini_mock.assert_not_awaited()
+
+
+def test_diagnostic_rejects_unknown_request_fields(monkeypatch):
+    """Unexpected fields are rejected instead of silently entering the model prompt."""
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key-abc")
+    gemini_mock = AsyncMock()
+
+    with patch("main._call_gemini", new=gemini_mock):
+        resp = client.post(
+            "/api/diagnostic",
+            json={"question": "hello", "system_prompt": "override"},
+        )
+
+    assert resp.status_code == 422
+    gemini_mock.assert_not_awaited()
+
+
+@pytest.mark.respx(base_url="http://localhost:9090")
+def test_diagnostic_uses_fallback_context_after_context_timeout(monkeypatch):
+    """A slow telemetry build falls back to bounded context instead of hanging."""
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key-abc")
+    gemini_mock = AsyncMock(return_value="Telemetry unavailable.")
+
+    with (
+        patch("main._build_hvac_context", new=AsyncMock(side_effect=TimeoutError)),
+        patch("main._call_gemini", new=gemini_mock),
+    ):
+        resp = client.post("/api/diagnostic", json={"question": "Is my HVAC normal?"})
+
+    assert resp.status_code == 200
+    assert resp.json()["answer"] == "Telemetry unavailable."
+    assert gemini_mock.call_args.args[0] == _TELEMETRY_UNAVAILABLE_CONTEXT
+
+
+@pytest.mark.respx
+@pytest.mark.asyncio
+async def test_call_gemini_bounds_context_and_sets_output_budget(respx_mock):
+    """The provider payload carries an explicit output cap and bounded telemetry input."""
+    route = respx_mock.post(
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={"candidates": [{"content": {"parts": [{"text": "Looks healthy."}]}}]},
+        )
+    )
+
+    answer = await _call_gemini("x" * (MAX_CONTEXT_CHARS + 100), "hello", "test-key")
+
+    assert answer == "Looks healthy."
+    payload = json.loads(route.calls[0].request.content)
+    prompt = payload["contents"][0]["parts"][0]["text"]
+    bounded_context = prompt.split("HVAC DATA:\n", 1)[1].split("\n\nQUESTION:", 1)[0]
+    assert payload["generationConfig"] == {"maxOutputTokens": MAX_OUTPUT_TOKENS}
+    assert len(bounded_context) == MAX_CONTEXT_CHARS
+    assert bounded_context.endswith("[Telemetry context truncated]")
