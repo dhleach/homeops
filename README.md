@@ -2,7 +2,7 @@
 
 **Live dashboard → [homeops.now](https://homeops.now) · API → [api.homeops.now/api/current-temps](https://api.homeops.now/api/current-temps)**
 
-A full-stack observability platform for a 3-zone home HVAC system — event-driven Python pipeline on a Raspberry Pi 5, live metrics in Prometheus + Grafana on AWS EC2, React dashboard on S3 + CloudFront, FastAPI backend, all provisioned with Terraform. 25 derived event types, 894 Python tests, and 34 React component tests.
+A full-stack observability platform for a 3-zone home HVAC system — event-driven Python pipeline on a Raspberry Pi 5, live metrics in Prometheus + Grafana on AWS EC2, React dashboard on S3 + CloudFront, FastAPI backend, all provisioned with Terraform. 25 derived event types, 902 Python tests, and 34 React component tests.
 
 ## The Problem
 
@@ -19,7 +19,7 @@ Home Assistant alone can't prevent this. It sees state changes; it doesn't reaso
 - **Event-driven pipeline** — observer writes raw `state_changed` events to JSONL; consumer tails that file and emits semantically rich derived events downstream
 - **Schema-versioned events** — every event carries a `schema` field (e.g. `homeops.consumer.floor_2_long_call_warning.v1`) for safe downstream evolution
 - **Production-grade operations** — runs as `systemd` services on the Pi, log rotation via `logrotate`, exponential-backoff reconnects on the WebSocket
-- **894 Python tests + 34 React component tests**, GitHub Actions CI, Ruff lint/format enforcement on every PR, and post-deploy public smoke checks
+- **902 Python tests + 34 React component tests**, GitHub Actions CI, Ruff lint/format enforcement on every PR, and post-deploy public smoke checks
 
 ## Architecture
 
@@ -179,6 +179,7 @@ homeops/
 │   ├── temp_correlation.py            # CLI: Pearson correlation — outdoor temp vs floor runtime
 │   ├── validate_floor_aggregation.py # dev: validate floor_daily_summary totals vs raw events
 │   ├── validate_anomalies.py         # read-only replay/report for anomaly detectors
+│   ├── analyze_multi_zone_impact.py  # read-only contention analysis/report
 │   ├── deploy_smoke_check.py          # release gate for public frontend/API/observability
 │   └── test_counts.py                 # CI-generated canonical test-count validation
 ├── docs/
@@ -327,7 +328,7 @@ PYTHONPATH=services/consumer:services/observer:services/insights:dashboard/backe
 NODE_ENV=test npm --prefix dashboard/frontend test
 ```
 
-894 Python tests cover observer reconnect logic, consumer event derivation, floor-2 long-call warning and escalation, thermostat tracking, heating cycle analytics, consumer state persistence, Prometheus metrics gauge updates, the FastAPI backend, Ask HomeOps authentication/quota/budget/observability/prompt-safety guards, deployment smoke checks, insights engine rules, historical anomaly replay/reporting, and test-count validation. The frontend has 34 React component tests. The canonical counts live in [`docs/test-counts.json`](docs/test-counts.json) and are verified against CI runner output.
+902 Python tests cover observer reconnect logic, consumer event derivation, floor-2 long-call warning and escalation, thermostat tracking, heating cycle analytics, consumer state persistence, Prometheus metrics gauge updates, the FastAPI backend, Ask HomeOps authentication/quota/budget/observability/prompt-safety guards, deployment smoke checks, insights engine rules, historical anomaly replay/reporting, multi-zone impact analysis, and test-count validation. The frontend has 34 React component tests. The canonical counts live in [`docs/test-counts.json`](docs/test-counts.json) and are verified against CI runner output.
 
 ### CI
 
@@ -461,6 +462,21 @@ ssh bob@raspberrypi 'cat /home/leachd/repos/homeops/state/consumer/events.jsonl'
 
 See [`docs/anomaly-validation-2026-08.md`](docs/anomaly-validation-2026-08.md)
 for the latest reviewed Pi-history snapshot.
+
+### `scripts/analyze_multi_zone_impact.py`
+
+Group `zone_time_to_temp.v1` events by target zone and the other zones calling
+at session start. The report includes exact sample counts, median duration and
+heating-rate statistics, and returns `insufficient_data` instead of making a
+scheduling claim when the comparison groups are too small.
+
+```bash
+PYTHONPATH=services/insights \
+  python3 scripts/analyze_multi_zone_impact.py --log state/consumer/events.jsonl
+```
+
+See [`docs/multi-zone-impact-analysis-2026-08.md`](docs/multi-zone-impact-analysis-2026-08.md)
+for the latest Pi-history result.
 
 ### `scripts/temp_correlation.py`
 
