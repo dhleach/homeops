@@ -19,6 +19,11 @@ Override file paths (useful for testing):
 
 Write to file:
     python3 hvac_context.py --output /tmp/hvac_context.txt
+
+Revision history:
+  2026-08-21  Derive daily-summary date selection from the same explicit UTC
+              reference time as context generation so one-hour lookbacks remain
+              correct during the first UTC hour.
 """
 
 from __future__ import annotations
@@ -82,6 +87,13 @@ def _parse_ts(ts_str: str) -> datetime:
     return dt.astimezone(UTC)
 
 
+def _normalize_reference_time(reference_time: datetime) -> datetime:
+    """Return a reference timestamp as a UTC-aware datetime."""
+    if reference_time.tzinfo is None:
+        return reference_time.replace(tzinfo=UTC)
+    return reference_time.astimezone(UTC)
+
+
 def _fmt_duration(seconds: int | float | None) -> str:
     """Format seconds as 'Xh Ym' or 'Zm s'."""
     if seconds is None:
@@ -114,18 +126,30 @@ def load_state(path: str) -> dict[str, Any]:
         return json.load(f)
 
 
-def load_events(path: str, since: datetime) -> list[dict[str, Any]]:
+def load_events(
+    path: str,
+    since: datetime,
+    *,
+    reference_time: datetime | None = None,
+) -> list[dict[str, Any]]:
     """
     Load derived events from events.jsonl that are:
     - within the lookback window (ts >= since), OR
-    - daily summaries from the day before the window (for yesterday comparison)
+    - daily summaries from the previous UTC calendar day (for yesterday comparison)
+
+    ``reference_time`` is the UTC timestamp used for calendar-day comparisons.
+    It defaults to the current UTC time for callers that only provide a lookback
+    boundary; ``build_context`` passes its own timestamp so both calculations
+    use the same clock reading.
     """
     p = Path(path)
     if not p.exists():
         return []
 
     # Also grab daily summaries from the previous day for comparison
-    prev_day = (since - timedelta(days=1)).date().isoformat()
+    if reference_time is None:
+        reference_time = datetime.now(UTC)
+    prev_day = (_normalize_reference_time(reference_time).date() - timedelta(days=1)).isoformat()
 
     events: list[dict[str, Any]] = []
     with p.open() as f:
@@ -350,6 +374,8 @@ def build_context(
     state_path: str = DEFAULT_STATE_PATH,
     events_path: str = DEFAULT_EVENTS_PATH,
     lookback_hours: int = DEFAULT_LOOKBACK_HOURS,
+    *,
+    reference_time: datetime | None = None,
 ) -> str:
     """
     Build and return the full HVAC context summary string.
@@ -362,14 +388,19 @@ def build_context(
         Path to state/consumer/events.jsonl
     lookback_hours:
         How many hours of events to include in the window
+    reference_time:
+        UTC timestamp used for the lookback and calendar-day boundaries. When
+        omitted, the current UTC time is used.
     """
-    now = datetime.now(UTC)
+    if reference_time is None:
+        reference_time = datetime.now(UTC)
+    now = _normalize_reference_time(reference_time)
     since = now - timedelta(hours=lookback_hours)
     today_str = now.date().isoformat()
     yesterday_str = (now.date() - timedelta(days=1)).isoformat()
 
     state = load_state(state_path)
-    events = load_events(events_path, since)
+    events = load_events(events_path, since, reference_time=now)
 
     sections: list[str] = []
 
