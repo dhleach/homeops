@@ -714,6 +714,20 @@ python3 scripts/generate_report.py \
   --out reports/hvac_trend.html
 ```
 
+The repository-level [`scripts/runtime_temp_anomalies.py`](../../scripts/runtime_temp_anomalies.py)
+uses the same `floor_daily_summary.v1` history to identify unusually high
+per-floor runtime after accounting for average outdoor temperature. It fits a
+separate model per floor, requires a configurable minimum history, and uses a
+robust residual score. Results are review candidates only; the script does not
+claim an equipment fault or modify the consumer's state.
+
+```bash
+python3 scripts/runtime_temp_anomalies.py \
+  --log state/consumer/events.jsonl \
+  --start 2026-04-01 \
+  --end 2026-08-21
+```
+
 ---
 
 ## Configuration Reference
