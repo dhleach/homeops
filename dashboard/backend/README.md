@@ -44,6 +44,15 @@ production deployment cannot accidentally run without shared quota state. The
 process also enforces a 20-call global in-flight limit and a 500-call UTC-day
 provider budget as the final single-instance cost backstop.
 
+Ask HomeOps treats the question as untrusted content, never as an instruction.
+Known requests to reveal prompts/private memory, use tools, change policy, or
+write thermostat state receive a stable read-only refusal before Prometheus or
+Gemini work. The Gemini request has a fixed system instruction that reiterates
+the same boundary, registers no tools, and limits the model to explaining the
+supplied telemetry; it cannot execute commands, access files, or control a
+thermostat. Adversarial requests and control-plane fields are covered by the
+backend regression suite.
+
 The backend publishes low-cardinality request/provider outcome, latency, input
 size, estimated output-token, in-flight, daily-budget, model, and approximate
 cost metrics. The Prometheus scrape is bound to EC2 loopback; Nginx explicitly

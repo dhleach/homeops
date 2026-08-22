@@ -1,7 +1,7 @@
 # Ask HomeOps threat model and quota policy
 
 **Policy version:** `homeops.ask-homeops-policy.v1`  
-**Status:** Proposed baseline for the pre-Bob-demo security gate; Cognito OIDC/JWKS authentication, shared Valkey quotas, global provider backstop, and metrics implemented
+**Status:** Baseline implemented for the pre-Bob-demo security gate; production recovery and final public exposure remain gated
 **Last reviewed:** 2026-08-21
 **Applies to:** `POST https://api.homeops.now/api/diagnostic`
 
@@ -88,7 +88,7 @@ still enforced by FastAPI.
 |---|---|---|---|
 | Unrestricted resource consumption | Scripted `POST` requests or many concurrent connections | Gemini spend, Prometheus/EC2 exhaustion, degraded dashboard | Edge IP limit, user quota, global daily cap, concurrency limit, request/time/token bounds, and metrics. |
 | Identity or quota bypass | Spoofed `X-Forwarded-For`, forged user header, expired/unsigned token | A caller evades limits or acts as another user | Trust client IP only from the configured proxy chain; validate token signature, issuer, audience, and expiry; use verified `sub`. |
-| Prompt injection / instruction extraction | Question asks the model to ignore its role, reveal system instructions, or invent telemetry | Misleading answer or disclosure of internal prompt/context | Treat question as untrusted content; keep the model read-only; never grant tools or actuation; cap output; test jailbreak-shaped inputs. System instructions are guidance, not a complete security boundary. |
+| Prompt injection / instruction extraction | Question asks the model to ignore its role, reveal system instructions, or invent telemetry | Misleading answer or disclosure of internal prompt/context | Treat question as untrusted content; deterministically refuse known prompt/memory/tool/policy/control requests before provider work; keep the model read-only; never grant tools or actuation; cap output; test jailbreak-shaped inputs. System instructions are guidance, not a complete security boundary. |
 | Household telemetry inference | Anonymous caller repeatedly asks for current conditions or timing patterns | Occupancy/comfort information is exposed | Require auth for the Bob demo; minimize telemetry in responses; review `/api/current-temps` and Grafana exposure separately; do not log raw snapshots. |
 | Secret/error leakage | Provider exception, prompt, response, or environment value reaches client/logs | API-key compromise or sensitive operational disclosure | Generic client errors; log exception type/outcome only; never log API keys, tokens, full questions, prompts, responses, or raw telemetry. |
 | Provider failure and retry storm | Gemini latency/errors cause clients or the app to retry aggressively | Amplified cost and latency; cascading failure | One provider call per request, explicit timeout, no automatic application retries, bounded client retry guidance, and a circuit-breaker follow-up. |
@@ -133,6 +133,29 @@ the Nginx/Prometheus contracts.
 
 The global layer is intentionally process-local and is not the shared
 authenticated user/IP limiter required by the public Bob-demo gate.
+
+## Prompt-injection and excessive-agency controls
+
+The diagnostic request model exposes only the homeowner's question. Known
+high-risk request shapes are rejected after authentication and per-user/IP
+quota acquisition but before Prometheus context assembly or Gemini reservation.
+The stable refusal does not include telemetry, prompt text, private memory, or
+provider details. The guard covers attempts to:
+
+- reveal system/developer instructions or hidden prompts;
+- read private memory, session files, credentials, secrets, or tokens;
+- invoke tools, shell commands, functions, or code execution;
+- alter safety policy or bypass the read-only contract; and
+- set, update, or otherwise control a thermostat, setpoint, temperature, HVAC
+  zone, or furnace.
+
+The deterministic guard is deliberately a narrow backstop, not a claim that
+pattern matching can identify every jailbreak. The provider payload also marks
+the question as untrusted user content and carries a fixed system instruction
+that says the model has no tools, private-memory access, policy authority, or
+thermostat-write capability. The regression suite verifies both layers: known
+attack prompts stop before any telemetry/provider call, while the payload
+contains no tool registration and no hidden request fields.
 
 ## Controls implemented by the auth/quota boundary
 
