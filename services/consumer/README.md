@@ -699,6 +699,21 @@ python3 scripts/furnace_temp_scatter.py \
   --out state/furnace_temp_scatter.csv
 ```
 
+The repository-level [`scripts/generate_report.py`](../../scripts/generate_report.py)
+composes the floor-summary and furnace-scatter readers into a single
+self-contained HTML artifact. It renders inline SVG charts for per-floor daily
+runtime and outdoor temperature versus whole-furnace runtime, keeps missing
+measurements explicit, and includes the daily source table. It is a read-only
+analysis command; it does not start the consumer or modify consumer state.
+
+```bash
+python3 scripts/generate_report.py \
+  --start 2026-03-20 \
+  --end 2026-08-21 \
+  --log state/consumer/events.jsonl \
+  --out reports/hvac_trend.html
+```
+
 ---
 
 ## Configuration Reference

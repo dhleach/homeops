@@ -20,6 +20,10 @@ Arguments:
               (floor_1 | floor_2 | floor_3)
     --log     Optional: path to derived event JSONL
               (overrides DERIVED_EVENT_LOG env var)
+
+Revision history:
+  2026-08-22  Added a range-based loader so other read-only reports can reuse
+              the floor-summary parsing contract without depending on today's date.
 """
 
 from __future__ import annotations
@@ -66,6 +70,63 @@ def _fmt_temp(temp_f: float | None) -> str:
     return f"{round(temp_f)}°F"
 
 
+def load_floor_summaries(
+    log_path: str,
+    start: date,
+    end: date,
+    floor_filter: str | None = None,
+) -> dict[str, dict[str, dict]]:
+    """Read floor summaries from an inclusive date range.
+
+    Returns a nested dict: ``{date_str: {floor: data_dict}}``. When duplicate
+    events exist for the same floor and date, the last event in the log wins.
+    """
+    if start > end:
+        raise ValueError("start date must be on or before end date")
+
+    rows: dict[str, dict[str, dict]] = defaultdict(dict)
+
+    try:
+        with open(log_path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    evt = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(evt, dict):
+                    continue
+                if evt.get("schema") != SCHEMA:
+                    continue
+                data = evt.get("data")
+                if not isinstance(data, dict):
+                    continue
+                date_str = data.get("date", "")
+                floor = data.get("floor", "")
+                if not isinstance(date_str, str) or not isinstance(floor, str):
+                    continue
+                try:
+                    evt_date = date.fromisoformat(date_str)
+                except ValueError:
+                    continue
+                if evt_date < start or evt_date > end:
+                    continue
+                if floor_filter and floor != floor_filter:
+                    continue
+                # Last write wins (handles duplicate events)
+                rows[date_str][floor] = data
+    except FileNotFoundError:
+        print(f"Error: log file not found: {log_path}", file=sys.stderr)
+        sys.exit(1)
+    except OSError as e:
+        print(f"Error reading log: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    return dict(rows)
+
+
 def _load_floor_summaries(
     log_path: str,
     days: int,
@@ -80,42 +141,7 @@ def _load_floor_summaries(
     """
     today = date.today()
     cutoff = today - timedelta(days=days - 1)
-
-    rows: dict[str, dict[str, dict]] = defaultdict(dict)
-
-    try:
-        with open(log_path, encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    evt = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if evt.get("schema") != SCHEMA:
-                    continue
-                data = evt.get("data", {})
-                date_str = data.get("date", "")
-                floor = data.get("floor", "")
-                try:
-                    evt_date = date.fromisoformat(date_str)
-                except ValueError:
-                    continue
-                if evt_date < cutoff or evt_date > today:
-                    continue
-                if floor_filter and floor != floor_filter:
-                    continue
-                # Last write wins (handles duplicate events)
-                rows[date_str][floor] = data
-    except FileNotFoundError:
-        print(f"Error: log file not found: {log_path}", file=sys.stderr)
-        sys.exit(1)
-    except OSError as e:
-        print(f"Error reading log: {e}", file=sys.stderr)
-        sys.exit(1)
-
-    return dict(rows)
+    return load_floor_summaries(log_path, cutoff, today, floor_filter=floor_filter)
 
 
 def _all_dates(days: int) -> list[str]:

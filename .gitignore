@@ -2,6 +2,7 @@
 /srv/
 /data/
 /state/
+/reports/
 
 # env/secrets
 secrets/*

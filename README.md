@@ -2,7 +2,7 @@
 
 **Live dashboard → [homeops.now](https://homeops.now) · API → [api.homeops.now/api/current-temps](https://api.homeops.now/api/current-temps)**
 
-A full-stack observability platform for a 3-zone home HVAC system — event-driven Python pipeline on a Raspberry Pi 5, live metrics in Prometheus + Grafana on AWS EC2, React dashboard on S3 + CloudFront, FastAPI backend, all provisioned with Terraform. 25 derived event types, 927 Python tests, and 34 React component tests.
+A full-stack observability platform for a 3-zone home HVAC system — event-driven Python pipeline on a Raspberry Pi 5, live metrics in Prometheus + Grafana on AWS EC2, React dashboard on S3 + CloudFront, FastAPI backend, all provisioned with Terraform. 25 derived event types, 942 Python tests, and 34 React component tests.
 
 ## The Problem
 
@@ -19,7 +19,7 @@ Home Assistant alone can't prevent this. It sees state changes; it doesn't reaso
 - **Event-driven pipeline** — observer writes raw `state_changed` events to JSONL; consumer tails that file and emits semantically rich derived events downstream
 - **Schema-versioned events** — every event carries a `schema` field (e.g. `homeops.consumer.floor_2_long_call_warning.v1`) for safe downstream evolution
 - **Production-grade operations** — runs as `systemd` services on the Pi, log rotation via `logrotate`, exponential-backoff reconnects on the WebSocket
-- **927 Python tests + 34 React component tests**, GitHub Actions CI, Ruff lint/format enforcement on every PR, and post-deploy public smoke checks
+- **942 Python tests + 34 React component tests**, GitHub Actions CI, Ruff lint/format enforcement on every PR, and post-deploy public smoke checks
 
 ## Architecture
 
@@ -178,6 +178,7 @@ homeops/
 │   ├── furnace_duty_cycle.py          # CLI: furnace duty cycle % for any time window
 │   ├── furnace_session_analysis.py    # CLI: correlate furnace session length vs outdoor temp (CSV output)
 │   ├── furnace_temp_scatter.py        # CLI: daily outdoor temp + furnace runtime CSV data
+│   ├── generate_report.py              # CLI: self-contained HTML runtime/trend charts
 │   ├── temp_correlation.py            # CLI: Pearson correlation — outdoor temp vs floor runtime
 │   ├── validate_floor_aggregation.py # dev: validate floor_daily_summary totals vs raw events
 │   ├── validate_anomalies.py         # read-only replay/report for anomaly detectors
@@ -331,7 +332,7 @@ PYTHONPATH=services/consumer:services/observer:services/insights:dashboard/backe
 NODE_ENV=test npm --prefix dashboard/frontend test
 ```
 
-927 Python tests cover observer reconnect logic, consumer event derivation, floor-2 long-call warning and escalation, thermostat tracking, heating cycle analytics, consumer state persistence, Prometheus metrics gauge updates, the FastAPI backend, Ask HomeOps authentication/quota/budget/observability/prompt-safety guards, deployment smoke checks, insights engine rules, historical anomaly replay/reporting, multi-zone impact analysis, hourly zone-call frequency reporting, the floor-call data-model contract, daily furnace temperature/runtime scatter export, and test-count validation. The frontend has 34 React component tests. The canonical counts live in [`docs/test-counts.json`](docs/test-counts.json) and are verified against CI runner output.
+942 Python tests cover observer reconnect logic, consumer event derivation, floor-2 long-call warning and escalation, thermostat tracking, heating cycle analytics, consumer state persistence, Prometheus metrics gauge updates, the FastAPI backend, Ask HomeOps authentication/quota/budget/observability/prompt-safety guards, deployment smoke checks, insights engine rules, historical anomaly replay/reporting, multi-zone impact analysis, hourly zone-call frequency reporting, the floor-call data-model contract, daily furnace temperature/runtime scatter export, the self-contained HTML trend report, and test-count validation. The frontend has 34 React component tests. The canonical counts live in [`docs/test-counts.json`](docs/test-counts.json) and are verified against CI runner output.
 
 ### CI
 
@@ -461,6 +462,31 @@ python3 scripts/furnace_temp_scatter.py \
 
 Output columns are `date`, `avg_temp_f`, and `furnace_runtime_min`, sorted by
 date. The report is read-only and does not change consumer state or event logs.
+
+### `scripts/generate_report.py`
+
+Generate one self-contained HTML report with an inline-SVG line chart for daily
+runtime by floor and an inline-SVG scatter plot of outdoor temperature versus
+whole-furnace runtime. The report composes the existing
+`floor_daily_summary.v1` and `furnace_temp_scatter.py` parsing contracts,
+preserves missing values as gaps/`—`, and includes the underlying daily table
+and complete/partial coverage counts.
+
+```bash
+# Trailing 30 days (default)
+python3 scripts/generate_report.py
+
+# Reproducible explicit range and custom output
+python3 scripts/generate_report.py \
+  --start 2026-03-20 \
+  --end 2026-08-21 \
+  --log state/consumer/events.jsonl \
+  --out reports/hvac_trend.html
+```
+
+The default output is `reports/hvac_trend.html`. It opens directly in a
+browser without a HomeOps service, JavaScript bundle, or network connection;
+the command only reads the derived event log.
 
 ### `scripts/validate_anomalies.py`
 
