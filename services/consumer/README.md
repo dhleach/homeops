@@ -629,6 +629,26 @@ public Internet endpoint. This is the data pipeline source for the
 
 Configure the port via `METRICS_PORT` env var (default: `8001`).
 
+## Historical Anomaly Validation
+
+The repository-level [`scripts/validate_anomalies.py`](../../scripts/validate_anomalies.py)
+replays the production anomaly rules against a complete derived-event JSONL
+history without writing to the event log or consumer state. It evaluates
+`floor_runtime_anomaly.v1`, `heating_short_session_warning.v1`, and
+`heating_long_session_warning.v1`, compares replayed results with warnings
+already emitted, and records data-quality and evidence limitations.
+
+Run it from the repository root:
+
+```bash
+PYTHONPATH=services/insights \
+  python3 scripts/validate_anomalies.py --log state/consumer/events.jsonl
+```
+
+If no `--baseline` file is supplied, furnace long-session evaluation uses the
+rule's documented absolute fallback thresholds. A baseline can be supplied
+explicitly with `--baseline state/consumer/baseline_constants.json`.
+
 ---
 
 ## Configuration Reference
