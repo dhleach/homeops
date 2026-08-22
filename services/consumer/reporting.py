@@ -82,6 +82,10 @@ def emit_floor_daily_summaries(daily_state: dict[str, Any], date_str: str) -> li
     """
     Build a list of floor_daily_summary.v1 events — one per floor — from accumulated daily state.
 
+    The normalized FloorCallSession/FloorStats contract is documented in
+    ``docs/data-model.md``. This function is the daily-summary projection of
+    that model; the state dictionaries remain keyed by entity ID internally.
+
     Each event summarises completed floor heating calls for the day:
     - total_calls: number of completed floor_call_ended.v1 events
     - total_runtime_s: sum of all call durations in seconds

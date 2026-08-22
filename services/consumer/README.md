@@ -13,6 +13,7 @@ For the host/network boundary around this service, see the repository-level
 - [Overview](#overview)
 - [Architecture](#architecture)
 - [Event Schema](#event-schema)
+- [Data model reference](#data-model-reference)
 - [In-Flight Floor-2 Warning](#in-flight-floor-2-warning)
 - [Bootstrap Behavior](#bootstrap-behavior)
 - [Configuration Reference](#configuration-reference)
@@ -574,6 +575,17 @@ Emitted three times per UTC calendar day rollover (once per floor: `floor_1`, `f
   }
 }
 ```
+
+---
+
+## Data model reference
+
+The normalized contracts for completed floor calls and per-floor aggregates
+are documented in [`docs/data-model.md`](../../docs/data-model.md). The
+document defines `FloorCallSession` and `FloorStats`, including UTC window
+boundaries, restart-related unknown durations, pairing rules, and the
+distinction between completed calls and in-flight state. The daily summary
+projection in `reporting.py` follows those semantics.
 
 ---
 
