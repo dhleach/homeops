@@ -655,6 +655,22 @@ compares sessions with and without other zones calling at session start, but
 requires a minimum sample size before reporting a scheduling effect. It does
 not change thermostat settings or HA automations.
 
+The repository-level [`scripts/floor_hourly_heatmap.py`](../../scripts/floor_hourly_heatmap.py)
+counts `floor_call_started.v1` events by local hour for each floor over an
+explicit inclusive date range. It defaults to `America/New_York`, accepts an
+IANA timezone with `--timezone`, and reports input quality plus calls outside
+the selected range. This is a read-only frequency report: it does not change
+consumer state, thermostat settings, or HA automations.
+
+```bash
+python3 scripts/floor_hourly_heatmap.py \
+  --log state/consumer/events.jsonl \
+  --start 2026-05-11 --end 2026-05-17
+```
+
+See [`docs/hourly-zone-call-heatmap-2026-08.md`](../../docs/hourly-zone-call-heatmap-2026-08.md)
+for the latest Pi-history snapshot and its data limitations.
+
 ---
 
 ## Configuration Reference

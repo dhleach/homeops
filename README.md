@@ -174,6 +174,7 @@ homeops/
 ├── scripts/
 │   ├── query_floor_runtime.py         # CLI: per-floor runtime summary for a date range
 │   ├── floor_runtime_trend.py         # CLI: day-by-day runtime trend table (last N days)
+│   ├── floor_hourly_heatmap.py        # CLI: hourly zone-call frequency table for a date range
 │   ├── furnace_duty_cycle.py          # CLI: furnace duty cycle % for any time window
 │   ├── furnace_session_analysis.py    # CLI: correlate furnace session length vs outdoor temp (CSV output)
 │   ├── temp_correlation.py            # CLI: Pearson correlation — outdoor temp vs floor runtime
@@ -328,7 +329,7 @@ PYTHONPATH=services/consumer:services/observer:services/insights:dashboard/backe
 NODE_ENV=test npm --prefix dashboard/frontend test
 ```
 
-902 Python tests cover observer reconnect logic, consumer event derivation, floor-2 long-call warning and escalation, thermostat tracking, heating cycle analytics, consumer state persistence, Prometheus metrics gauge updates, the FastAPI backend, Ask HomeOps authentication/quota/budget/observability/prompt-safety guards, deployment smoke checks, insights engine rules, historical anomaly replay/reporting, multi-zone impact analysis, and test-count validation. The frontend has 34 React component tests. The canonical counts live in [`docs/test-counts.json`](docs/test-counts.json) and are verified against CI runner output.
+914 Python tests cover observer reconnect logic, consumer event derivation, floor-2 long-call warning and escalation, thermostat tracking, heating cycle analytics, consumer state persistence, Prometheus metrics gauge updates, the FastAPI backend, Ask HomeOps authentication/quota/budget/observability/prompt-safety guards, deployment smoke checks, insights engine rules, historical anomaly replay/reporting, multi-zone impact analysis, hourly zone-call frequency reporting, and test-count validation. The frontend has 34 React component tests. The canonical counts live in [`docs/test-counts.json`](docs/test-counts.json) and are verified against CI runner output.
 
 ### CI
 
@@ -477,6 +478,34 @@ PYTHONPATH=services/insights \
 
 See [`docs/multi-zone-impact-analysis-2026-08.md`](docs/multi-zone-impact-analysis-2026-08.md)
 for the latest Pi-history result.
+
+### `scripts/floor_hourly_heatmap.py`
+
+Count `floor_call_started.v1` events by local hour for each floor over an
+explicit inclusive date range. The default timezone is
+`America/New_York`; pass another IANA timezone when comparing UTC or a
+different operating location. The report is read-only and shows malformed
+input, out-of-range events, per-floor totals, and peak hours.
+
+```bash
+# Seven local calendar days from the local derived log
+python3 scripts/floor_hourly_heatmap.py \
+  --log state/consumer/events.jsonl \
+  --start 2026-05-11 --end 2026-05-17
+
+# Stream a Pi log without writing to the Pi
+ssh bob@raspberrypi 'cat /home/leachd/repos/homeops/state/consumer/events.jsonl' \
+  | python3 scripts/floor_hourly_heatmap.py --log - \
+      --start 2026-05-11 --end 2026-05-17
+
+# JSON output for automation
+python3 scripts/floor_hourly_heatmap.py \
+  --log state/consumer/events.jsonl \
+  --start 2026-05-11 --end 2026-05-17 --format json
+```
+
+See [`docs/hourly-zone-call-heatmap-2026-08.md`](docs/hourly-zone-call-heatmap-2026-08.md)
+for the latest seven-day Pi-history snapshot.
 
 ### `scripts/temp_correlation.py`
 
