@@ -683,6 +683,22 @@ python3 scripts/floor_hourly_heatmap.py \
 See [`docs/hourly-zone-call-heatmap-2026-08.md`](../../docs/hourly-zone-call-heatmap-2026-08.md)
 for the latest Pi-history snapshot and its data limitations.
 
+The repository-level [`scripts/furnace_temp_scatter.py`](../../scripts/furnace_temp_scatter.py)
+exports daily whole-furnace scatter data as CSV. It averages raw
+`outdoor_temp_updated.v1` readings by UTC date, prefers the canonical
+`furnace_daily_summary.v1` runtime (including zero-runtime days), and uses
+completed `heating_session_ended.v1` events as a fallback when no daily summary
+exists. Rows with missing measurements stay blank so downstream plots can
+exclude incomplete points explicitly.
+
+```bash
+python3 scripts/furnace_temp_scatter.py \
+  --log state/consumer/events.jsonl \
+  --start 2026-03-20 \
+  --end 2026-08-21 \
+  --out state/furnace_temp_scatter.csv
+```
+
 ---
 
 ## Configuration Reference
