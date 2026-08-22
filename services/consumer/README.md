@@ -649,6 +649,12 @@ If no `--baseline` file is supplied, furnace long-session evaluation uses the
 rule's documented absolute fallback thresholds. A baseline can be supplied
 explicitly with `--baseline state/consumer/baseline_constants.json`.
 
+The repository-level [`scripts/analyze_multi_zone_impact.py`](../../scripts/analyze_multi_zone_impact.py)
+performs a separate read-only analysis of `zone_time_to_temp.v1` events. It
+compares sessions with and without other zones calling at session start, but
+requires a minimum sample size before reporting a scheduling effect. It does
+not change thermostat settings or HA automations.
+
 ---
 
 ## Configuration Reference
