@@ -1,4 +1,10 @@
-"""Tests for hvac_context.py — HVAC context summarizer for LLM input."""
+"""Tests for hvac_context.py — HVAC context summarizer for LLM input.
+
+Revision history:
+  2026-08-21  Pin daily-summary tests to the first UTC hour so the shared
+              reference-time behavior remains regression-tested at the CI
+              failure boundary.
+"""
 
 from __future__ import annotations
 
@@ -168,6 +174,8 @@ SAMPLE_EVENTS = [
     },
 ]
 
+UTC_BOUNDARY_NOW = datetime(2026, 8, 22, 0, 56, tzinfo=UTC)
+
 
 # ---------------------------------------------------------------------------
 # Helper function tests
@@ -265,11 +273,14 @@ class TestLoadEvents:
         }
         p = self._write_events(tmp_path, [recent, old])
         since = now - timedelta(hours=48)
-        events = load_events(str(p), since)
+        events = load_events(str(p), since, reference_time=now)
         assert len(events) == 1
 
     def test_includes_yesterday_daily_summaries(self, tmp_path: Path) -> None:
-        now = datetime.now(UTC)
+        # This is the same first-UTC-hour boundary that exposed the CI failure:
+        # since is still on the previous calendar date, but yesterday is the
+        # previous date relative to now.
+        now = UTC_BOUNDARY_NOW
         yesterday = (now.date() - timedelta(days=1)).isoformat()
         # Daily summary from yesterday, outside the 1h window
         summary = {
@@ -279,7 +290,7 @@ class TestLoadEvents:
         }
         p = self._write_events(tmp_path, [summary])
         since = now - timedelta(hours=1)
-        events = load_events(str(p), since)
+        events = load_events(str(p), since, reference_time=now)
         assert len(events) == 1
 
     def test_skips_irrelevant_schemas(self, tmp_path: Path) -> None:
@@ -291,7 +302,7 @@ class TestLoadEvents:
         }
         p = self._write_events(tmp_path, [evt])
         since = now - timedelta(hours=48)
-        events = load_events(str(p), since)
+        events = load_events(str(p), since, reference_time=now)
         assert len(events) == 0
 
     def test_skips_malformed_lines(self, tmp_path: Path) -> None:
@@ -309,12 +320,13 @@ class TestLoadEvents:
             + "\n"
         )
         since = now - timedelta(hours=48)
-        events = load_events(str(p), since)
+        events = load_events(str(p), since, reference_time=now)
         assert len(events) == 1
 
     def test_missing_file_returns_empty(self, tmp_path: Path) -> None:
-        since = datetime.now(UTC) - timedelta(hours=48)
-        events = load_events(str(tmp_path / "nonexistent.jsonl"), since)
+        now = datetime.now(UTC)
+        since = now - timedelta(hours=48)
+        events = load_events(str(tmp_path / "nonexistent.jsonl"), since, reference_time=now)
         assert events == []
 
     def test_empty_lines_skipped(self, tmp_path: Path) -> None:
@@ -322,7 +334,7 @@ class TestLoadEvents:
         p = tmp_path / "events.jsonl"
         p.write_text("\n\n\n")
         since = now - timedelta(hours=48)
-        assert load_events(str(p), since) == []
+        assert load_events(str(p), since, reference_time=now) == []
 
 
 # ---------------------------------------------------------------------------
@@ -565,11 +577,10 @@ class TestBuildContext:
 
     def test_yesterday_daily_summary_included(self, tmp_path: Path) -> None:
         """Yesterday's daily summary appears even with short lookback window."""
-        from datetime import UTC, datetime, timedelta
-
-        # Build an event with yesterday's actual date so the test isn't hardcoded
-        # to a specific calendar date (which would make it fail as dates advance).
-        yesterday = (datetime.now(UTC) - timedelta(days=1)).date().isoformat()
+        # Pin the clock to 00:56 UTC, when the one-hour lookback begins on the
+        # prior calendar date. This reproduces the original CI failure.
+        now = UTC_BOUNDARY_NOW
+        yesterday = (now - timedelta(days=1)).date().isoformat()
         yesterday_event = {
             "schema": "homeops.consumer.furnace_daily_summary.v1",
             "source": "consumer.v1",
@@ -597,5 +608,5 @@ class TestBuildContext:
         sp = self._write_state(tmp_path, SAMPLE_STATE)
         ep = self._write_events(tmp_path, [yesterday_event])
         # 1h lookback — only events from last 1 hour — but yesterday summary should still appear
-        result = build_context(str(sp), str(ep), lookback_hours=1)
+        result = build_context(str(sp), str(ep), lookback_hours=1, reference_time=now)
         assert "YESTERDAY" in result
