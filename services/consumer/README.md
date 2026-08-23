@@ -728,6 +728,20 @@ python3 scripts/runtime_temp_anomalies.py \
   --end 2026-08-21
 ```
 
+The repository-level [`scripts/zone_heat_loss.py`](../../scripts/zone_heat_loss.py)
+replays floor-call and thermostat history to estimate cooling-curve heat-loss
+rates. It uses only samples from known furnace-off, thermostat-idle intervals,
+splits long telemetry gaps, and marks zones with insufficient curves rather than
+inventing a baseline. The output is a read-only measurement and not a fault
+diagnosis.
+
+```bash
+python3 scripts/zone_heat_loss.py \
+  --log state/consumer/events.jsonl \
+  --start 2026-03-20 \
+  --end 2026-05-31
+```
+
 ---
 
 ## Configuration Reference
