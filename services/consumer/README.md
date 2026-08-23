@@ -742,6 +742,23 @@ python3 scripts/zone_heat_loss.py \
   --end 2026-05-31
 ```
 
+The repository-level [`scripts/runtime_per_degree.py`](../../scripts/runtime_per_degree.py)
+computes a demand-normalized efficiency ratio for completed zone calls:
+furnace on-time seconds divided by the positive zone temperature rise in °F.
+It uses overlapping completed furnace sessions rather than treating a zone's
+call duration as furnace runtime, brackets each call with nearby thermostat
+readings, assigns outdoor-temperature buckets, and exposes missing/incomplete
+measurements in `data_quality`. This is a read-only report artifact; it does
+not add an event schema or write thermostat settings.
+
+```bash
+python3 scripts/runtime_per_degree.py \
+  --log state/consumer/events.jsonl \
+  --start 2026-03-20 \
+  --end 2026-05-31 \
+  --format json
+```
+
 ---
 
 ## Configuration Reference

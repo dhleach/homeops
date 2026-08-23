@@ -181,6 +181,7 @@ homeops/
 │   ├── generate_report.py              # CLI: self-contained HTML runtime/trend charts
 │   ├── runtime_temp_anomalies.py       # CLI: temperature-adjusted floor runtime anomalies
 │   ├── zone_heat_loss.py              # CLI: per-zone cooling-curve heat-loss rates
+│   ├── runtime_per_degree.py           # CLI: per-zone furnace runtime per degree gained
 │   ├── temp_correlation.py            # CLI: Pearson correlation — outdoor temp vs floor runtime
 │   ├── validate_floor_aggregation.py # dev: validate floor_daily_summary totals vs raw events
 │   ├── validate_anomalies.py         # read-only replay/report for anomaly detectors
@@ -334,7 +335,7 @@ PYTHONPATH=services/consumer:services/observer:services/insights:dashboard/backe
 NODE_ENV=test npm --prefix dashboard/frontend test
 ```
 
-972 Python tests cover observer reconnect logic, consumer event derivation, floor-2 long-call warning and escalation, thermostat tracking, heating cycle analytics, consumer state persistence, Prometheus metrics gauge updates, the FastAPI backend, Ask HomeOps authentication/quota/budget/observability/prompt-safety guards, deployment smoke checks, insights engine rules, historical anomaly replay/reporting, multi-zone impact analysis, hourly zone-call frequency reporting, the floor-call data-model contract, daily furnace temperature/runtime scatter export, the self-contained HTML trend report, temperature-adjusted runtime anomaly analysis, zone cooling-curve heat-loss analysis, and test-count validation. The frontend has 34 React component tests. The canonical counts live in [`docs/test-counts.json`](docs/test-counts.json) and are verified against CI runner output.
+987 Python tests cover observer reconnect logic, consumer event derivation, floor-2 long-call warning and escalation, thermostat tracking, heating cycle analytics, consumer state persistence, Prometheus metrics gauge updates, the FastAPI backend, Ask HomeOps authentication/quota/budget/observability/prompt-safety guards, deployment smoke checks, insights engine rules, historical anomaly replay/reporting, multi-zone impact analysis, hourly zone-call frequency reporting, the floor-call data-model contract, daily furnace temperature/runtime scatter export, the self-contained HTML trend report, temperature-adjusted runtime anomaly analysis, zone cooling-curve heat-loss analysis, per-zone furnace-runtime-per-degree efficiency analysis, and test-count validation. The frontend has 34 React component tests. The canonical counts live in [`docs/test-counts.json`](docs/test-counts.json) and are verified against CI runner output.
 
 ### CI
 
@@ -533,6 +534,32 @@ python3 scripts/zone_heat_loss.py \
 
 The command is historical and read-only. It requires known furnace-off
 transitions and does not modify consumer state or event logs.
+
+### `scripts/runtime_per_degree.py`
+
+Measure the furnace on-time required for a zone to gain one degree Fahrenheit.
+The report pairs completed floor calls with overlapping completed furnace runs,
+uses nearby bracketed thermostat readings only when their ages are within the
+configured quality window, and groups valid ratios by zone and half-open
+outdoor-temperature bucket. Incomplete calls, stale or missing readings,
+non-positive temperature rises, and calls without measured furnace on-time are
+counted explicitly rather than becoming misleading zeroes. Furnace on-time is
+attributed to each overlapping zone call, so zone values are not additive.
+
+```bash
+python3 scripts/runtime_per_degree.py \
+  --log state/consumer/events.jsonl \
+  --start 2026-03-20 \
+  --end 2026-05-31 \
+  --format json \
+  --out reports/runtime-per-degree.json
+```
+
+The JSON artifact is suitable for a future daily-summary consumer. The command
+does not emit a production event, change thermostat settings, or modify
+consumer state or event logs. See
+[`docs/runtime-per-degree-2026-08.md`](docs/runtime-per-degree-2026-08.md) for
+the latest Pi-history snapshot and its telemetry limitations.
 
 ### `scripts/validate_anomalies.py`
 
