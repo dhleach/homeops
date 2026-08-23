@@ -182,6 +182,7 @@ homeops/
 │   ├── runtime_temp_anomalies.py       # CLI: temperature-adjusted floor runtime anomalies
 │   ├── zone_heat_loss.py              # CLI: per-zone cooling-curve heat-loss rates
 │   ├── runtime_per_degree.py           # CLI: per-zone furnace runtime per degree gained
+│   ├── time_to_temp.py                 # CLI: per-zone time-to-temperature model/prediction
 │   ├── temp_correlation.py            # CLI: Pearson correlation — outdoor temp vs floor runtime
 │   ├── validate_floor_aggregation.py # dev: validate floor_daily_summary totals vs raw events
 │   ├── validate_anomalies.py         # read-only replay/report for anomaly detectors
@@ -335,7 +336,7 @@ PYTHONPATH=services/consumer:services/observer:services/insights:dashboard/backe
 NODE_ENV=test npm --prefix dashboard/frontend test
 ```
 
-987 Python tests cover observer reconnect logic, consumer event derivation, floor-2 long-call warning and escalation, thermostat tracking, heating cycle analytics, consumer state persistence, Prometheus metrics gauge updates, the FastAPI backend, Ask HomeOps authentication/quota/budget/observability/prompt-safety guards, deployment smoke checks, insights engine rules, historical anomaly replay/reporting, multi-zone impact analysis, hourly zone-call frequency reporting, the floor-call data-model contract, daily furnace temperature/runtime scatter export, the self-contained HTML trend report, temperature-adjusted runtime anomaly analysis, zone cooling-curve heat-loss analysis, per-zone furnace-runtime-per-degree efficiency analysis, and test-count validation. The frontend has 34 React component tests. The canonical counts live in [`docs/test-counts.json`](docs/test-counts.json) and are verified against CI runner output.
+1000 Python tests cover observer reconnect logic, consumer event derivation, floor-2 long-call warning and escalation, thermostat tracking, heating cycle analytics, consumer state persistence, Prometheus metrics gauge updates, the FastAPI backend, Ask HomeOps authentication/quota/budget/observability/prompt-safety guards, deployment smoke checks, insights engine rules, historical anomaly replay/reporting, multi-zone impact analysis, hourly zone-call frequency reporting, the floor-call data-model contract, daily furnace temperature/runtime scatter export, the self-contained HTML trend report, temperature-adjusted runtime anomaly analysis, zone cooling-curve heat-loss analysis, per-zone furnace-runtime-per-degree efficiency analysis, per-zone time-to-temperature modeling, and test-count validation. The frontend has 34 React component tests. The canonical counts live in [`docs/test-counts.json`](docs/test-counts.json) and are verified against CI runner output.
 
 ### CI
 
@@ -560,6 +561,38 @@ does not emit a production event, change thermostat settings, or modify
 consumer state or event logs. See
 [`docs/runtime-per-degree-2026-08.md`](docs/runtime-per-degree-2026-08.md) for
 the latest Pi-history snapshot and its telemetry limitations.
+
+### `scripts/time_to_temp.py`
+
+Build a deterministic per-zone estimate of the time required to reach a
+requested setpoint. The read-only model uses completed `zone_time_to_temp.v1`
+events, fits seconds-per-degree against outdoor temperature for each zone, and
+scales the result by the requested positive setpoint delta. The report also
+retains half-open outdoor-temperature buckets and marks sparse zones or
+out-of-range queries explicitly.
+
+```bash
+# Render all zone models for the trailing 30 UTC days
+python3 scripts/time_to_temp.py --log state/consumer/events.jsonl
+
+# Query a zone over a reproducible historical range
+python3 scripts/time_to_temp.py \
+  --zone floor_2 \
+  --outdoor 30 \
+  --delta 3 \
+  --start 2026-03-20 \
+  --end 2026-08-23 \
+  --log state/consumer/events.jsonl \
+  --format json \
+  --out reports/time-to-temp.json
+```
+
+The completed event is emitted alongside `thermostat_setpoint_reached.v1`,
+but is the source used here because it carries the measured duration and
+setpoint delta. This command does not emit a production event, change
+thermostat settings, or modify consumer state or event logs. See
+[`docs/time-to-temp-2026-08.md`](docs/time-to-temp-2026-08.md) for the latest
+Pi-history snapshot and its telemetry limitations.
 
 ### `scripts/validate_anomalies.py`
 
