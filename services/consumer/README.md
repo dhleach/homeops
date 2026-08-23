@@ -759,6 +759,31 @@ python3 scripts/runtime_per_degree.py \
   --format json
 ```
 
+The repository-level [`scripts/time_to_temp.py`](../../scripts/time_to_temp.py)
+builds a read-only per-zone time-to-temperature model from completed
+`zone_time_to_temp.v1` events. It fits seconds per degree against outdoor
+temperature, scales the result by a requested positive setpoint delta, and
+keeps sparse history, missing measurements, and extrapolated queries explicit.
+The companion `thermostat_setpoint_reached.v1` event is not used directly
+because it records the crossing but not the completed duration required by the
+model.
+
+```bash
+python3 scripts/time_to_temp.py \
+  --zone floor_2 \
+  --outdoor 30 \
+  --delta 3 \
+  --start 2026-03-20 \
+  --end 2026-08-23 \
+  --log state/consumer/events.jsonl \
+  --format json
+```
+
+This analysis does not add a consumer event schema, change thermostat
+settings, or modify consumer state. See
+[`docs/time-to-temp-2026-08.md`](../../docs/time-to-temp-2026-08.md) for the
+latest Pi-history validation and its telemetry limitations.
+
 ---
 
 ## Configuration Reference
