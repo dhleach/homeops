@@ -1,0 +1,74 @@
+# HomeOps insight rules configuration.
+#
+# The consumer loads this file once at startup.  Set enabled: false to stop a
+# rule from producing findings or alerts without changing its implementation.
+# HOMEOPS_RULES_CONFIG can point at a validated alternate file for testing.
+version: 1
+
+rules:
+  floor_runtime_anomaly:
+    enabled: true
+    overrun_ratio: 1.5
+    lookback_days: 14
+    minimum_baseline_seconds: 300
+
+  floor_no_response:
+    enabled: true
+    no_response_minutes:
+      floor_1: 10
+      floor_2: 15
+      floor_3: 6
+
+  furnace_session_anomaly:
+    enabled: true
+    short_session_seconds: 90
+    long_session_fallback_seconds:
+      floor_1: 1800
+      floor_2: 2700
+      floor_3: 1200
+
+  furnace_short_call:
+    enabled: true
+    threshold_seconds: 120
+
+  floor_2_long_call:
+    enabled: true
+    threshold_minutes: 45
+    escalation_count: 2
+    telegram_rate_limit_minutes: 60
+
+  slow_to_heat:
+    enabled: true
+    thresholds_minutes:
+      floor_1: 15
+      floor_2: 30
+      floor_3: 10
+
+  observer_silence:
+    enabled: true
+    threshold_minutes: 70
+
+  heating_efficiency:
+    enabled: true
+    min_sessions: 5
+    min_duration_seconds: 60
+    lookback_days: 14
+
+  efficiency_degradation:
+    enabled: true
+    min_weeks: 3
+    min_events_per_week: 3
+    slope_threshold_seconds_per_week: 60
+
+  time_of_day_pattern:
+    enabled: true
+    threshold_ratio: 1.8
+    min_events: 8
+    min_window_events: 3
+
+  storm:
+    enabled: true
+    storm_count: 3
+    storm_window_hours: 1
+    outdoor_drop_f: 10
+    runtime_change_ratio: 0.1

@@ -298,7 +298,7 @@ Fires each time `sensor.outdoor_temperature` reports a new numeric state. Skippe
 ## Event: `homeops.consumer.floor_2_long_call_warning.v1`
 
 Fires (at most once per floor-2 call) when `binary_sensor.floor_2_heating_call` has been `on`
-for longer than `FLOOR_2_WARN_THRESHOLD_S` seconds (default: 2700 s / 45 min). Also triggers a
+for longer than `rules.floor_2_long_call.threshold_minutes × 60` seconds (default: 2700 s / 45 min). Also triggers a
 Telegram alert if `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` are configured. The warning is
 re-armed each time floor 2 starts a new call.
 
@@ -310,7 +310,7 @@ re-armed each time floor 2 starts a new call.
 | `ts` | ISO 8601 string | `utc_ts()` at emission | Emission timestamp; the moment the threshold was crossed (detected at the next event or timeout). |
 | `floor` | string | hardcoded `"floor_2"` | Always floor 2; this warning is floor-2-specific due to overheating risk (Code 4/7 limit). |
 | `elapsed_s` | int | `(now - floor_on_since["binary_sensor.floor_2_heating_call"]).total_seconds()` | How long floor 2 has been calling at time of emission. |
-| `threshold_s` | int | `FLOOR_2_WARN_THRESHOLD_S` env var (default 2700) | The configured threshold that was exceeded. |
+| `threshold_s` | int | `rules.floor_2_long_call.threshold_minutes` (default 45) × 60 | The configured threshold that was exceeded. |
 | `entity_id` | string | `"binary_sensor.floor_2_heating_call"` | HA entity linkage. |
 
 ### JSON Example
@@ -654,7 +654,7 @@ extreme cold that triggered an early shutoff.
 ## Event: `homeops.consumer.observer_silence_warning.v1`
 
 Fires when the consumer has received no `homeops.observer.state_changed.v1` events for longer
-than `OBSERVER_SILENCE_THRESHOLD_S` seconds (default: 600 s / 10 min). This indicates the
+than `rules.observer_silence.threshold_minutes × 60` seconds (default: 4200 s / 70 min). This indicates the
 observer service may have disconnected from Home Assistant, the WebSocket may have hung, or
 the Pi may have lost network connectivity.
 
@@ -669,7 +669,7 @@ observer event arrives, allowing the watchdog to re-arm for subsequent episodes.
 | `ts` | ISO 8601 string | `utc_ts()` at emission | Emission timestamp. |
 | `data.last_event_ts` | ISO 8601 string | `last_observer_event_ts.isoformat()` | Timestamp of the last event received from the observer, for triage. |
 | `data.silence_s` | int | `(now - last_event_ts).total_seconds()` | Observed silence duration in seconds at the time of emission. |
-| `data.threshold_s` | int | `OBSERVER_SILENCE_THRESHOLD_S` env var (default 600) | Configured threshold that was exceeded. |
+| `data.threshold_s` | int | `rules.observer_silence.threshold_minutes` (default 70) × 60 | Configured threshold that was exceeded. |
 
 ### Telegram Alert
 
@@ -684,9 +684,8 @@ Check observer service on Pi.
 
 ### Configuration
 
-| Env var | Default | Description |
-|---|---|---|
-| `OBSERVER_SILENCE_THRESHOLD_S` | `600` | Seconds of silence before alert fires. |
+`rules.observer_silence` in [`services/insights/rules.yaml`](../../services/insights/rules.yaml)
+controls the `enabled` flag and the silence threshold in minutes.
 
 ### JSON Example
 
@@ -713,10 +712,9 @@ per-floor expected window without reaching its setpoint. This is distinct from
 `floor_no_response_warning.v1` (which fires when temperature isn't rising at all) — this event
 fires even if temperature IS rising, but too slowly to reach setpoint within the expected window.
 
-Thresholds are configurable via environment variables and default to:
-- `floor_1`: 900 s (15 min) — `SLOW_TO_HEAT_THRESHOLD_FLOOR1_S`
-- `floor_2`: 1800 s (30 min) — `SLOW_TO_HEAT_THRESHOLD_FLOOR2_S`
-- `floor_3`: 600 s (10 min) — `SLOW_TO_HEAT_THRESHOLD_FLOOR3_S`
+Thresholds are configurable via the `rules.slow_to_heat.thresholds_minutes`
+mapping in [`services/insights/rules.yaml`](../../services/insights/rules.yaml)
+and default to 15, 30, and 10 minutes for floors 1–3.
 
 The warning fires **at most once per heating session** (suppressed by `slow_to_heat_sent` flag,
 reset when a new session starts).
@@ -730,7 +728,7 @@ reset when a new session starts).
 | `zone` | string | `CLIMATE_ENTITIES[entity_id]` | Zone grouping key (e.g. `"floor_2"`). |
 | `entity_id` | string | HA climate entity | Ties event back to the thermostat. |
 | `elapsed_s` | int | `(now - heating_start_ts).total_seconds()` | How long the zone has been calling. |
-| `threshold_s` | int | `SLOW_TO_HEAT_THRESHOLDS_S[zone]` | The per-floor threshold that was exceeded. |
+| `threshold_s` | int | `rules.slow_to_heat.thresholds_minutes[zone]` × 60 | The per-floor threshold that was exceeded. |
 | `start_temp` | float \| null | `heating_start_temp` from session state | Temperature when heating began. |
 | `current_temp` | float \| null | `current_temperature` attribute | Temperature at warning time. |
 | `setpoint` | float \| null | `temperature` attribute | Target setpoint not yet reached. |
@@ -828,8 +826,8 @@ same calendar day. The first long-call warning is emitted as `floor_2_long_call_
 this escalation event fires on the 2nd, 3rd, etc. occurrence so that ongoing furnace issues
 remain visible rather than being silently suppressed.
 
-**Trigger:** `long_call_count_today >= 2` (count is incremented before the check, so this fires
-on the 2nd warning and every warning after).
+**Trigger:** `long_call_count_today >= rules.floor_2_long_call.escalation_count` (default 2;
+count is incremented before the check, so this fires on the 2nd warning and every warning after).
 
 ### Field Table
 
@@ -840,7 +838,7 @@ on the 2nd warning and every warning after).
 | `ts` | ISO 8601 string | `utc_ts()` at emission | Emission timestamp. |
 | `data.floor` | string | hardcoded `"floor_2"` | Always floor 2 — this rule is floor-2-specific. |
 | `data.long_call_count_today` | int | `daily_state["warnings_triggered"]["floor_2_long_call"]` | How many long-call warnings have fired today (≥ 2 when this event emits). |
-| `data.threshold_s` | int | `FLOOR_2_WARN_THRESHOLD_S` env var | The long-call duration threshold in seconds that was exceeded. |
+| `data.threshold_s` | int | `rules.floor_2_long_call.threshold_minutes` × 60 | The long-call duration threshold in seconds that was exceeded. |
 | `data.current_temp` | float \| null | `climate_state["climate.floor_2_thermostat"]["current_temp"]` | Current floor 2 temperature at escalation time; null if climate state unavailable. |
 | `data.setpoint` | float \| null | `climate_state["climate.floor_2_thermostat"]["setpoint"]` | Floor 2 setpoint at escalation time; null if climate state unavailable. |
 
@@ -869,10 +867,11 @@ Fires when a furnace heating session ends in under a configurable threshold. Rap
 (the furnace starting and stopping in quick succession) is a precursor to equipment stress
 and lockout conditions.
 
-**Trigger:** `heating_session_ended.v1` where `duration_s < FURNACE_SHORT_CALL_THRESHOLD_S`
+**Trigger:** `heating_session_ended.v1` where `duration_s < rules.furnace_short_call.threshold_seconds`
 and `duration_s > 0`.
 
-**Env var:** `FURNACE_SHORT_CALL_THRESHOLD_S` (default: `120` seconds / 2 minutes).
+**Configuration:** `rules.furnace_short_call.threshold_seconds` (default: `120` seconds / 2 minutes)
+and its `enabled` flag in `services/insights/rules.yaml`.
 
 **Telegram alert:** Sent immediately when the event fires (in both live loop and playback phase).
 
@@ -884,7 +883,7 @@ and `duration_s > 0`.
 | `source` | string | hardcoded `"consumer.v1"` | Emitting service. |
 | `ts` | ISO 8601 string | observer event ts | Processing timestamp. |
 | `data.duration_s` | int | `heating_session_ended.v1.data.duration_s` | Session duration that triggered the warning. |
-| `data.threshold_s` | int | `FURNACE_SHORT_CALL_THRESHOLD_S` env var | The threshold the session duration was below. |
+| `data.threshold_s` | int | `rules.furnace_short_call.threshold_seconds` | The threshold the session duration was below. |
 | `data.ended_at` | ISO 8601 string \| null | `heating_session_ended.v1.data.ended_at` | When the session ended. |
 
 ### JSON Example

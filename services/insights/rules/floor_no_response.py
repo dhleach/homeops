@@ -7,6 +7,10 @@ AND the internal temperature has not increased since the call started.
 This replaces the earlier furnace-response-based approach, which was broken because
 `binary_sensor.furnace_heating = OR(floor_1_call, floor_2_call, floor_3_call)` —
 it fires immediately when any zone calls, not when the furnace actually heats.
+
+Revision history:
+  2026-08-24  Added an enabled gate so shared rules.yaml can suppress this
+              alert without changing the state-tracking behavior.
 """
 
 from __future__ import annotations
@@ -51,7 +55,11 @@ class FloorNoResponseRule:
     The alert fires at most once per call session (gated by alert_sent).
     """
 
-    def __init__(self, thresholds_s: dict[str, float] | None = None) -> None:
+    def __init__(
+        self,
+        thresholds_s: dict[str, float] | None = None,
+        enabled: bool = True,
+    ) -> None:
         """
         Args:
             thresholds_s: Per-zone threshold in seconds. Defaults to
@@ -60,6 +68,7 @@ class FloorNoResponseRule:
                           otherwise 600s.
         """
         self._thresholds: dict[str, float] = {**_DEFAULT_THRESHOLDS_S, **(thresholds_s or {})}
+        self._enabled = enabled
         self._zones: dict[str, _ZoneState] = {}
 
     def on_floor_call_started(
@@ -103,6 +112,9 @@ class FloorNoResponseRule:
             List of finding dicts (one per zone that crosses the threshold this call).
             Fields: zone, call_start_time, minutes_elapsed, start_temp, current_temp, severity.
         """
+        if not self._enabled:
+            return []
+
         findings = []
         for zone, state in self._zones.items():
             if state.alert_sent:

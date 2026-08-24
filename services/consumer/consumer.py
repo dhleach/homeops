@@ -11,6 +11,11 @@ Business logic lives in focused modules:
   - alerts.py      check_floor_2_warning, check_floor_2_escalation, check_observer_silence,
                    write_zone_temp_snapshot
   - reporting.py   emit_daily_summary, emit_floor_daily_summaries, format_daily_summary_message
+  - rules/config.py  validated rules.yaml loading and enabled/threshold settings
+
+Revision history:
+  2026-08-24  Load the shared rules.yaml configuration once at startup and pass
+              its thresholds/enabled flags through live and playback paths.
 """
 
 from __future__ import annotations
@@ -25,6 +30,7 @@ from typing import Any
 
 from log_config import get_logger
 from metrics import HvacMetrics
+from rules.config import RulesConfig, RulesConfigError, load_rules_config
 
 from alerts import (
     check_floor_2_escalation,
@@ -73,6 +79,25 @@ _RESTART_CLEAR_SCHEMAS = frozenset(
         "homeops.consumer.zone_time_to_temp.v1",
     }
 )
+
+
+def _minutes_to_seconds(values: dict[str, int | float]) -> dict[str, float]:
+    """Convert per-zone minute settings from rules.yaml to seconds."""
+    return {zone: float(minutes) * 60 for zone, minutes in values.items()}
+
+
+def _floor_runtime_anomaly_rule(history: list[dict[str, Any]], rules_config: RulesConfig) -> Any:
+    """Build the daily runtime rule from the validated shared configuration."""
+    from rules.floor_runtime_anomaly import FloorRuntimeAnomalyRule
+
+    settings = rules_config.rule("floor_runtime_anomaly")
+    return FloorRuntimeAnomalyRule(
+        history=history,
+        lookback_days=settings["lookback_days"],
+        threshold_multiplier=settings["overrun_ratio"],
+        minimum_baseline_s=settings["minimum_baseline_seconds"],
+        enabled=settings["enabled"],
+    )
 
 
 def _event_ts_suffix(processing_ts: str | None, wall_ts: datetime) -> str:
@@ -210,6 +235,7 @@ def _playback_phase(
     floor_entities: dict[str, str],
     floor_no_response_rule: Any,
     furnace_session_anomaly_rule: Any,
+    rules_config: RulesConfig | None = None,
     furnace_short_call_threshold_s: int = 120,
     telegram_bot_token: str = "",
     telegram_chat_id: str = "",
@@ -231,6 +257,10 @@ def _playback_phase(
 
     _LOG = "[PLAYBACK]"
     last_consumed_observer_ts: str | None = last_consumed_ts
+    if rules_config is None:
+        rules_config = load_rules_config()
+    slow_to_heat_settings = rules_config.rule("slow_to_heat")
+    slow_to_heat_thresholds_s = _minutes_to_seconds(slow_to_heat_settings["thresholds_minutes"])
 
     logger.info(f"{_LOG} Starting catch-up replay from ts={last_consumed_ts}")
 
@@ -321,8 +351,6 @@ def _playback_phase(
                     current_date = evt_date
 
                     # Floor runtime anomaly check
-                    from rules.floor_runtime_anomaly import FloorRuntimeAnomalyRule  # noqa: PLC0415
-
                     _prior_summaries: list[dict] = []
                     _summary_date = summary["data"]["date"]
                     if Path(derived_log).exists():
@@ -344,7 +372,9 @@ def _playback_phase(
                                         _prior_summaries.append(_devt)
                         except Exception:
                             pass
-                    _runtime_anomaly_rule = FloorRuntimeAnomalyRule(history=_prior_summaries)
+                    _runtime_anomaly_rule = _floor_runtime_anomaly_rule(
+                        _prior_summaries, rules_config
+                    )
                     _per_floor = summary["data"].get("per_floor_runtime_s", {})
                     for _floor, _floor_runtime_s in _per_floor.items():
                         for _anom_evt in _runtime_anomaly_rule.check_daily_runtime(
@@ -435,6 +465,8 @@ def _playback_phase(
                     floor_on_since=floor_on_since,
                     daily_state=daily_state,
                     processing_ts=ts_str,
+                    slow_to_heat_thresholds_s=slow_to_heat_thresholds_s,
+                    slow_to_heat_enabled=slow_to_heat_settings["enabled"],
                 )
                 for derived in derived_events:
                     fresh_restart = _emit_derived(derived, derived_log, fresh_restart)
@@ -537,7 +569,8 @@ def _playback_phase(
                                 _send_telegram(telegram_bot_token, telegram_chat_id, _msg)
                         # Short-call warning: rapid cycling detection
                         if (
-                            _session_dur is not None
+                            rules_config.is_enabled("furnace_short_call")
+                            and _session_dur is not None
                             and _session_dur < furnace_short_call_threshold_s
                             and _session_dur > 0
                         ):
@@ -617,6 +650,19 @@ def main() -> None:
     """Tail observer events and emit derived floor/furnace session events."""
     path = os.environ.get("EVENT_LOG", "state/observer/events.jsonl")
     derived_log = os.environ.get("DERIVED_EVENT_LOG", "state/consumer/events.jsonl")
+    try:
+        rules_config = load_rules_config()
+    except RulesConfigError as exc:
+        logger.error(f"Invalid HomeOps rules configuration: {exc}")
+        raise SystemExit(2) from exc
+    logger.info(f"Rules configuration loaded: {rules_config.path}")
+
+    slow_to_heat_settings = rules_config.rule("slow_to_heat")
+    slow_to_heat_thresholds_s = _minutes_to_seconds(slow_to_heat_settings["thresholds_minutes"])
+    furnace_short_call_settings = rules_config.rule("furnace_short_call")
+    floor_2_long_call_settings = rules_config.rule("floor_2_long_call")
+    observer_silence_settings = rules_config.rule("observer_silence")
+
     logger.info(f"Derived log: {derived_log}")
     version = _get_version()
     logger.info(f"Consumer version: {version}")
@@ -630,23 +676,17 @@ def main() -> None:
     _metrics = HvacMetrics(port=metrics_port)
     _metrics.start()
 
-    furnace_short_call_threshold_s = int(
-        os.environ.get("FURNACE_SHORT_CALL_THRESHOLD_S", "120")
-    )  # 2 min
+    furnace_short_call_threshold_s = furnace_short_call_settings["threshold_seconds"]
     logger.info(f"Furnace short-call threshold: {furnace_short_call_threshold_s}s")
-    floor_2_warn_threshold_s = int(os.environ.get("FLOOR_2_WARN_THRESHOLD_S", "2700"))  # 45 min
-    floor_2_telegram_rate_limit_s = int(
-        os.environ.get("FLOOR_2_TELEGRAM_RATE_LIMIT_S", "3600")
-    )  # 1 hour
+    floor_2_warn_threshold_s = floor_2_long_call_settings["threshold_minutes"] * 60
+    floor_2_telegram_rate_limit_s = floor_2_long_call_settings["telegram_rate_limit_minutes"] * 60
     logger.info(f"Floor-2 warning threshold: {floor_2_warn_threshold_s}s")
     logger.info(f"Floor-2 Telegram rate limit: {floor_2_telegram_rate_limit_s}s")
     logger.info(
         "Slow-to-heat thresholds: "
-        + ", ".join(f"{z}={t}s" for z, t in SLOW_TO_HEAT_THRESHOLDS_S.items())
+        + ", ".join(f"{z}={t}s" for z, t in slow_to_heat_thresholds_s.items())
     )
-    observer_silence_threshold_s = int(
-        os.environ.get("OBSERVER_SILENCE_THRESHOLD_S", "4200")  # 70 min
-    )  # 10 min
+    observer_silence_threshold_s = observer_silence_settings["threshold_minutes"] * 60
     logger.info(f"Observer silence threshold: {observer_silence_threshold_s}s")
     telegram_bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
     telegram_chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
@@ -665,7 +705,11 @@ def main() -> None:
     from rules.floor_no_response import FloorNoResponseRule  # noqa: PLC0415
     from rules.furnace_session_anomaly import FurnaceSessionAnomalyRule  # noqa: PLC0415
 
-    floor_no_response_rule = FloorNoResponseRule()
+    no_response_settings = rules_config.rule("floor_no_response")
+    floor_no_response_rule = FloorNoResponseRule(
+        thresholds_s=_minutes_to_seconds(no_response_settings["no_response_minutes"]),
+        enabled=no_response_settings["enabled"],
+    )
 
     # Furnace session anomaly rule — load baseline once at startup if available.
     _baseline_path = Path("state/consumer/baseline_constants.json")
@@ -676,7 +720,13 @@ def main() -> None:
             logger.info(f"Loaded baseline from {_baseline_path}")
         except Exception as _e:
             logger.warning(f"Could not load baseline: {_e}")
-    furnace_session_anomaly_rule = FurnaceSessionAnomalyRule(_baseline)
+    furnace_session_settings = rules_config.rule("furnace_session_anomaly")
+    furnace_session_anomaly_rule = FurnaceSessionAnomalyRule(
+        baseline=_baseline,
+        short_session_threshold_s=furnace_session_settings["short_session_seconds"],
+        long_session_fallback_s=furnace_session_settings["long_session_fallback_seconds"],
+        enabled=furnace_session_settings["enabled"],
+    )
 
     # Attempt to resume from a recent state file; otherwise cold-start.
     saved = _load_state()
@@ -763,6 +813,7 @@ def main() -> None:
             floor_entities=floor_entities,
             floor_no_response_rule=floor_no_response_rule,
             furnace_session_anomaly_rule=furnace_session_anomaly_rule,
+            rules_config=rules_config,
             furnace_short_call_threshold_s=furnace_short_call_threshold_s,
             telegram_bot_token=telegram_bot_token,
             telegram_chat_id=telegram_chat_id,
@@ -869,8 +920,6 @@ def main() -> None:
 
                     # --- Floor runtime anomaly detection ---
                     # Load prior daily summaries (exclude today to avoid circular reference).
-                    from rules.floor_runtime_anomaly import FloorRuntimeAnomalyRule  # noqa: PLC0415
-
                     _prior_summaries: list[dict] = []
                     _summary_date = summary["data"]["date"]
                     if Path(derived_log).exists():
@@ -893,7 +942,9 @@ def main() -> None:
                         except Exception as _e:
                             logger.warning(f"Could not read derived log for anomaly check: {_e}")
 
-                    _runtime_anomaly_rule = FloorRuntimeAnomalyRule(history=_prior_summaries)
+                    _runtime_anomaly_rule = _floor_runtime_anomaly_rule(
+                        _prior_summaries, rules_config
+                    )
                     _per_floor = summary["data"].get("per_floor_runtime_s", {})
                     for _floor, _floor_runtime_s in _per_floor.items():
                         for _anom_evt in _runtime_anomaly_rule.check_daily_runtime(
@@ -992,6 +1043,8 @@ def main() -> None:
                     floor_on_since=floor_on_since,
                     daily_state=daily_state,
                     processing_ts=ts_str,
+                    slow_to_heat_thresholds_s=slow_to_heat_thresholds_s,
+                    slow_to_heat_enabled=slow_to_heat_settings["enabled"],
                 )
                 for derived in derived_events:
                     fresh_restart = _emit_derived(derived, derived_log, fresh_restart)
@@ -1154,7 +1207,8 @@ def main() -> None:
                                     )
                         # Short-call warning: rapid cycling detection
                         if (
-                            _session_dur is not None
+                            rules_config.is_enabled("furnace_short_call")
+                            and _session_dur is not None
                             and _session_dur < furnace_short_call_threshold_s
                             and _session_dur > 0
                         ):
@@ -1195,6 +1249,7 @@ def main() -> None:
             floor_2_warn_threshold_s,
             datetime.now(UTC),
             climate_state,
+            enabled=floor_2_long_call_settings["enabled"],
         )
         if warn_event:
             daily_state["warnings_triggered"]["floor_2_long_call"] += 1
@@ -1254,7 +1309,11 @@ def main() -> None:
             # Escalation: fire on 2nd, 3rd, etc. long-call warning in the same day
             long_call_count = daily_state["warnings_triggered"]["floor_2_long_call"]
             escalation_event = check_floor_2_escalation(
-                long_call_count, floor_2_warn_threshold_s, climate_state
+                long_call_count,
+                floor_2_warn_threshold_s,
+                climate_state,
+                escalation_count=floor_2_long_call_settings["escalation_count"],
+                enabled=floor_2_long_call_settings["enabled"],
             )
             if escalation_event:
                 daily_state["warnings_triggered"]["floor_2_escalation"] += 1
@@ -1307,6 +1366,7 @@ def main() -> None:
             observer_silence_sent,
             observer_silence_threshold_s,
             datetime.now(UTC),
+            enabled=observer_silence_settings["enabled"],
         )
         if silence_event:
             daily_state["warnings_triggered"]["observer_silence"] += 1

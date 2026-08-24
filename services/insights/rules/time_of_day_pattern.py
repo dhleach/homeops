@@ -19,6 +19,10 @@ Guards
 - Requires at least ``min_events`` (default 8) total historical session events.
 - Only fires when the observed window has at least ``min_window_events``
   (default 3) calls in the anomalous period.
+
+Revision history:
+  2026-08-24  Added an enabled gate so the shared rules.yaml configuration can
+              suppress time-of-day findings without changing the baseline math.
 """
 
 from __future__ import annotations
@@ -71,11 +75,13 @@ class TimeOfDayPatternRule:
         threshold_ratio: float = 1.8,
         min_events: int = 8,
         min_window_events: int = 3,
+        enabled: bool = True,
     ) -> None:
         self._history = history or []
         self._threshold_ratio = threshold_ratio
         self._min_events = min_events
         self._min_window_events = min_window_events
+        self._enabled = enabled
 
     # ------------------------------------------------------------------
     # Public API
@@ -94,6 +100,9 @@ class TimeOfDayPatternRule:
             List of finding dicts (one per floor/period combination that exceeds
             the threshold). Empty list when no anomalies detected.
         """
+        if not self._enabled:
+            return []
+
         baseline = self._build_distribution(self._history)
         window_dist = self._build_distribution(window_events)
 

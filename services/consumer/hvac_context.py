@@ -24,6 +24,8 @@ Revision history:
   2026-08-21  Derive daily-summary date selection from the same explicit UTC
               reference time as context generation so one-hour lookbacks remain
               correct during the first UTC hour.
+  2026-08-24  Load the shared rules.yaml thresholds and enabled flags for
+              on-demand insights, including the outdoor-temperature storm rule.
 """
 
 from __future__ import annotations
@@ -38,8 +40,10 @@ from typing import Any
 # Add insights rules to path (insights/ is a sibling of consumer/)
 sys.path.insert(0, str(Path(__file__).parent.parent / "insights"))
 
+from rules.config import load_rules_config
 from rules.efficiency_degradation import EfficiencyDegradationRule
 from rules.heating_efficiency import HeatingEfficiencyRule
+from rules.outdoor_temperature_storm import OutdoorTemperatureStormRule
 from rules.time_of_day_pattern import TimeOfDayPatternRule
 
 # ---------------------------------------------------------------------------
@@ -64,6 +68,7 @@ ZONE_TO_FLOOR = {
 
 RELEVANT_SCHEMAS = {
     "homeops.consumer.heating_session_ended.v1",
+    "homeops.consumer.outdoor_temp_updated.v1",
     "homeops.consumer.furnace_daily_summary.v1",
     "homeops.consumer.floor_daily_summary.v1",
     "homeops.consumer.floor_2_long_call_warning.v1",
@@ -444,7 +449,7 @@ def build_context(
     # Warnings
     sections.append(_build_warnings_section(events, since))
 
-    # Insights: heating efficiency, efficiency degradation, time-of-day patterns
+    # Insights: heating efficiency, degradation, time-of-day patterns, and storm detection
     insights_section = _build_insights_section(events)
     if insights_section:
         sections.append(insights_section)
@@ -454,20 +459,33 @@ def build_context(
 
 def _build_insights_section(events: list[dict[str, Any]]) -> str:
     """
-    Run the three new insights rules against the full event list and return
+    Run configured insights rules against the full event list and return
     a formatted section string, or an empty string if no data is available.
     """
     lines: list[str] = []
+    rules_config = load_rules_config()
 
     # --- Heating efficiency ---
-    efficiency_rule = HeatingEfficiencyRule(history=events, min_sessions=5, lookback_days=14)
+    efficiency_settings = rules_config.rule("heating_efficiency")
+    efficiency_rule = HeatingEfficiencyRule(
+        history=events,
+        min_sessions=efficiency_settings["min_sessions"],
+        min_duration_s=efficiency_settings["min_duration_seconds"],
+        lookback_days=efficiency_settings["lookback_days"],
+        enabled=efficiency_settings["enabled"],
+    )
     efficiency_text = efficiency_rule.summary_text()
     if efficiency_text:
         lines.append(efficiency_text)
 
     # --- Efficiency degradation ---
+    degradation_settings = rules_config.rule("efficiency_degradation")
     degradation_rule = EfficiencyDegradationRule(
-        history=events, min_weeks=3, min_events_per_week=3, slope_threshold_s_per_week=60.0
+        history=events,
+        min_weeks=degradation_settings["min_weeks"],
+        min_events_per_week=degradation_settings["min_events_per_week"],
+        slope_threshold_s_per_week=degradation_settings["slope_threshold_seconds_per_week"],
+        enabled=degradation_settings["enabled"],
     )
     degradation_findings = degradation_rule.check()
     if degradation_findings:
@@ -485,13 +503,18 @@ def _build_insights_section(events: list[dict[str, Any]]) -> str:
     session_events = [
         e for e in events if e.get("schema") == "homeops.consumer.heating_session_ended.v1"
     ]
-    if len(session_events) >= 8:
+    tod_settings = rules_config.rule("time_of_day_pattern")
+    if len(session_events) >= tod_settings["min_events"]:
         # Split: older 75% as baseline, newer 25% as observation window
         split = max(1, len(session_events) * 3 // 4)
         baseline_events = session_events[:split]
         window_events = session_events[split:]
         tod_rule = TimeOfDayPatternRule(
-            history=baseline_events, threshold_ratio=1.8, min_events=8, min_window_events=3
+            history=baseline_events,
+            threshold_ratio=tod_settings["threshold_ratio"],
+            min_events=tod_settings["min_events"],
+            min_window_events=tod_settings["min_window_events"],
+            enabled=tod_settings["enabled"],
         )
         tod_findings = tod_rule.check(window_events)
         if tod_findings:
@@ -503,6 +526,27 @@ def _build_insights_section(events: list[dict[str, Any]]) -> str:
                     f"than baseline ({d['observed_share']:.0%} vs "
                     f"{d['historical_share']:.0%} historically)"
                 )
+
+    # --- Outdoor-temperature storm ---
+    storm_settings = rules_config.rule("storm")
+    storm_rule = OutdoorTemperatureStormRule(
+        history=events,
+        storm_count=storm_settings["storm_count"],
+        storm_window_hours=storm_settings["storm_window_hours"],
+        outdoor_drop_f=storm_settings["outdoor_drop_f"],
+        runtime_change_ratio=storm_settings["runtime_change_ratio"],
+        enabled=storm_settings["enabled"],
+    )
+    storm_findings = storm_rule.check()
+    if storm_findings:
+        lines.append("Outdoor Temperature Storm Warnings:")
+        for finding in storm_findings:
+            data = finding["data"]
+            lines.append(
+                f"  Outdoor temperature dropped {data['outdoor_drop_f']:.1f}°F in "
+                f"{data['storm_window_hours']:.1f}h while runtime changed only "
+                f"{data['runtime_change_ratio']:.0%}."
+            )
 
     if not lines:
         return ""

@@ -224,7 +224,9 @@ Emitted when the furnace transitions from `on` → `off`.
 
 ### `homeops.consumer.floor_2_long_call_warning.v1`
 
-Emitted once per floor-2 call when the elapsed call duration exceeds `FLOOR_2_WARN_THRESHOLD_S`. See [In-Flight Floor-2 Warning](#in-flight-floor-2-warning) for full details.
+Emitted once per floor-2 call when the elapsed call duration exceeds
+`rules.floor_2_long_call.threshold_minutes × 60`. See [In-Flight Floor-2 Warning](#in-flight-floor-2-warning)
+for full details.
 
 | Field | Type | Description |
 |---|---|---|
@@ -599,7 +601,8 @@ The consumer checks the elapsed duration of an active floor-2 call on **every lo
 
 1. When floor 2 starts a new call, `floor_2_warn_sent` is reset to `False`.
 2. On each loop iteration, if floor 2 is currently active, the consumer computes `elapsed_s = now - floor_on_since["binary_sensor.floor_2_heating_call"]`.
-3. If `elapsed_s >= FLOOR_2_WARN_THRESHOLD_S` and `floor_2_warn_sent` is `False`:
+3. If `elapsed_s >= rules.floor_2_long_call.threshold_minutes × 60` and
+   `floor_2_warn_sent` is `False`:
    - Emits a `floor_2_long_call_warning.v1` derived event.
    - Sends a Telegram message (if `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` are set).
    - Sets `floor_2_warn_sent = True` to prevent duplicate alerts for the same call.
@@ -788,15 +791,26 @@ latest Pi-history validation and its telemetry limitations.
 
 ## Configuration Reference
 
-All configuration is via environment variables.
+Rule thresholds and enablement live in the repository-level
+[`services/insights/rules.yaml`](../insights/rules.yaml). The consumer loads and
+validates that file once at startup; set `enabled: false` for a rule to stop its
+findings/alerts while leaving event collection and state tracking intact. Use
+`HOMEOPS_RULES_CONFIG` for a separately validated test or rollback file.
+
+The YAML file is the source of truth for `overrun_ratio`,
+`no_response_minutes`, `storm_count`, `storm_window_hours`, and the other
+existing warning/insight thresholds. Missing, unknown, non-finite, or
+out-of-range values fail startup rather than silently changing safety behavior.
+
+Non-rule service configuration remains environment-based:
 
 | Variable | Default | Description |
 |---|---|---|
 | `EVENT_LOG` | `state/observer/events.jsonl` | Path to the observer's output JSONL file to tail |
 | `DERIVED_EVENT_LOG` | `state/consumer/events.jsonl` | Path to write derived events (created if absent) |
-| `FLOOR_2_WARN_THRESHOLD_S` | `2700` | Seconds a floor-2 call must be active before a warning is emitted (default: 45 min) |
-| `FLOOR_2_TELEGRAM_RATE_LIMIT_S` | `3600` | Minimum seconds between floor-2 Telegram alerts. Suppresses duplicate Telegram messages within the window; events always emit to JSONL. (default: 1 hour) |
-| `OBSERVER_SILENCE_THRESHOLD_S` | `600` | Seconds of no observer events before a silence warning is emitted (default: 10 min) |
+| `HOMEOPS_RULES_CONFIG` | `services/insights/rules.yaml` | Rules YAML path; loaded and validated once at startup |
+| `METRICS_PORT` | `8001` | Prometheus metrics HTTP port |
+| `TELEGRAM_COMMAND_CHECK_INTERVAL_S` | `30` | Polling interval for Telegram commands |
 | `TELEGRAM_BOT_TOKEN` | _(unset)_ | Telegram Bot API token for overheating alerts |
 | `TELEGRAM_CHAT_ID` | _(unset)_ | Telegram chat ID to receive overheating alerts |
 
@@ -827,7 +841,6 @@ python3 services/consumer/consumer.py
 # With floor-2 Telegram alerts
 EVENT_LOG=state/observer/events.jsonl \
 DERIVED_EVENT_LOG=state/consumer/events.jsonl \
-FLOOR_2_WARN_THRESHOLD_S=2700 \
 TELEGRAM_BOT_TOKEN=<bot-token> \
 TELEGRAM_CHAT_ID=<chat-id> \
 python3 services/consumer/consumer.py
