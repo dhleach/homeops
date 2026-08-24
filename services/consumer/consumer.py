@@ -16,6 +16,8 @@ Business logic lives in focused modules:
 Revision history:
   2026-08-24  Load the shared rules.yaml configuration once at startup and pass
               its thresholds/enabled flags through live and playback paths.
+  2026-08-24  Add the sibling insights directory to sys.path for direct systemd
+              execution, which does not provide the CI PYTHONPATH.
 """
 
 from __future__ import annotations
@@ -27,6 +29,10 @@ import sys
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+
+# The production systemd unit executes this file directly. Add the sibling
+# insights package explicitly so direct execution matches the CI PYTHONPATH.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "insights"))
 
 from log_config import get_logger
 from metrics import HvacMetrics
