@@ -11,6 +11,10 @@ Detects abnormally short or long furnace heating sessions:
 
 The rule is stateless per-call: feed each completed session via
 check_session() and act on the returned list of derived event dicts.
+
+Revision history:
+  2026-08-24  Added configurable short/long thresholds and an enabled gate so
+              rules.yaml controls both warning families safely.
 """
 
 from __future__ import annotations
@@ -46,8 +50,20 @@ class FurnaceSessionAnomalyRule:
                   May be empty or missing floors — absolute thresholds are used as fallback.
     """
 
-    def __init__(self, baseline: dict | None = None) -> None:
+    def __init__(
+        self,
+        baseline: dict | None = None,
+        short_session_threshold_s: int = SHORT_SESSION_THRESHOLD_S,
+        long_session_fallback_s: dict[str, int] | None = None,
+        enabled: bool = True,
+    ) -> None:
         self._baseline: dict = baseline or {}
+        self._short_session_threshold_s = short_session_threshold_s
+        self._long_session_fallback_s = {
+            **_LONG_SESSION_FALLBACK_S,
+            **(long_session_fallback_s or {}),
+        }
+        self._enabled = enabled
 
     def check_session(
         self,
@@ -68,11 +84,14 @@ class FurnaceSessionAnomalyRule:
             Short-session check takes priority — a pathologically short session never
             also fires a long-session warning.
         """
+        if not self._enabled:
+            return []
+
         if duration_s is None:
             return []
 
         # --- Short session check (absolute threshold, highest priority) ---
-        if duration_s < SHORT_SESSION_THRESHOLD_S:
+        if duration_s < self._short_session_threshold_s:
             return [
                 {
                     "schema": "homeops.consumer.heating_short_session_warning.v1",
@@ -81,7 +100,7 @@ class FurnaceSessionAnomalyRule:
                     "data": {
                         "floor": floor,
                         "duration_s": duration_s,
-                        "threshold_s": SHORT_SESSION_THRESHOLD_S,
+                        "threshold_s": self._short_session_threshold_s,
                         "likely_cause": "short_cycle",
                         "session_ts": ts_str,
                         "confidence": 1.0,
@@ -95,7 +114,9 @@ class FurnaceSessionAnomalyRule:
         baseline_p95: float | None = float(floor_baseline["p95"]) if floor_baseline else None
 
         # Absolute fallback threshold for this floor.
-        abs_fallback = _LONG_SESSION_FALLBACK_S.get(floor or "", _DEFAULT_LONG_SESSION_FALLBACK_S)
+        abs_fallback = self._long_session_fallback_s.get(
+            floor or "", _DEFAULT_LONG_SESSION_FALLBACK_S
+        )
 
         # Effective threshold: whichever is higher of p95×1.5 and absolute fallback.
         if baseline_p95 is not None:

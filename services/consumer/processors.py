@@ -1,4 +1,9 @@
-"""Event processors for floor, furnace, climate, and outdoor temperature events."""
+"""Event processors for floor, furnace, climate, and outdoor temperature events.
+
+Revision history:
+  2026-08-24  Added injectable slow-to-heat thresholds and an enabled gate so
+              climate warnings honor the shared rules.yaml configuration.
+"""
 
 from __future__ import annotations
 
@@ -149,6 +154,8 @@ def process_climate_event(
     floor_on_since: dict[str, datetime | None] | None = None,
     daily_state: dict[str, Any] | None = None,
     processing_ts: str | None = None,
+    slow_to_heat_thresholds_s: dict[str, float] | None = None,
+    slow_to_heat_enabled: bool = True,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """
     Process a climate entity state_changed event.
@@ -161,6 +168,8 @@ def process_climate_event(
     new_state is the top-level HA state (e.g. "heat", "off", "cool") used as hvac_mode.
     floor_on_since is passed through from main() for other_zones_calling computation.
     daily_state is passed through from main() for outdoor_temp_f lookup.
+    slow_to_heat_thresholds_s and slow_to_heat_enabled override the default
+    thresholds for the service configuration.
 
     Returns (events, updated_climate_state).
     """
@@ -420,9 +429,10 @@ def process_climate_event(
         and setpoint_reached_ts is None
         and not slow_to_heat_sent
         and ts is not None
-        and zone in SLOW_TO_HEAT_THRESHOLDS_S
+        and slow_to_heat_enabled
+        and zone in (slow_to_heat_thresholds_s or SLOW_TO_HEAT_THRESHOLDS_S)
     ):
-        threshold_s = SLOW_TO_HEAT_THRESHOLDS_S[zone]
+        threshold_s = (slow_to_heat_thresholds_s or SLOW_TO_HEAT_THRESHOLDS_S)[zone]
         elapsed_s = int((ts - heating_start_ts).total_seconds())
         if elapsed_s >= threshold_s:
             events.append(

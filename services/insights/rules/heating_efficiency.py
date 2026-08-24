@@ -21,7 +21,11 @@ Guards
 - Sessions where ``temp_delta_f <= 0`` are excluded (setpoint already met,
   cooling period, sensor noise).
 - Sessions shorter than ``min_duration_s`` (default 60 s) are excluded (short-
-  cycles skew the metric).
+cycles skew the metric).
+
+Revision history:
+  2026-08-24  Added an enabled gate so the shared rules.yaml configuration can
+              suppress efficiency findings without changing their calculation.
 """
 
 from __future__ import annotations
@@ -61,11 +65,13 @@ class HeatingEfficiencyRule:
         min_sessions: int = 5,
         min_duration_s: int = 60,
         lookback_days: int | None = 14,
+        enabled: bool = True,
     ) -> None:
         self._history = history or []
         self._min_sessions = min_sessions
         self._min_duration_s = min_duration_s
         self._lookback_days = lookback_days
+        self._enabled = enabled
 
     # ------------------------------------------------------------------
     # Public API
@@ -82,6 +88,9 @@ class HeatingEfficiencyRule:
 
             Each dict has schema ``homeops.insights.heating_efficiency.v1``.
         """
+        if not self._enabled:
+            return []
+
         cutoff = self._cutoff()
         per_floor: dict[str, list[tuple[float, float]]] = {}  # floor → [(duration_s, delta_f)]
 

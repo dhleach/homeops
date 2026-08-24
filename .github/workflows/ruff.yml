@@ -20,10 +20,50 @@ jobs:
           pip install ruff
       - name: Run ruff format check
         run: |
-          ruff format --check --diff services/observer/observer.py services/consumer/consumer.py services/consumer/reporting.py dashboard/backend/main.py dashboard/backend/security.py dashboard/backend/tests/test_security.py scripts/deploy_smoke_check.py scripts/test_counts.py scripts/validate_anomalies.py scripts/analyze_multi_zone_impact.py scripts/floor_hourly_heatmap.py scripts/floor_runtime_trend.py scripts/furnace_temp_scatter.py scripts/generate_report.py scripts/runtime_temp_anomalies.py scripts/zone_heat_loss.py scripts/runtime_per_degree.py scripts/time_to_temp.py scripts/tests/test_deploy_smoke_check.py scripts/tests/test_test_counts.py scripts/tests/test_validate_anomalies.py scripts/tests/test_analyze_multi_zone_impact.py scripts/tests/test_floor_hourly_heatmap.py scripts/tests/test_data_model_docs.py scripts/tests/test_furnace_temp_scatter.py scripts/tests/test_generate_report.py scripts/tests/test_runtime_temp_anomalies.py scripts/tests/test_zone_heat_loss.py scripts/tests/test_runtime_per_degree.py scripts/tests/test_time_to_temp.py
+          ruff format --check --diff \
+            services/observer/observer.py services/consumer/consumer.py services/consumer/constants.py \
+            services/consumer/processors.py services/consumer/alerts.py services/consumer/reporting.py \
+            services/consumer/hvac_context.py services/insights/rules/config.py \
+            services/insights/rules/outdoor_temperature_storm.py services/insights/rules/floor_runtime_anomaly.py \
+            services/insights/rules/floor_no_response.py services/insights/rules/furnace_session_anomaly.py \
+            services/insights/rules/heating_efficiency.py services/insights/rules/efficiency_degradation.py \
+            services/insights/rules/time_of_day_pattern.py services/insights/rules/tests/test_config.py \
+            services/insights/rules/tests/test_outdoor_temperature_storm.py \
+            services/insights/rules/tests/test_rule_enablement.py \
+            dashboard/backend/main.py dashboard/backend/security.py dashboard/backend/tests/test_security.py \
+            scripts/deploy_smoke_check.py scripts/test_counts.py scripts/validate_anomalies.py \
+            scripts/analyze_multi_zone_impact.py scripts/floor_hourly_heatmap.py scripts/floor_runtime_trend.py \
+            scripts/furnace_temp_scatter.py scripts/generate_report.py scripts/runtime_temp_anomalies.py \
+            scripts/zone_heat_loss.py scripts/runtime_per_degree.py scripts/time_to_temp.py \
+            scripts/tests/test_deploy_smoke_check.py scripts/tests/test_test_counts.py \
+            scripts/tests/test_validate_anomalies.py scripts/tests/test_analyze_multi_zone_impact.py \
+            scripts/tests/test_floor_hourly_heatmap.py scripts/tests/test_data_model_docs.py \
+            scripts/tests/test_furnace_temp_scatter.py scripts/tests/test_generate_report.py \
+            scripts/tests/test_runtime_temp_anomalies.py scripts/tests/test_zone_heat_loss.py \
+            scripts/tests/test_runtime_per_degree.py scripts/tests/test_time_to_temp.py
       - name: Run ruff checks
         run: |
-          ruff check services/observer/observer.py services/consumer/consumer.py services/consumer/reporting.py dashboard/backend/main.py dashboard/backend/security.py dashboard/backend/tests/test_security.py scripts/deploy_smoke_check.py scripts/test_counts.py scripts/validate_anomalies.py scripts/analyze_multi_zone_impact.py scripts/floor_hourly_heatmap.py scripts/floor_runtime_trend.py scripts/furnace_temp_scatter.py scripts/generate_report.py scripts/runtime_temp_anomalies.py scripts/zone_heat_loss.py scripts/runtime_per_degree.py scripts/time_to_temp.py scripts/tests/test_deploy_smoke_check.py scripts/tests/test_test_counts.py scripts/tests/test_validate_anomalies.py scripts/tests/test_analyze_multi_zone_impact.py scripts/tests/test_floor_hourly_heatmap.py scripts/tests/test_data_model_docs.py scripts/tests/test_furnace_temp_scatter.py scripts/tests/test_generate_report.py scripts/tests/test_runtime_temp_anomalies.py scripts/tests/test_zone_heat_loss.py scripts/tests/test_runtime_per_degree.py scripts/tests/test_time_to_temp.py
+          ruff check \
+            services/observer/observer.py services/consumer/consumer.py services/consumer/constants.py \
+            services/consumer/processors.py services/consumer/alerts.py services/consumer/reporting.py \
+            services/consumer/hvac_context.py services/insights/rules/config.py \
+            services/insights/rules/outdoor_temperature_storm.py services/insights/rules/floor_runtime_anomaly.py \
+            services/insights/rules/floor_no_response.py services/insights/rules/furnace_session_anomaly.py \
+            services/insights/rules/heating_efficiency.py services/insights/rules/efficiency_degradation.py \
+            services/insights/rules/time_of_day_pattern.py services/insights/rules/tests/test_config.py \
+            services/insights/rules/tests/test_outdoor_temperature_storm.py \
+            services/insights/rules/tests/test_rule_enablement.py \
+            dashboard/backend/main.py dashboard/backend/security.py dashboard/backend/tests/test_security.py \
+            scripts/deploy_smoke_check.py scripts/test_counts.py scripts/validate_anomalies.py \
+            scripts/analyze_multi_zone_impact.py scripts/floor_hourly_heatmap.py scripts/floor_runtime_trend.py \
+            scripts/furnace_temp_scatter.py scripts/generate_report.py scripts/runtime_temp_anomalies.py \
+            scripts/zone_heat_loss.py scripts/runtime_per_degree.py scripts/time_to_temp.py \
+            scripts/tests/test_deploy_smoke_check.py scripts/tests/test_test_counts.py \
+            scripts/tests/test_validate_anomalies.py scripts/tests/test_analyze_multi_zone_impact.py \
+            scripts/tests/test_floor_hourly_heatmap.py scripts/tests/test_data_model_docs.py \
+            scripts/tests/test_furnace_temp_scatter.py scripts/tests/test_generate_report.py \
+            scripts/tests/test_runtime_temp_anomalies.py scripts/tests/test_zone_heat_loss.py \
+            scripts/tests/test_runtime_per_degree.py scripts/tests/test_time_to_temp.py
 
   pytest:
     runs-on: ubuntu-latest

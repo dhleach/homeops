@@ -23,6 +23,10 @@ Guards
 - Requires at least ``min_events_per_week`` (default 3) sessions per week to
   include that week in the regression.
 - Floors with fewer than ``min_weeks`` qualifying weeks are skipped.
+
+Revision history:
+  2026-08-24  Added an enabled gate so the shared rules.yaml configuration can
+              suppress degradation findings before they are surfaced to Ask HomeOps.
 """
 
 from __future__ import annotations
@@ -79,11 +83,13 @@ class EfficiencyDegradationRule:
         min_weeks: int = 3,
         min_events_per_week: int = 3,
         slope_threshold_s_per_week: float = 60.0,
+        enabled: bool = True,
     ) -> None:
         self._history = history or []
         self._min_weeks = min_weeks
         self._min_events_per_week = min_events_per_week
         self._slope_threshold = slope_threshold_s_per_week
+        self._enabled = enabled
 
     # ------------------------------------------------------------------
     # Public API
@@ -96,6 +102,9 @@ class EfficiencyDegradationRule:
         Returns:
             List of finding dicts (one per floor whose trend exceeds the threshold).
         """
+        if not self._enabled:
+            return []
+
         weekly = self._bucket_by_week()
         findings: list[dict] = []
 

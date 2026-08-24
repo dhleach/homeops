@@ -8,6 +8,10 @@ last N days and fires if the runtime exceeds mean × threshold_multiplier.
 Guards:
 - Requires at least 3 historical data points (insufficient baseline → skip)
 - Does not fire if baseline mean < 300 s (floor barely runs → avoid noise)
+
+Revision history:
+  2026-08-24  Added explicit enabled and minimum-baseline settings so the rule
+              is controlled by the shared rules.yaml configuration.
 """
 
 from __future__ import annotations
@@ -43,10 +47,14 @@ class FloorRuntimeAnomalyRule:
         history: list[dict],
         lookback_days: int = 14,
         threshold_multiplier: float = 1.5,
+        minimum_baseline_s: float = 300.0,
+        enabled: bool = True,
     ) -> None:
         self._history = history or []
         self._lookback_days = lookback_days
         self._threshold_multiplier = threshold_multiplier
+        self._minimum_baseline_s = minimum_baseline_s
+        self._enabled = enabled
 
     # ------------------------------------------------------------------
     # Public API
@@ -70,6 +78,9 @@ class FloorRuntimeAnomalyRule:
         Returns:
             A list containing 0 or 1 ``floor_runtime_anomaly.v1`` event dicts.
         """
+        if not self._enabled:
+            return []
+
         prior_runtimes = self._collect_prior_runtimes(floor, date_str)
 
         if len(prior_runtimes) < 3:
@@ -77,7 +88,7 @@ class FloorRuntimeAnomalyRule:
 
         mean_s = sum(prior_runtimes) / len(prior_runtimes)
 
-        if mean_s < 300:
+        if mean_s < self._minimum_baseline_s:
             return []
 
         threshold_s = mean_s * self._threshold_multiplier

@@ -1,4 +1,9 @@
-"""Alert checks for floor-2 long-call, escalation, observer silence, and zone temp snapshots."""
+"""Alert checks for floor-2 long-call, escalation, observer silence, and zone temp snapshots.
+
+Revision history:
+  2026-08-24  Added enabled gates to alert checks so rules.yaml can disable a
+              warning without changing its state-machine inputs.
+"""
 
 from __future__ import annotations
 
@@ -15,12 +20,16 @@ def check_floor_2_warning(
     floor_2_warn_threshold_s: int,
     now_ts: datetime,
     climate_state: dict[str, Any] | None = None,
+    enabled: bool = True,
 ) -> tuple[dict[str, Any] | None, bool]:
     """
     Check whether the floor-2 long-call warning should fire.
 
     Returns (warning_event_or_None, updated_floor_2_warn_sent).
     """
+    if not enabled:
+        return None, floor_2_warn_sent
+
     if floor_2_warn_sent:
         return None, floor_2_warn_sent
 
@@ -57,10 +66,12 @@ def check_floor_2_escalation(
     long_call_count_today: int,
     floor_2_warn_threshold_s: int,
     climate_state: dict[str, Any] | None = None,
+    escalation_count: int = 2,
+    enabled: bool = True,
 ) -> dict[str, Any] | None:
     """
     Return a floor_2_long_call_escalation.v1 event if today's long-call count has
-    reached the escalation threshold (>= 2), otherwise return None.
+    reached the escalation threshold, otherwise return None.
 
     This fires on the 2nd, 3rd, etc. long-call warning in the same calendar day so
     ongoing furnace issues stay visible.
@@ -70,11 +81,15 @@ def check_floor_2_escalation(
             *after* it has already been incremented for the current warning.
         floor_2_warn_threshold_s: The threshold used for long-call warnings (seconds).
         climate_state: Optional climate_state dict for current_temp / setpoint.
+        escalation_count: Number of warnings required before escalation (default 2).
 
     Returns:
         An escalation event dict, or None if escalation should not fire.
     """
-    if long_call_count_today < 2:
+    if not enabled:
+        return None
+
+    if long_call_count_today < escalation_count:
         return None
 
     f2_climate = (climate_state or {}).get("climate.floor_2_thermostat", {})
@@ -86,6 +101,7 @@ def check_floor_2_escalation(
             "floor": "floor_2",
             "long_call_count_today": long_call_count_today,
             "threshold_s": floor_2_warn_threshold_s,
+            "escalation_count": escalation_count,
             "current_temp": f2_climate.get("current_temp"),
             "setpoint": f2_climate.get("setpoint"),
         },
@@ -124,6 +140,7 @@ def check_observer_silence(
     observer_silence_sent: bool,
     threshold_s: int,
     now_ts: datetime,
+    enabled: bool = True,
 ) -> tuple[dict[str, Any] | None, bool]:
     """
     Check whether the observer has been silent longer than threshold_s.
@@ -131,6 +148,9 @@ def check_observer_silence(
     Returns (warning_event_or_None, updated_observer_silence_sent).
     Only fires once per silence episode (deduplicated via observer_silence_sent flag).
     """
+    if not enabled:
+        return None, observer_silence_sent
+
     if observer_silence_sent:
         return None, observer_silence_sent
 

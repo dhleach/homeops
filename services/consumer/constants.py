@@ -1,8 +1,12 @@
-"""Shared constants and entity mappings for the HomeOps consumer service."""
+"""Shared constants and entity mappings for the HomeOps consumer service.
+
+Revision history:
+  2026-08-24  Keep processor defaults available for direct callers while moving
+              production warning thresholds to the validated insights rules.yaml file.
+"""
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 # State persistence
@@ -29,12 +33,12 @@ CLIMATE_ENTITIES: dict[str, str] = {
     "climate.floor_3_thermostat": "floor_3",
 }
 
-# Per-floor thresholds for the slow-to-heat warning (seconds).
-# Overridable via env vars: SLOW_TO_HEAT_THRESHOLD_FLOOR1_S / FLOOR2_S / FLOOR3_S.
+# Per-floor fallback thresholds for direct processor callers (seconds). The
+# consumer service overrides these from services/insights/rules.yaml at startup.
 SLOW_TO_HEAT_THRESHOLDS_S: dict[str, int] = {
-    "floor_1": int(os.environ.get("SLOW_TO_HEAT_THRESHOLD_FLOOR1_S", "900")),  # 15 min
-    "floor_2": int(os.environ.get("SLOW_TO_HEAT_THRESHOLD_FLOOR2_S", "1800")),  # 30 min
-    "floor_3": int(os.environ.get("SLOW_TO_HEAT_THRESHOLD_FLOOR3_S", "600")),  # 10 min
+    "floor_1": 900,  # 15 min
+    "floor_2": 1800,  # 30 min
+    "floor_3": 600,  # 10 min
 }
 
 # Zone temperature snapshot settings
