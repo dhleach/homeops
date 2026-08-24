@@ -849,4 +849,6 @@ python3 services/consumer/consumer.py
 **As a systemd service:** The production unit is `homeops-consumer.service` on
 the Pi. See the repository-level [`docs/deployment.md`](../../docs/deployment.md)
 for the deployment/restart contract and [`docs/architecture.md`](../../docs/architecture.md)
-for the network boundary.
+for the network boundary. The consumer bootstraps its sibling insights package
+when executed directly by systemd, so this unit does not require a
+`PYTHONPATH` override.
