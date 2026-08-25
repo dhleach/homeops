@@ -2,7 +2,7 @@
 
 **Live dashboard → [homeops.now](https://homeops.now) · API → [api.homeops.now/api/current-temps](https://api.homeops.now/api/current-temps)**
 
-A full-stack observability platform for a 3-zone home HVAC system — event-driven Python pipeline on a Raspberry Pi 5, live metrics in Prometheus + Grafana on AWS EC2, React dashboard on S3 + CloudFront, FastAPI backend, all provisioned with Terraform. 27 derived event types, 1083 Python tests, and 34 React component tests.
+A full-stack observability platform for a 3-zone home HVAC system — event-driven Python pipeline on a Raspberry Pi 5, live metrics in Prometheus + Grafana on AWS EC2, React dashboard on S3 + CloudFront, FastAPI backend, all provisioned with Terraform. 27 derived event types, 1102 Python tests, and 34 React component tests.
 
 ## The Problem
 
@@ -19,7 +19,7 @@ Home Assistant alone can't prevent this. It sees state changes; it doesn't reaso
 - **Event-driven pipeline** — observer writes raw `state_changed`, mitigation-decision, and rollback events to JSONL; consumer tails that file and emits semantically rich derived events downstream
 - **Schema-versioned events** — every event carries a `schema` field (e.g. `homeops.consumer.floor_2_long_call_warning.v1`) for safe downstream evolution
 - **Production-grade operations** — runs as `systemd` services on the Pi, log rotation via `logrotate`, exponential-backoff reconnects on the WebSocket
-- **1083 Python tests + 34 React component tests**, GitHub Actions CI, Ruff lint/format enforcement on every PR, and post-deploy public smoke checks
+- **1102 Python tests + 34 React component tests**, GitHub Actions CI, Ruff lint/format enforcement on every PR, and post-deploy public smoke checks
 - **Opt-in mitigation overlay** — staged Home Assistant zone-call staggering with a disabled-by-default guard and validated timing projections; it is not deployed by the normal application release
 
 ## Architecture
@@ -198,6 +198,7 @@ homeops/
 │   ├── runtime_per_degree.py           # CLI: per-zone furnace runtime per degree gained
 │   ├── time_to_temp.py                 # CLI: per-zone time-to-temperature model/prediction
 │   ├── thermal_query.py                # CLI/tool: bounded natural-language thermal context
+│   ├── scheduling_query.py             # CLI/tool: read-only multi-zone schedule recommendation
 │   ├── temp_correlation.py            # CLI: Pearson correlation — outdoor temp vs floor runtime
 │   ├── validate_floor_aggregation.py # dev: validate floor_daily_summary totals vs raw events
 │   ├── validate_anomalies.py         # read-only replay/report for anomaly detectors
@@ -208,6 +209,7 @@ homeops/
 │   ├── architecture.md               # verified topology, addresses, ports, and boundaries
 │   ├── deployment.md                 # CI/CD sequence, permissions, rollback, smoke checks
 │   ├── data-model.md                 # normalized floor-call session/statistics contracts
+│   ├── multi-zone-scheduling-query.md # read-only floor-2 scheduling contract and safety math
 │   ├── test-counts.json              # CI-verified Python and React test counts
 │   └── event-schemas/
 │       └── consumer-events.md    # authoritative event schema reference
@@ -358,7 +360,7 @@ PYTHONPATH=services/consumer:services/observer:services/insights:dashboard/backe
 NODE_ENV=test npm --prefix dashboard/frontend test
 ```
 
-1083 Python tests cover observer reconnect logic, consumer event derivation, floor-2 long-call warning and escalation, thermostat tracking, heating cycle analytics, consumer state persistence, Prometheus metrics gauge updates, the FastAPI backend, Ask HomeOps authentication/quota/budget/observability/prompt-safety guards, deployment smoke checks, insights engine rules, historical anomaly replay/reporting, multi-zone impact analysis, hourly zone-call frequency reporting, the floor-call data-model contract, daily furnace temperature/runtime scatter export, the self-contained HTML trend report, temperature-adjusted runtime anomaly analysis, zone cooling-curve heat-loss analysis, per-zone furnace-runtime-per-degree efficiency analysis, per-zone time-to-temperature modeling, natural-language thermal query context composition, shared rule configuration validation, enabled-rule gates, outdoor-temperature storm detection, direct consumer import-path validation, staged Home Assistant mitigation configuration, event logging, automatic rollback, mitigation end-to-end replay, and test-count validation. The frontend has 34 React component tests. The canonical counts live in [`docs/test-counts.json`](docs/test-counts.json) and are verified against CI runner output.
+1102 Python tests cover observer reconnect logic, consumer event derivation, floor-2 long-call warning and escalation, thermostat tracking, heating cycle analytics, consumer state persistence, Prometheus metrics gauge updates, the FastAPI backend, Ask HomeOps authentication/quota/budget/observability/prompt-safety guards, deployment smoke checks, insights engine rules, historical anomaly replay/reporting, multi-zone impact analysis, hourly zone-call frequency reporting, the floor-call data-model contract, daily furnace temperature/runtime scatter export, the self-contained HTML trend report, temperature-adjusted runtime anomaly analysis, zone cooling-curve heat-loss analysis, per-zone furnace-runtime-per-degree efficiency analysis, per-zone time-to-temperature modeling, natural-language thermal query context composition, multi-zone scheduling query safety, shared rule configuration validation, enabled-rule gates, outdoor-temperature storm detection, direct consumer import-path validation, staged Home Assistant mitigation configuration, event logging, automatic rollback, mitigation end-to-end replay, and test-count validation. The frontend has 34 React component tests. The canonical counts live in [`docs/test-counts.json`](docs/test-counts.json) and are verified against CI runner output.
 
 The staged mitigation flow can also be replayed without live Home Assistant or
 Telegram writes:
@@ -654,6 +656,35 @@ for an LLM caller; the returned `prompt_context` is bounded and explicitly
 labels telemetry as data rather than instructions. See
 [`docs/thermal-query-interface.md`](docs/thermal-query-interface.md) for the
 contract and data-boundary notes.
+
+### `scripts/scheduling_query.py`
+
+Build a bounded, read-only floor-2 schedule recommendation from the existing
+thermal models. Given a floor-2 target, current/outdoor temperatures, and an
+ISO-8601 deadline, it estimates when the primary call would need to start and
+calculates conservative floor-1/floor-3 setpoint ceilings for the call window.
+It uses the configured `rules.floor_2_long_call` threshold as a safety boundary,
+reserves five minutes by default, and fails closed for sparse, stale,
+extrapolated, or unsafe data. Current temperatures may be supplied explicitly
+or inferred from fresh thermostat snapshots at or before `as_of`.
+
+```bash
+python3 scripts/scheduling_query.py \
+  --target 68 \
+  --current 65 \
+  --outdoor 28 \
+  --by 2026-01-02T07:00:00-05:00 \
+  --floor-1-current 70 \
+  --floor-3-current 69 \
+  --log state/consumer/events.jsonl \
+  --format text
+```
+
+The output is a planning result, not a thermostat command: it does not call
+Home Assistant, modify consumer state, emit a production event, or deploy the
+staged mitigation overlay. See
+[`docs/multi-zone-scheduling-query.md`](docs/multi-zone-scheduling-query.md)
+for the contract, safety math, and sparse-data behavior.
 
 ### `scripts/validate_anomalies.py`
 

@@ -19,6 +19,7 @@ For the host/network boundary around this service, see the repository-level
 - [Event Schema](#event-schema)
 - [Data model reference](#data-model-reference)
 - [In-Flight Floor-2 Warning](#in-flight-floor-2-warning)
+- [Read-only multi-zone scheduling query](#read-only-multi-zone-scheduling-query)
 - [Bootstrap Behavior](#bootstrap-behavior)
 - [Configuration Reference](#configuration-reference)
 - [Quickstart](#quickstart)
@@ -912,6 +913,36 @@ The tool is a prompt-context boundary, not a replacement for the public
 `POST /api/diagnostic` route. That route currently uses its own live
 Prometheus snapshot on EC2; wiring historical Pi event access into that
 provider path remains a separate deployment decision.
+
+## Read-only multi-zone scheduling query
+
+The repository-level [`scripts/scheduling_query.py`](../../scripts/scheduling_query.py)
+composes the time-to-temperature model, conservative cooling-curve rates for
+floors 1 and 3, and the validated `rules.floor_2_long_call` threshold. It can
+estimate a floor-2 start time for a requested deadline and calculate bounded
+secondary-zone setpoint ceilings that are intended to prevent a concurrent
+secondary call during that window.
+
+```bash
+python3 scripts/scheduling_query.py \
+  --target 68 \
+  --current 65 \
+  --outdoor 28 \
+  --by 2026-01-02T07:00:00-05:00 \
+  --floor-1-current 70 \
+  --floor-3-current 69 \
+  --log state/consumer/events.jsonl \
+  --format text
+```
+
+The query is strictly read-only. It does not call Home Assistant, change
+thermostat state, emit a consumer event, or activate the staged mitigation
+automation. It returns no schedule when model history is sparse, a temperature
+snapshot is stale, the primary prediction is extrapolated/invalid, or the
+predicted call reaches the configured long-call threshold reserve. The
+`SCHEDULING_SCHEMA` value is an offline report schema, not a consumer event
+schema. See [`docs/multi-zone-scheduling-query.md`](../../docs/multi-zone-scheduling-query.md)
+for the full contract.
 
 ## Staged mitigation replay
 
