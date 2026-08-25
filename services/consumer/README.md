@@ -4,7 +4,7 @@ The design policy for future short-cycle mitigation is documented in
 [docs/mitigation-policy.md](../../docs/mitigation-policy.md); it is not an
 active Home Assistant control path.
 
-The consumer is a Python daemon that tails the observer's JSONL event stream in real time and emits higher-level **derived events** — floor heating-call sessions, whole-home heating sessions, thermostat/climate state changes, per-zone heating performance metrics, and in-flight overheating warnings. It is the second stage in the homeops data pipeline.
+The consumer is a Python daemon that tails the observer's JSONL event stream in real time and emits higher-level **derived events** — floor heating-call sessions, whole-home heating sessions, thermostat/climate state changes, per-zone heating performance metrics, mitigation decisions, and in-flight overheating warnings. It is the second stage in the homeops data pipeline.
 
 For the host/network boundary around this service, see the repository-level
 [`docs/architecture.md`](../../docs/architecture.md) and
@@ -37,7 +37,7 @@ observer
                ──►  Telegram alert  (floor-2 long-call only)
 ```
 
-The consumer reads the observer's raw `state_changed` events and produces semantically richer records: when a floor starts or ends a heating call, when the furnace starts or ends a heating session, when a thermostat's setpoint, current temperature, or HVAC mode changes, when a zone reaches its setpoint (along with how long it took), when a zone overshoots or undershoots its setpoint after heating ends, when floor 2 has been calling for longer than the configured threshold (a sign that the furnace may overheat), and a daily summary of furnace runtime and outdoor temperatures.
+The consumer reads the observer's raw `state_changed` events and explicit Home Assistant event records. It produces semantically richer records: when a floor starts or ends a heating call, when the furnace starts or ends a heating session, when a thermostat's setpoint, current temperature, or HVAC mode changes, when a zone reaches its setpoint (along with how long it took), when a zone overshoots or undershoots its setpoint after heating ends, when floor 2 has been calling for longer than the configured threshold (a sign that the furnace may overheat), when a staged mitigation decision was applied or skipped, and a daily summary of furnace runtime and outdoor temperatures.
 
 ---
 
@@ -54,7 +54,7 @@ The consumer is split across nine focused modules:
 | `constants.py` | Entity ID maps, env-var defaults, shared configuration constants |
 | `utils.py` | `utc_ts`, `follow` (select-based tail generator), `append_jsonl`, `_parse_dt`, `_get_version` |
 | `state.py` | `last_furnace_on_since` bootstrap scan, `_load_state` / `_save_state` persistence, `_empty_daily_state` initialiser |
-| `processors.py` | `process_floor_event`, `process_furnace_event`, `process_climate_event`, `process_outdoor_temp_event` — pure event-to-derived-event transforms |
+| `processors.py` | `process_floor_event`, `process_furnace_event`, `process_climate_event`, `process_outdoor_temp_event`, `process_mitigation_event` — pure event-to-derived-event transforms |
 | `alerts.py` | `check_floor_2_warning`, `check_floor_2_escalation`, `check_observer_silence`, `write_zone_temp_snapshot` — in-flight periodic checks |
 | `reporting.py` | `emit_daily_summary`, `format_daily_summary_message` — end-of-day summary generation and Telegram formatting |
 | `metrics.py` | `HvacMetrics` — Prometheus gauge definitions, update helpers, and HTTP server (port 8001); foundation for the homeops.now public dashboard data pipeline |
@@ -73,7 +73,9 @@ This approach avoids busy-polling and works correctly even when the observer and
 
 ### Event consumption
 
-The consumer filters for `schema == "homeops.observer.state_changed.v1"` and ignores everything else. It then routes each event by `entity_id`:
+The consumer routes `homeops.observer.state_changed.v1` records by `entity_id`
+and translates `homeops.observer.event.v1` mitigation records by their
+`event_type`:
 
 | Entity ID | Derived events produced |
 |---|---|
@@ -85,6 +87,7 @@ The consumer filters for `schema == "homeops.observer.state_changed.v1"` and ign
 | `climate.floor_1_thermostat` | `thermostat_setpoint_changed.v1`, `thermostat_current_temp_updated.v1`, `thermostat_mode_changed.v1`, `thermostat_setpoint_reached.v1`, `zone_time_to_temp.v1`, `zone_overshoot.v1`, `zone_setpoint_miss.v1`, `zone_slow_to_heat_warning.v1` |
 | `climate.floor_2_thermostat` | `thermostat_setpoint_changed.v1`, `thermostat_current_temp_updated.v1`, `thermostat_mode_changed.v1`, `thermostat_setpoint_reached.v1`, `zone_time_to_temp.v1`, `zone_overshoot.v1`, `zone_setpoint_miss.v1`, `zone_slow_to_heat_warning.v1` |
 | `climate.floor_3_thermostat` | `thermostat_setpoint_changed.v1`, `thermostat_current_temp_updated.v1`, `thermostat_mode_changed.v1`, `thermostat_setpoint_reached.v1`, `zone_time_to_temp.v1`, `zone_overshoot.v1`, `zone_setpoint_miss.v1`, `zone_slow_to_heat_warning.v1` |
+| `homeops.observer.event.v1` (`event_type=homeops.mitigation.zone_stagger_applied.v1`) | `homeops.mitigation.zone_stagger_applied.v1` |
 
 Additionally, `furnace_daily_summary.v1` is emitted once per UTC calendar day at the first event after midnight, followed immediately by three `floor_daily_summary.v1` events (one per floor).
 
@@ -103,7 +106,7 @@ Every derived event is:
 >
 > That document contains complete field tables with source/rationale columns, design notes, and planned (not-yet-implemented) events. The sections below are the working reference for the currently implemented event types.
 
-The consumer emits 25 derived event types. All share a common envelope. The
+The consumer emits 26 derived event types. All share a common envelope. The
 authoritative list is maintained in `docs/event-schemas/consumer-events.md`; the
 working sections below cover the most frequently inspected event payloads.
 
@@ -115,6 +118,46 @@ working sections below cover the most frequently inspected event payloads.
 | `source` | string | Always `"consumer.v1"` |
 | `ts` | string (ISO 8601 UTC) | Timestamp when the consumer emitted the event |
 | `data` | object | Event-specific payload (see each type below) |
+
+### `homeops.mitigation.zone_stagger_applied.v1`
+
+Emitted when the staged Home Assistant zone-stagger automation records an
+applied or skipped resume decision. The top-level `event_type` repeats the
+Home Assistant event name so consumers that do not key on `schema` can route
+the record directly.
+
+| Field | Type | Description |
+|---|---|---|
+| `event_type` | string | Always `"homeops.mitigation.zone_stagger_applied.v1"` |
+| `data.event_type` | string | Same stable Home Assistant event name |
+| `data.zone` | string | `floor_1`, `floor_2`, or `floor_3` |
+| `data.reason` | string | Decision reason, such as `secondary_zone_call_during_furnace_warmup` or `resume_gate_failed` |
+| `data.delay_minutes` | number | Configured stagger delay captured before the pause |
+| `data.trigger_event_id` | string | Home Assistant state-trigger context ID, or the trigger ID fallback |
+| `data.outcome` | string | `applied` or `skipped` |
+
+Invalid mitigation payloads are logged and skipped; they never enter the
+derived event log. Observer playback handles the same event shape, so a
+consumer restart can recover a decision from `state/observer/events.jsonl`.
+
+**Example:**
+
+```json
+{
+  "schema": "homeops.mitigation.zone_stagger_applied.v1",
+  "event_type": "homeops.mitigation.zone_stagger_applied.v1",
+  "source": "consumer.v1",
+  "ts": "2026-08-25T13:00:00.000000+00:00",
+  "data": {
+    "event_type": "homeops.mitigation.zone_stagger_applied.v1",
+    "zone": "floor_2",
+    "reason": "secondary_zone_call_during_furnace_warmup",
+    "delay_minutes": 5,
+    "trigger_event_id": "0123456789abcdef",
+    "outcome": "applied"
+  }
+}
+```
 
 ---
 

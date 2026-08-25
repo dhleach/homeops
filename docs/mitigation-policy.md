@@ -175,9 +175,12 @@ record. At minimum, record:
 
 Records must be durable across process restarts, suitable for post-incident
 review, and free of credentials or access tokens. A warning notification is
-not a substitute for the audit record. The future implementation may map
-these records to versioned HomeOps events and the Home Assistant logbook, but
-the mapping must preserve the fields above and be idempotent on retry.
+not a substitute for the audit record. The staged zone-stagger slice now maps
+its applied/skipped decision to the versioned
+`homeops.mitigation.zone_stagger_applied.v1` event and preserves it through the
+observer and consumer JSONL streams. That first mapping covers the zone,
+reason, delay, trigger reference, and outcome fields; later mitigation slices
+must extend it to the full audit record above and preserve idempotence on retry.
 
 ## Fail-safe and recovery rules
 

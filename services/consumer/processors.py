@@ -1,12 +1,16 @@
 """Event processors for floor, furnace, climate, and outdoor temperature events.
 
 Revision history:
+  2026-08-25  Validate and translate the staged Home Assistant mitigation event
+              into a durable consumer event so applied/skipped decisions survive
+              the observer-to-consumer boundary.
   2026-08-24  Added injectable slow-to-heat thresholds and an enabled gate so
               climate warnings honor the shared rules.yaml configuration.
 """
 
 from __future__ import annotations
 
+import math
 from datetime import datetime
 from typing import Any
 
@@ -19,6 +23,70 @@ from constants import (
     SLOW_TO_HEAT_THRESHOLDS_S,
 )
 from utils import utc_ts
+
+MITIGATION_EVENT_TYPE = "homeops.mitigation.zone_stagger_applied.v1"
+_MITIGATION_ZONES = frozenset({"floor_1", "floor_2", "floor_3"})
+_MITIGATION_OUTCOMES = frozenset({"applied", "skipped"})
+
+
+def process_mitigation_event(
+    event_type: str | None,
+    event_data: dict[str, Any] | None,
+    processing_ts: str | None = None,
+) -> dict[str, Any] | None:
+    """Validate and translate a Home Assistant mitigation decision.
+
+    Home Assistant emits this event on its event bus; the observer wraps it in
+    ``homeops.observer.event.v1`` before the consumer sees it.  Invalid or
+    incomplete payloads return ``None`` so malformed input cannot enter the
+    derived event log.
+    """
+    if event_type != MITIGATION_EVENT_TYPE or not isinstance(event_data, dict):
+        return None
+
+    zone = event_data.get("zone")
+    reason = event_data.get("reason")
+    trigger_event_id = event_data.get("trigger_event_id")
+    outcome = event_data.get("outcome")
+    delay_raw = event_data.get("delay_minutes")
+
+    if event_data.get("event_type") != event_type:
+        return None
+    if zone not in _MITIGATION_ZONES:
+        return None
+    if not isinstance(reason, str) or not reason.strip():
+        return None
+    if not isinstance(trigger_event_id, str) or not trigger_event_id.strip():
+        return None
+    if outcome not in _MITIGATION_OUTCOMES:
+        return None
+    if isinstance(delay_raw, bool) or delay_raw is None:
+        return None
+    try:
+        delay_minutes = float(delay_raw)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(delay_minutes) or delay_minutes < 0:
+        return None
+    if delay_minutes.is_integer():
+        normalized_delay: int | float = int(delay_minutes)
+    else:
+        normalized_delay = delay_minutes
+
+    return {
+        "schema": MITIGATION_EVENT_TYPE,
+        "event_type": MITIGATION_EVENT_TYPE,
+        "source": "consumer.v1",
+        "ts": processing_ts or utc_ts(),
+        "data": {
+            "event_type": MITIGATION_EVENT_TYPE,
+            "zone": zone,
+            "reason": reason.strip(),
+            "delay_minutes": normalized_delay,
+            "trigger_event_id": trigger_event_id.strip(),
+            "outcome": outcome,
+        },
+    }
 
 
 def process_floor_event(

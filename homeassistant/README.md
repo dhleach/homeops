@@ -33,5 +33,8 @@ Assistant's configuration check and keep `mitigation_enabled` off until the
 test setup is ready. Do not copy this overlay into the live Pi as part of a
 normal application deploy.
 
-The next mitigation tasks add durable event logging and automatic rollback;
-this slice intentionally does not claim those capabilities.
+The automation emits `homeops.mitigation.zone_stagger_applied.v1` after a
+resume decision, with `outcome: applied` or `outcome: skipped`. The observer and
+consumer preserve that decision in the append-only derived event log. Automatic
+rollback remains the next mitigation task; this overlay is still staged and is
+not deployed by the normal application release.

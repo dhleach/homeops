@@ -1,11 +1,12 @@
 # Consumer Event Schemas
 
 This document is the reference for all consumer events emitted by
-`services/consumer/consumer.py` into `state/consumer/events.jsonl`. It covers **12 implemented
-events** and **3 planned events** (not yet implemented). All events are derived from raw
-`homeops.observer.state_changed.v1` records and represent higher-level state transitions
+`services/consumer/consumer.py` into `state/consumer/events.jsonl`. It covers the implemented
+consumer event schemas and three planned events (not yet implemented). Most events are derived from
+`homeops.observer.state_changed.v1` records; mitigation decisions arrive as explicit
+Home Assistant event records. Together they represent higher-level state transitions
 (floor calls, furnace sessions, thermostat changes, outdoor temperature readings, daily
-summaries, and per-zone heating-cycle outcomes).
+summaries, per-zone heating-cycle outcomes, and explicit mitigation decisions).
 
 ---
 
@@ -897,6 +898,53 @@ and its `enabled` flag in `services/insights/rules.yaml`.
     "duration_s": 45,
     "threshold_s": 120,
     "ended_at": "2026-04-01T14:23:00+00:00"
+  }
+}
+```
+
+---
+
+## Event: `homeops.mitigation.zone_stagger_applied.v1`
+
+Records the applied or skipped resume decision made by the staged Home
+Assistant zone-call stagger automation. Home Assistant emits the named event;
+the observer preserves it in `homeops.observer.event.v1`, and the consumer
+validates and appends this derived record to the durable consumer log.
+
+### Field Table
+
+| Field | Type | Source | Rationale |
+|---|---|---|---|
+| `schema` | string | hardcoded | Stable event identifier; equal to `event_type`. |
+| `event_type` | string | HA event type | Explicit routing key: `homeops.mitigation.zone_stagger_applied.v1`. |
+| `source` | string | hardcoded `"consumer.v1"` | Emitting service. |
+| `ts` | ISO 8601 string | observer event timestamp | Preserves the time the observer received the HA decision, including during playback. |
+| `data.event_type` | string | HA event payload | Retained in the event data for downstream consumers that route on payload fields. |
+| `data.zone` | string | `trigger.id` in the HA automation | Zone whose climate entity was staggered. One of `floor_1`, `floor_2`, or `floor_3`. |
+| `data.reason` | string | HA automation decision branch | Explains the applied or skipped result. |
+| `data.delay_minutes` | number | Captured HA helper value | Delay used by the stagger, captured before the pause. |
+| `data.trigger_event_id` | string | HA state-trigger context ID | Correlates the decision to the source zone-call transition. |
+| `data.outcome` | string | HA automation decision branch | `applied` after resume, or `skipped` when the resume gate fails. |
+
+Invalid records are rejected by the consumer and are not appended to the
+derived log. The observer cursor is still advanced so one malformed record
+cannot block later state or mitigation events during playback.
+
+### JSON Example
+
+```json
+{
+  "schema": "homeops.mitigation.zone_stagger_applied.v1",
+  "event_type": "homeops.mitigation.zone_stagger_applied.v1",
+  "source": "consumer.v1",
+  "ts": "2026-08-25T13:00:00.000000+00:00",
+  "data": {
+    "event_type": "homeops.mitigation.zone_stagger_applied.v1",
+    "zone": "floor_2",
+    "reason": "secondary_zone_call_during_furnace_warmup",
+    "delay_minutes": 5,
+    "trigger_event_id": "0123456789abcdef",
+    "outcome": "applied"
   }
 }
 ```

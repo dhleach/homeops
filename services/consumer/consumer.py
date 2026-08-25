@@ -7,13 +7,16 @@ Business logic lives in focused modules:
   - utils.py       utc_ts, follow, append_jsonl, _parse_dt, _get_version
   - state.py       _empty_daily_state, _save_state, _load_state, last_furnace_on_since
   - processors.py  process_floor_event, process_furnace_event, process_climate_event,
-                   process_outdoor_temp_event
+                   process_outdoor_temp_event, process_mitigation_event
   - alerts.py      check_floor_2_warning, check_floor_2_escalation, check_observer_silence,
                    write_zone_temp_snapshot
   - reporting.py   emit_daily_summary, emit_floor_daily_summaries, format_daily_summary_message
   - rules/config.py  validated rules.yaml loading and enabled/threshold settings
 
 Revision history:
+  2026-08-25  Consume the observer's staged mitigation-event envelope in both
+              live and playback paths and append validated decisions to the
+              derived event log.
   2026-08-24  Load the shared rules.yaml configuration once at startup and pass
               its thresholds/enabled flags through live and playback paths.
   2026-08-24  Add the sibling insights directory to sys.path for direct systemd
@@ -53,9 +56,11 @@ from constants import (
     ZONE_TEMP_SNAPSHOT_INTERVAL_S,
 )
 from processors import (
+    MITIGATION_EVENT_TYPE,
     process_climate_event,
     process_floor_event,
     process_furnace_event,
+    process_mitigation_event,
     process_outdoor_temp_event,
 )
 from reporting import emit_daily_summary, emit_floor_daily_summaries, format_daily_summary_message
@@ -73,6 +78,9 @@ from telegram_commands import handle_telegram_commands
 from utils import _get_version, append_jsonl, follow, utc_ts
 
 logger = get_logger("consumer")
+
+_OBSERVER_STATE_SCHEMA = "homeops.observer.state_changed.v1"
+_OBSERVER_EVENT_SCHEMA = "homeops.observer.event.v1"
 
 # Module-level metrics singleton — set to an HvacMetrics instance in main() when the
 # METRICS_PORT env var is present (or always).  None during unit tests that don't want
@@ -149,6 +157,66 @@ def _emit_derived(derived: dict[str, Any], derived_log: str, fresh_restart: bool
         logger.info("Cleared fresh_restart after first full heating session")
         return False
     return fresh_restart
+
+
+def _process_mitigation_observer_event(
+    evt: dict[str, Any],
+    derived_log: str,
+    fresh_restart: bool,
+) -> tuple[bool, bool]:
+    """Process one observer custom-event envelope.
+
+    Returns ``(fresh_restart, emitted)``.  The caller advances and persists the
+    observer cursor even when validation rejects the payload, preventing one
+    malformed line from blocking all subsequent events.
+    """
+    observer_data = evt.get("data")
+    if not isinstance(observer_data, dict):
+        logger.warning("Ignoring mitigation observer event with non-object data")
+        return fresh_restart, False
+
+    event_type = observer_data.get("event_type")
+    event_data = observer_data.get("event_data")
+    derived = process_mitigation_event(
+        event_type,
+        event_data if isinstance(event_data, dict) else None,
+        processing_ts=evt.get("ts"),
+    )
+    if derived is None:
+        logger.warning(
+            "Ignoring invalid mitigation event type=%r data=%r",
+            event_type,
+            event_data,
+        )
+        return fresh_restart, False
+
+    trigger_event_id = derived["data"]["trigger_event_id"]
+    try:
+        with open(derived_log, encoding="utf-8") as _dlog:
+            for _line in _dlog:
+                try:
+                    _existing = json.loads(_line)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(_existing, dict):
+                    continue
+                _existing_data = _existing.get("data")
+                if (
+                    _existing.get("schema") == MITIGATION_EVENT_TYPE
+                    and isinstance(_existing_data, dict)
+                    and _existing_data.get("trigger_event_id") == trigger_event_id
+                ):
+                    logger.info(
+                        "Skipping duplicate mitigation event trigger_event_id=%s",
+                        trigger_event_id,
+                    )
+                    return fresh_restart, False
+    except FileNotFoundError:
+        pass
+    except OSError as exc:
+        logger.warning("Could not inspect derived log for mitigation deduplication: %s", exc)
+
+    return _emit_derived(derived, derived_log, fresh_restart), True
 
 
 def _send_telegram(bot_token: str, chat_id: str, msg: str) -> None:
@@ -300,7 +368,7 @@ def _playback_phase(
                 continue
 
             schema = evt.get("schema")
-            if schema != "homeops.observer.state_changed.v1":
+            if schema not in {_OBSERVER_STATE_SCHEMA, _OBSERVER_EVENT_SCHEMA}:
                 # Non-observer lines still count toward seek position but we
                 # need to check ts for the seek decision.
                 if not found_start:
@@ -314,6 +382,27 @@ def _playback_phase(
                 if evt_ts_str < last_consumed_ts:
                     continue
                 found_start = True
+
+            if schema == _OBSERVER_EVENT_SCHEMA:
+                # Custom Home Assistant events have no entity state to route,
+                # but they still advance the durable observer cursor.
+                ts_str = evt.get("ts")
+                if ts_str:
+                    last_consumed_observer_ts = ts_str
+                logger.info(f"{_LOG} {ts_str} {schema}: mitigation decision")
+                fresh_restart, _ = _process_mitigation_observer_event(
+                    evt, derived_log, fresh_restart
+                )
+                if ts_str:
+                    _save_state(
+                        floor_on_since,
+                        furnace_on_since,
+                        climate_state,
+                        daily_state,
+                        last_consumed_observer_ts=last_consumed_observer_ts,
+                    )
+                event_count += 1
+                continue
 
             # --- process this observer event ---
             ts_str: str | None = evt.get("ts")
@@ -860,7 +949,7 @@ def main() -> None:
 
             schema = evt.get("schema")
             # Ignore non-observer events if this file is shared with other producers.
-            if schema != "homeops.observer.state_changed.v1":
+            if schema not in {_OBSERVER_STATE_SCHEMA, _OBSERVER_EVENT_SCHEMA}:
                 continue
 
             # Track last observer event time for silence watchdog.
@@ -873,6 +962,22 @@ def main() -> None:
             # Update last-consumed pointer for every observer event we handle.
             if ts_str:
                 last_consumed_observer_ts = ts_str
+
+            if schema == _OBSERVER_EVENT_SCHEMA:
+                print(f"{ts_str} {schema}: mitigation decision", flush=True)
+                fresh_restart, _ = _process_mitigation_observer_event(
+                    evt, derived_log, fresh_restart
+                )
+                _save_state(
+                    floor_on_since,
+                    furnace_on_since,
+                    climate_state,
+                    daily_state,
+                    last_consumed_observer_ts=last_consumed_observer_ts,
+                    floor_2_telegram_last_sent_ts=floor_2_telegram_last_sent_ts,
+                )
+                continue
+
             data = evt.get("data", {})
             entity_id = data.get("entity_id")
             old_state = data.get("old_state")
@@ -1492,6 +1597,7 @@ if __name__ == "__main__":
 # (all are already imported at the top of this module)
 __all__ = [
     # constants
+    "MITIGATION_EVENT_TYPE",
     "SLOW_TO_HEAT_THRESHOLDS_S",
     "ZONE_TEMP_SNAPSHOT_INTERVAL_S",
     # entry-point functions (defined here)
@@ -1513,6 +1619,7 @@ __all__ = [
     "process_climate_event",
     "process_floor_event",
     "process_furnace_event",
+    "process_mitigation_event",
     "process_outdoor_temp_event",
     # alerts
     "check_floor_2_escalation",
