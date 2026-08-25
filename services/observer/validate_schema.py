@@ -4,9 +4,14 @@
 Usage:
     python3 validate_schema.py observer.jsonl
     cat observer.jsonl | python3 validate_schema.py
+
+Revision history:
+  2026-08-25  Validate the generic observer envelope and staged mitigation
+              decision payload alongside state_changed records.
 """
 
 import json
+import math
 import sys
 
 KNOWN_ENTITIES = {
@@ -34,7 +39,19 @@ OUTDOOR_TEMP_EXEMPT_STATES = {"unavailable", "unknown"}
 REQUIRED_TOP_LEVEL = {"schema", "source", "ts", "data"}
 REQUIRED_DATA_FIELDS = {"entity_id", "old_state", "new_state"}
 EXPECTED_SCHEMA = "homeops.observer.state_changed.v1"
+EVENT_SCHEMA = "homeops.observer.event.v1"
+MITIGATION_EVENT_TYPE = "homeops.mitigation.zone_stagger_applied.v1"
 EXPECTED_SOURCE = "ha.websocket"
+MITIGATION_ZONES = {"floor_1", "floor_2", "floor_3"}
+MITIGATION_OUTCOMES = {"applied", "skipped"}
+MITIGATION_DATA_FIELDS = {
+    "event_type",
+    "zone",
+    "reason",
+    "delay_minutes",
+    "trigger_event_id",
+    "outcome",
+}
 
 
 def validate_line(line: str) -> list[str]:
@@ -56,9 +73,11 @@ def validate_line(line: str) -> list[str]:
         errors.append(f"Missing top-level fields: {sorted(missing)}")
 
     # schema value
-    if record.get("schema") != EXPECTED_SCHEMA:
+    schema = record.get("schema")
+    if schema not in {EXPECTED_SCHEMA, EVENT_SCHEMA}:
         errors.append(
-            f"Unexpected schema value: {record.get('schema')!r} (expected {EXPECTED_SCHEMA!r})"
+            f"Unexpected schema value: {schema!r}"
+            f" (expected {EXPECTED_SCHEMA!r} or {EVENT_SCHEMA!r})"
         )
 
     # source value
@@ -77,6 +96,58 @@ def validate_line(line: str) -> list[str]:
     if not isinstance(data, dict):
         errors.append(f"Field 'data' must be an object, got: {type(data).__name__}")
         return errors  # can't validate data sub-fields
+
+    if schema == EVENT_SCHEMA:
+        event_type = data.get("event_type")
+        if event_type != MITIGATION_EVENT_TYPE:
+            errors.append(
+                f"Unexpected event type: {event_type!r} (expected {MITIGATION_EVENT_TYPE!r})"
+            )
+        event_data = data.get("event_data")
+        if not isinstance(event_data, dict):
+            errors.append(
+                f"Field 'data.event_data' must be an object, got: {type(event_data).__name__}"
+            )
+            return errors
+        missing_event_data = MITIGATION_DATA_FIELDS - event_data.keys()
+        if missing_event_data:
+            errors.append(f"Missing mitigation event fields: {sorted(missing_event_data)}")
+        if event_data.get("event_type") != MITIGATION_EVENT_TYPE:
+            errors.append("Field 'data.event_data.event_type' must match the observer event type")
+        if event_data.get("zone") not in MITIGATION_ZONES:
+            errors.append(
+                f"Mitigation zone {event_data.get('zone')!r} is not one of"
+                f" {sorted(MITIGATION_ZONES)}"
+            )
+        if (
+            not isinstance(event_data.get("reason"), str)
+            or not event_data.get("reason", "").strip()
+        ):
+            errors.append("Mitigation field 'reason' must be a non-empty string")
+        if (
+            not isinstance(event_data.get("trigger_event_id"), str)
+            or not event_data.get("trigger_event_id", "").strip()
+        ):
+            errors.append("Mitigation field 'trigger_event_id' must be a non-empty string")
+        delay_minutes = event_data.get("delay_minutes")
+        if isinstance(delay_minutes, bool) or delay_minutes is None:
+            errors.append("Mitigation field 'delay_minutes' must be numeric")
+        else:
+            try:
+                delay_value = float(delay_minutes)
+            except (TypeError, ValueError):
+                errors.append("Mitigation field 'delay_minutes' must be numeric")
+            else:
+                if not math.isfinite(delay_value):
+                    errors.append("Mitigation field 'delay_minutes' must be finite")
+                elif delay_value < 0:
+                    errors.append("Mitigation field 'delay_minutes' must be non-negative")
+        if event_data.get("outcome") not in MITIGATION_OUTCOMES:
+            errors.append(
+                f"Mitigation outcome {event_data.get('outcome')!r} is not one of"
+                f" {sorted(MITIGATION_OUTCOMES)}"
+            )
+        return errors
 
     # Required data fields
     missing_data = REQUIRED_DATA_FIELDS - data.keys()

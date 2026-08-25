@@ -1,6 +1,8 @@
 """Contract tests for the staged Home Assistant mitigation overlay.
 
 Revision history:
+  2026-08-25  Require applied and skipped mitigation events to carry the zone,
+              reason, delay, trigger reference, and outcome fields.
   2026-08-25  Added YAML and configuration-projection checks so the opt-in HA
               automation cannot lose its guard, timing source, or fail-closed
               resume conditions while the later mitigation slices are built.
@@ -88,11 +90,35 @@ def test_action_turns_off_waits_for_configured_delay_and_resumes_climate_only():
     assert off_action["data"] == {"hvac_mode": "off"}
     assert off_action["target"] == {"entity_id": "{{ target_climate }}"}
     assert (
-        "input_number.homeops_mitigation_zone_stagger_minutes" in delay_action["delay"]["minutes"]
+        "input_number.homeops_mitigation_zone_stagger_minutes"
+        in actions[0]["variables"]["stagger_minutes"]
     )
+    assert delay_action["delay"]["minutes"] == "{{ stagger_minutes }}"
     assert resume_action["action"] == "climate.set_hvac_mode"
     assert resume_action["data"] == {"hvac_mode": "heat"}
     assert resume_action["target"] == {"entity_id": "{{ target_climate }}"}
+    applied_event = next(
+        action
+        for action in choice["sequence"]
+        if action.get("event") == "homeops.mitigation.zone_stagger_applied.v1"
+    )
+    assert applied_event["event_data"] == {
+        "event_type": "homeops.mitigation.zone_stagger_applied.v1",
+        "zone": "{{ trigger.id }}",
+        "reason": "{{ mitigation_reason }}",
+        "delay_minutes": "{{ stagger_minutes }}",
+        "trigger_event_id": "{{ trigger_event_id }}",
+        "outcome": "applied",
+    }
+    assert actions[5]["default"][0]["event"] == "homeops.mitigation.zone_stagger_applied.v1"
+    assert actions[5]["default"][0]["event_data"] == {
+        "event_type": "homeops.mitigation.zone_stagger_applied.v1",
+        "zone": "{{ trigger.id }}",
+        "reason": "resume_gate_failed",
+        "delay_minutes": "{{ stagger_minutes }}",
+        "trigger_event_id": "{{ trigger_event_id }}",
+        "outcome": "skipped",
+    }
     assert {
         (condition["entity_id"], condition["state"])
         for condition in choice["conditions"]

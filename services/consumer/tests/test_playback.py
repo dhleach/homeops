@@ -8,6 +8,10 @@ Verifies:
 5. Alerts fire with correct event timestamps during playback
 6. Playback correctly seeks past events older than last_consumed_ts
 7. Cold-start (no last_consumed_ts) skips playback and continues normally
+
+Revision history:
+  2026-08-25  Verify staged mitigation event envelopes replay into the derived
+              log and advance the durable observer cursor.
 """
 
 from __future__ import annotations
@@ -61,6 +65,31 @@ def _obs_line(entity_id: str, old_state: str | None, new_state: str | None, ts: 
                 "old_state": old_state,
                 "new_state": new_state,
                 "attributes": {},
+            },
+        }
+    )
+
+
+def _mitigation_line(ts: datetime, outcome: str = "applied") -> str:
+    """Build a JSONL line for an observer-wrapped mitigation decision."""
+    event_type = "homeops.mitigation.zone_stagger_applied.v1"
+    return json.dumps(
+        {
+            "schema": "homeops.observer.event.v1",
+            "source": "ha.websocket",
+            "ts": ts.isoformat(),
+            "data": {
+                "event_type": event_type,
+                "event_data": {
+                    "event_type": event_type,
+                    "zone": "floor_2",
+                    "reason": "secondary_zone_call_during_furnace_warmup"
+                    if outcome == "applied"
+                    else "resume_gate_failed",
+                    "delay_minutes": 5 if outcome == "applied" else 0,
+                    "trigger_event_id": "0123456789abcdef",
+                    "outcome": outcome,
+                },
             },
         }
     )
@@ -215,6 +244,43 @@ class TestPlaybackPhaseEventReplay:
         events = _read_derived_events(derived_log)
         schemas = [e["schema"] for e in events]
         assert "homeops.consumer.floor_call_ended.v1" in schemas
+
+    def test_replays_mitigation_event_to_derived_log(self, tmp_path: Path) -> None:
+        mitigation_ts = _ts(6, 45)
+        obs_log = _write_observer_log(tmp_path, [_mitigation_line(mitigation_ts)])
+        derived_log = tmp_path / "derived.jsonl"
+
+        result = self._run_playback(obs_log, derived_log, mitigation_ts.isoformat())
+
+        events = _read_derived_events(derived_log)
+        mitigation_events = [
+            event
+            for event in events
+            if event.get("event_type") == "homeops.mitigation.zone_stagger_applied.v1"
+        ]
+        assert len(mitigation_events) == 1
+        assert mitigation_events[0]["data"]["zone"] == "floor_2"
+        assert mitigation_events[0]["data"]["outcome"] == "applied"
+        assert mitigation_events[0]["data"]["delay_minutes"] == 5
+        assert mitigation_events[0]["ts"] == mitigation_ts.isoformat()
+        assert result["last_consumed_observer_ts"] == mitigation_ts.isoformat()
+
+    def test_duplicate_mitigation_event_is_not_appended_twice(self, tmp_path: Path) -> None:
+        mitigation_ts = _ts(6, 45)
+        obs_log = _write_observer_log(
+            tmp_path,
+            [_mitigation_line(mitigation_ts), _mitigation_line(mitigation_ts)],
+        )
+        derived_log = tmp_path / "derived.jsonl"
+
+        self._run_playback(obs_log, derived_log, mitigation_ts.isoformat())
+
+        mitigation_events = [
+            event
+            for event in _read_derived_events(derived_log)
+            if event.get("event_type") == "homeops.mitigation.zone_stagger_applied.v1"
+        ]
+        assert len(mitigation_events) == 1
 
     def test_skips_events_before_last_consumed_ts(self, tmp_path: Path) -> None:
         """Events with ts < last_consumed_ts must NOT be replayed."""

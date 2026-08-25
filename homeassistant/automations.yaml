@@ -66,6 +66,11 @@
             'floor_3': 'climate.floor_3_thermostat'
           } %}
           {{ zone_climates.get(trigger.id, '') }}
+        stagger_minutes: >-
+          {{ states('input_number.homeops_mitigation_zone_stagger_minutes') | float(0) }}
+        trigger_event_id: >-
+          {{ trigger.to_state.context.id | default(trigger.id, true) }}
+        mitigation_reason: "secondary_zone_call_during_furnace_warmup"
     - variables:
         original_mode: "{{ states(target_climate) }}"
         original_setpoint: "{{ state_attr(target_climate, 'temperature') }}"
@@ -84,7 +89,7 @@
         hvac_mode: "off"
     - delay:
         minutes: >-
-          {{ states('input_number.homeops_mitigation_zone_stagger_minutes') | int(0) }}
+          {{ stagger_minutes }}
     - choose:
         - conditions:
             - condition: state
@@ -109,3 +114,20 @@
                 entity_id: "{{ target_climate }}"
               data:
                 hvac_mode: "heat"
+            - event: homeops.mitigation.zone_stagger_applied.v1
+              event_data:
+                event_type: homeops.mitigation.zone_stagger_applied.v1
+                zone: "{{ trigger.id }}"
+                reason: "{{ mitigation_reason }}"
+                delay_minutes: "{{ stagger_minutes }}"
+                trigger_event_id: "{{ trigger_event_id }}"
+                outcome: applied
+      default:
+        - event: homeops.mitigation.zone_stagger_applied.v1
+          event_data:
+            event_type: homeops.mitigation.zone_stagger_applied.v1
+            zone: "{{ trigger.id }}"
+            reason: resume_gate_failed
+            delay_minutes: "{{ stagger_minutes }}"
+            trigger_event_id: "{{ trigger_event_id }}"
+            outcome: skipped
