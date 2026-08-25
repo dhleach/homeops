@@ -886,6 +886,25 @@ settings, or modify consumer state. See
 [`docs/time-to-temp-2026-08.md`](../../docs/time-to-temp-2026-08.md) for the
 latest Pi-history validation and its telemetry limitations.
 
+## Staged mitigation replay
+
+[`scripts/mitigation_e2e.py`](../../scripts/mitigation_e2e.py) replays three
+fresh furnace sessions for one incident, verifies the staged zone-stagger
+decision events, injects the explicit short-cycle rollback trigger, and sends
+the resulting observer records through the real consumer persistence and
+Telegram-alert path. The alert sink is patched in memory, so the command makes
+no Home Assistant or Telegram network calls and writes no production state.
+
+```bash
+python3 scripts/mitigation_e2e.py
+```
+
+The replay is an offline HA-compatible contract test, not a substitute for an
+isolated Home Assistant instance. It does not render Jinja or invoke real
+`climate.set_hvac_mode` services. The checked-in mitigation overlay remains
+disabled by default until the isolated-HA test and human safety review pass;
+see [`docs/mitigation-test-results.md`](../../docs/mitigation-test-results.md).
+
 ---
 
 ## Configuration Reference

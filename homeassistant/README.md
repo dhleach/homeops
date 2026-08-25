@@ -51,3 +51,15 @@ Telegram alert using its existing Telegram configuration.
 The short-cycle event is an explicit test/adapter contract; the current
 consumer remains read-only with respect to Home Assistant. This overlay is
 still staged and is not deployed by the normal application release.
+
+Run the repository-level offline replay before arranging the isolated HA test:
+
+```bash
+python3 scripts/mitigation_e2e.py
+```
+
+The replay exercises the HA-compatible state/action boundary plus the real
+observer and consumer path without live writes. It cannot validate HA's Jinja
+renderer or a real climate service; those checks remain mandatory before
+enabling this overlay. Results and limitations are recorded in
+[`docs/mitigation-test-results.md`](../docs/mitigation-test-results.md).

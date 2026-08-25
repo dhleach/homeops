@@ -275,6 +275,14 @@ See [`deploy/logrotate/README.md`](../../deploy/logrotate/README.md) for install
 
 `validate_schema.py` is a standalone script that validates JSONL output from the observer against the state-change, mitigation-decision, and mitigation-rollback schemas.
 
+The repository-level
+[`scripts/mitigation_e2e.py`](../../scripts/mitigation_e2e.py) feeds simulated
+Home Assistant mitigation events through the observer's real event wrapper and
+validator before handing them to the consumer. It is the no-network replay
+for the staged mitigation gate; it does not open a WebSocket or connect to a
+live Home Assistant instance. See
+[`docs/mitigation-test-results.md`](../../docs/mitigation-test-results.md).
+
 ### Usage
 
 ```bash
