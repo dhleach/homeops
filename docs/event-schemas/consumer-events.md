@@ -7,6 +7,9 @@ consumer event schemas and three planned events (not yet implemented). Most even
 Home Assistant event records. Together they represent higher-level state transitions
 (floor calls, furnace sessions, thermostat changes, outdoor temperature readings, daily
 summaries, per-zone heating-cycle outcomes, and explicit mitigation decisions).
+Automatic mitigation rollback decisions are also preserved as explicit
+Home Assistant events before the consumer appends them and sends an operator
+alert.
 
 ---
 
@@ -924,6 +927,8 @@ validates and appends this derived record to the durable consumer log.
 | `data.reason` | string | HA automation decision branch | Explains the applied or skipped result. |
 | `data.delay_minutes` | number | Captured HA helper value | Delay used by the stagger, captured before the pause. |
 | `data.trigger_event_id` | string | HA state-trigger context ID | Correlates the decision to the source zone-call transition. |
+| `data.incident_id` | string (optional) | Durable HA incident helper | Groups attempts within one mitigation storm window. |
+| `data.attempt_number` | int (optional) | HA attempt helper | 1-based stagger attempt number, capped at 3. |
 | `data.outcome` | string | HA automation decision branch | `applied` after resume, or `skipped` when the resume gate fails. |
 
 Invalid records are rejected by the consumer and are not appended to the
@@ -945,6 +950,68 @@ cannot block later state or mitigation events during playback.
     "delay_minutes": 5,
     "trigger_event_id": "0123456789abcdef",
     "outcome": "applied"
+  }
+}
+```
+
+---
+
+## Event: `homeops.mitigation.rollback.v1`
+
+Records the fail-safe shutdown of the staged mitigation overlay. The HA
+rollback automation accepts a qualifying
+`homeops.mitigation.short_cycle_detected.v1` event after three recorded
+zone-stagger attempts in the same 60-minute incident window. It turns the
+mitigation guard off and emits this event; the observer preserves it and the
+consumer validates, deduplicates, appends, and alerts through its configured
+Telegram channel.
+
+### Field Table
+
+| Field | Type | Source | Rationale |
+|---|---|---|---|
+| `schema` | string | hardcoded | Stable event identifier; equal to `event_type`. |
+| `event_type` | string | HA event type | Explicit routing key: `homeops.mitigation.rollback.v1`. |
+| `source` | string | hardcoded `"consumer.v1"` | Emitting service in the derived log. |
+| `ts` | ISO 8601 string | observer event timestamp | Preserves event ordering during live processing and replay. |
+| `data.event_type` | string | HA event payload | Retained for payload-based routing. |
+| `data.incident_id` | string | HA incident helper | Correlates the rollback to the three attempts that preceded it. |
+| `data.failed_attempts` | int | HA attempt helper | Count at rollback; must be at least `3`. |
+| `data.reason` | string | Short-cycle trigger data | Explains why the guard was disabled. |
+| `data.trigger_event_id` | string | Short-cycle trigger data | Unique source reference used for idempotent replay handling. |
+| `data.storm_window_started_at` | ISO 8601 string | HA incident datetime helper | Shows the active incident window used by the rollback gate. |
+| `data.mitigation_enabled` | boolean | HA rollback action | Always `false`; proves the guard was disabled. |
+| `data.rollback_state` | string | HA rollback action | Always `rolled_back`. |
+| `data.source_event_type` | string | HA rollback contract | Always `homeops.mitigation.short_cycle_detected.v1`. |
+| `data.short_cycle_duration_s` | number (optional) | Triggering short-cycle event | Evidence for the operator alert. |
+| `data.short_cycle_threshold_s` | number (optional) | Triggering short-cycle event | Threshold used to classify the evidence. |
+
+The rollback event is invalid unless the guard is false, the rollback state is
+`rolled_back`, the source event type is the namespaced short-cycle contract,
+and the failed-attempt count is at least three. The consumer rejects malformed
+records and suppresses duplicate records with the same `trigger_event_id`, so
+replayed events do not produce duplicate Telegram alerts.
+
+### JSON Example
+
+```json
+{
+  "schema": "homeops.mitigation.rollback.v1",
+  "event_type": "homeops.mitigation.rollback.v1",
+  "source": "consumer.v1",
+  "ts": "2026-08-25T13:00:00.000000+00:00",
+  "data": {
+    "event_type": "homeops.mitigation.rollback.v1",
+    "incident_id": "0123456789abcdef",
+    "failed_attempts": 3,
+    "reason": "short_cycle_after_three_mitigation_attempts",
+    "trigger_event_id": "fedcba9876543210",
+    "storm_window_started_at": "2026-08-25T12:00:00+00:00",
+    "mitigation_enabled": false,
+    "rollback_state": "rolled_back",
+    "source_event_type": "homeops.mitigation.short_cycle_detected.v1",
+    "short_cycle_duration_s": 45,
+    "short_cycle_threshold_s": 120
   }
 }
 ```

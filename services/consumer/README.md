@@ -4,7 +4,7 @@ The design policy for future short-cycle mitigation is documented in
 [docs/mitigation-policy.md](../../docs/mitigation-policy.md); it is not an
 active Home Assistant control path.
 
-The consumer is a Python daemon that tails the observer's JSONL event stream in real time and emits higher-level **derived events** — floor heating-call sessions, whole-home heating sessions, thermostat/climate state changes, per-zone heating performance metrics, mitigation decisions, and in-flight overheating warnings. It is the second stage in the homeops data pipeline.
+The consumer is a Python daemon that tails the observer's JSONL event stream in real time and emits higher-level **derived events** — floor heating-call sessions, whole-home heating sessions, thermostat/climate state changes, per-zone heating performance metrics, mitigation decisions, automatic mitigation rollbacks, and in-flight overheating warnings. It is the second stage in the homeops data pipeline.
 
 For the host/network boundary around this service, see the repository-level
 [`docs/architecture.md`](../../docs/architecture.md) and
@@ -34,10 +34,10 @@ observer
        ▼
   consumer.py  ──►  stdout (derived JSONL)
                ──►  DERIVED_EVENT_LOG (append-only JSONL file)
-               ──►  Telegram alert  (floor-2 long-call only)
+               ──►  Telegram alerts  (floor-2 warnings and mitigation rollback)
 ```
 
-The consumer reads the observer's raw `state_changed` events and explicit Home Assistant event records. It produces semantically richer records: when a floor starts or ends a heating call, when the furnace starts or ends a heating session, when a thermostat's setpoint, current temperature, or HVAC mode changes, when a zone reaches its setpoint (along with how long it took), when a zone overshoots or undershoots its setpoint after heating ends, when floor 2 has been calling for longer than the configured threshold (a sign that the furnace may overheat), when a staged mitigation decision was applied or skipped, and a daily summary of furnace runtime and outdoor temperatures.
+The consumer reads the observer's raw `state_changed` events and explicit Home Assistant event records. It produces semantically richer records: when a floor starts or ends a heating call, when the furnace starts or ends a heating session, when a thermostat's setpoint, current temperature, or HVAC mode changes, when a zone reaches its setpoint (along with how long it took), when a zone overshoots or undershoots its setpoint after heating ends, when floor 2 has been calling for longer than the configured threshold (a sign that the furnace may overheat), when a staged mitigation decision was applied or skipped, when repeated short cycling causes the mitigation guard to roll back, and a daily summary of furnace runtime and outdoor temperatures.
 
 ---
 
@@ -54,7 +54,7 @@ The consumer is split across nine focused modules:
 | `constants.py` | Entity ID maps, env-var defaults, shared configuration constants |
 | `utils.py` | `utc_ts`, `follow` (select-based tail generator), `append_jsonl`, `_parse_dt`, `_get_version` |
 | `state.py` | `last_furnace_on_since` bootstrap scan, `_load_state` / `_save_state` persistence, `_empty_daily_state` initialiser |
-| `processors.py` | `process_floor_event`, `process_furnace_event`, `process_climate_event`, `process_outdoor_temp_event`, `process_mitigation_event` — pure event-to-derived-event transforms |
+| `processors.py` | `process_floor_event`, `process_furnace_event`, `process_climate_event`, `process_outdoor_temp_event`, `process_mitigation_event`, `process_mitigation_rollback_event` — pure event-to-derived-event transforms |
 | `alerts.py` | `check_floor_2_warning`, `check_floor_2_escalation`, `check_observer_silence`, `write_zone_temp_snapshot` — in-flight periodic checks |
 | `reporting.py` | `emit_daily_summary`, `format_daily_summary_message` — end-of-day summary generation and Telegram formatting |
 | `metrics.py` | `HvacMetrics` — Prometheus gauge definitions, update helpers, and HTTP server (port 8001); foundation for the homeops.now public dashboard data pipeline |
@@ -88,6 +88,7 @@ and translates `homeops.observer.event.v1` mitigation records by their
 | `climate.floor_2_thermostat` | `thermostat_setpoint_changed.v1`, `thermostat_current_temp_updated.v1`, `thermostat_mode_changed.v1`, `thermostat_setpoint_reached.v1`, `zone_time_to_temp.v1`, `zone_overshoot.v1`, `zone_setpoint_miss.v1`, `zone_slow_to_heat_warning.v1` |
 | `climate.floor_3_thermostat` | `thermostat_setpoint_changed.v1`, `thermostat_current_temp_updated.v1`, `thermostat_mode_changed.v1`, `thermostat_setpoint_reached.v1`, `zone_time_to_temp.v1`, `zone_overshoot.v1`, `zone_setpoint_miss.v1`, `zone_slow_to_heat_warning.v1` |
 | `homeops.observer.event.v1` (`event_type=homeops.mitigation.zone_stagger_applied.v1`) | `homeops.mitigation.zone_stagger_applied.v1` |
+| `homeops.observer.event.v1` (`event_type=homeops.mitigation.rollback.v1`) | `homeops.mitigation.rollback.v1` plus an urgent Telegram alert when configured |
 
 Additionally, `furnace_daily_summary.v1` is emitted once per UTC calendar day at the first event after midnight, followed immediately by three `floor_daily_summary.v1` events (one per floor).
 
@@ -106,7 +107,7 @@ Every derived event is:
 >
 > That document contains complete field tables with source/rationale columns, design notes, and planned (not-yet-implemented) events. The sections below are the working reference for the currently implemented event types.
 
-The consumer emits 26 derived event types. All share a common envelope. The
+The consumer emits 27 derived event types. All share a common envelope. The
 authoritative list is maintained in `docs/event-schemas/consumer-events.md`; the
 working sections below cover the most frequently inspected event payloads.
 
@@ -134,6 +135,8 @@ the record directly.
 | `data.reason` | string | Decision reason, such as `secondary_zone_call_during_furnace_warmup` or `resume_gate_failed` |
 | `data.delay_minutes` | number | Configured stagger delay captured before the pause |
 | `data.trigger_event_id` | string | Home Assistant state-trigger context ID, or the trigger ID fallback |
+| `data.incident_id` | string (optional) | Durable HA incident identifier for the active storm window |
+| `data.attempt_number` | int (optional) | 1-based zone-stagger attempt number, capped at 3 |
 | `data.outcome` | string | `applied` or `skipped` |
 
 Invalid mitigation payloads are logged and skipped; they never enter the
@@ -155,6 +158,55 @@ consumer restart can recover a decision from `state/observer/events.jsonl`.
     "delay_minutes": 5,
     "trigger_event_id": "0123456789abcdef",
     "outcome": "applied"
+  }
+}
+```
+
+### `homeops.mitigation.rollback.v1`
+
+Emitted when the staged Home Assistant overlay disables its mitigation guard
+after a continued short-cycle event follows three zone-stagger attempts in
+one incident window. The observer preserves the HA event, and the consumer
+validates/appends it before sending an urgent Telegram alert through the
+configured `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID`. The durable event is
+written even when Telegram is unavailable or not configured.
+
+| Field | Type | Description |
+|---|---|---|
+| `event_type` | string | Always `homeops.mitigation.rollback.v1` |
+| `data.event_type` | string | Same stable rollback event name |
+| `data.incident_id` | string | Durable incident identifier captured by the HA overlay |
+| `data.failed_attempts` | int | Number of recorded attempts at rollback; must be at least `3` |
+| `data.reason` | string | Why the continued short cycle caused rollback |
+| `data.trigger_event_id` | string | Unique short-cycle event reference used for deduplication |
+| `data.storm_window_started_at` | ISO 8601 string | Start of the active mitigation incident window |
+| `data.mitigation_enabled` | boolean | Always `false` after rollback |
+| `data.rollback_state` | string | Always `rolled_back` |
+| `data.source_event_type` | string | Always `homeops.mitigation.short_cycle_detected.v1` |
+| `data.short_cycle_duration_s` | number (optional) | Duration from the triggering short-cycle event |
+| `data.short_cycle_threshold_s` | number (optional) | Threshold used by the triggering detector |
+
+Invalid rollback records are rejected. Duplicate rollback events with the
+same `trigger_event_id` are not appended or alerted twice during playback.
+
+**Example:**
+
+```json
+{
+  "schema": "homeops.mitigation.rollback.v1",
+  "event_type": "homeops.mitigation.rollback.v1",
+  "source": "consumer.v1",
+  "ts": "2026-08-25T13:00:00.000000+00:00",
+  "data": {
+    "event_type": "homeops.mitigation.rollback.v1",
+    "incident_id": "0123456789abcdef",
+    "failed_attempts": 3,
+    "reason": "short_cycle_after_three_mitigation_attempts",
+    "trigger_event_id": "fedcba9876543210",
+    "storm_window_started_at": "2026-08-25T12:00:00+00:00",
+    "mitigation_enabled": false,
+    "rollback_state": "rolled_back",
+    "source_event_type": "homeops.mitigation.short_cycle_detected.v1"
   }
 }
 ```
@@ -862,8 +914,8 @@ Non-rule service configuration remains environment-based:
 | `HOMEOPS_RULES_CONFIG` | `services/insights/rules.yaml` | Rules YAML path; loaded and validated once at startup |
 | `METRICS_PORT` | `8001` | Prometheus metrics HTTP port |
 | `TELEGRAM_COMMAND_CHECK_INTERVAL_S` | `30` | Polling interval for Telegram commands |
-| `TELEGRAM_BOT_TOKEN` | _(unset)_ | Telegram Bot API token for overheating alerts |
-| `TELEGRAM_CHAT_ID` | _(unset)_ | Telegram chat ID to receive overheating alerts |
+| `TELEGRAM_BOT_TOKEN` | _(unset)_ | Telegram Bot API token for overheating and rollback alerts |
+| `TELEGRAM_CHAT_ID` | _(unset)_ | Telegram chat ID to receive overheating and rollback alerts |
 
 ---
 

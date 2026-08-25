@@ -31,7 +31,12 @@ Home Assistant
                 ──►  OBSERVER_EVENT_LOG (append-only JSONL file)
 ```
 
-The observer subscribes to `state_changed` events and the staged mitigation decision event on the Home Assistant WebSocket bus, applies an optional entity allowlist (`WATCH_ENTITIES`) to state changes, and emits one JSON line per matching record. If the connection drops for any reason the service reconnects automatically with exponential backoff (1 s → 2 s → … → 30 s cap).
+The observer subscribes to `state_changed`, staged mitigation decision, and
+automatic mitigation rollback events on the Home Assistant WebSocket bus,
+applies an optional entity allowlist (`WATCH_ENTITIES`) to state changes, and
+emits one JSON line per matching record. If the connection drops for any
+reason the service reconnects automatically with exponential backoff (1 s → 2
+s → … → 30 s cap).
 
 Diagnostic messages (connection status, auth results, warnings) go to **stderr** so that stdout remains a clean, parseable event stream.
 
@@ -48,6 +53,7 @@ On each connection attempt the observer performs the standard Home Assistant Web
 3. Confirm `{"type": "auth_ok"}` before subscribing.
 4. Subscribe to `event_type: state_changed` with subscription message (`id: 1`).
 5. Subscribe to `event_type: homeops.mitigation.zone_stagger_applied.v1` with subscription message (`id: 2`).
+6. Subscribe to `event_type: homeops.mitigation.rollback.v1` with subscription message (`id: 3`).
 
 WebSocket keepalives are sent every 20 seconds (`ping_interval=20`, `ping_timeout=20`) to detect silent TCP drops early.
 
@@ -57,7 +63,12 @@ If `WATCH_ENTITIES` is set, the observer maintains an in-memory allowlist (a Pyt
 
 ### Event emission
 
-Each qualifying state change or mitigation decision produces one JSON object written to stdout with `flush=True` so that downstream pipe consumers (including the consumer service) receive events without buffering delay. If `OBSERVER_EVENT_LOG` is configured, the same line is also appended to that file. File write failures are logged to stderr and do not interrupt the stdout stream.
+Each qualifying state change, mitigation decision, or rollback event produces
+one JSON object written to stdout with `flush=True` so that downstream pipe
+consumers (including the consumer service) receive events without buffering
+delay. If `OBSERVER_EVENT_LOG` is configured, the same line is also appended to
+that file. File write failures are logged to stderr and do not interrupt the
+stdout stream.
 
 ### Reconnect logic
 
@@ -101,17 +112,17 @@ Emitted whenever a watched entity transitions between states.
 
 ### `homeops.observer.event.v1`
 
-Emitted for the staged Home Assistant mitigation decision event. The observer
-does not infer a decision from thermostat state; it preserves the explicit HA
-event data for the consumer to validate and translate.
+Emitted for staged Home Assistant mitigation decision and rollback events. The
+observer does not infer a decision from thermostat state; it preserves the
+explicit HA event data for the consumer to validate and translate.
 
 | Field | Type | Description |
 |---|---|---|
 | `schema` | string | Always `"homeops.observer.event.v1"` |
 | `source` | string | Always `"ha.websocket"` |
 | `ts` | string (ISO 8601 UTC) | Timestamp when the observer received the event |
-| `data.event_type` | string | Always `"homeops.mitigation.zone_stagger_applied.v1"` |
-| `data.event_data` | object | HA event payload: `event_type`, `zone`, `reason`, `delay_minutes`, `trigger_event_id`, and `outcome` |
+| `data.event_type` | string | `homeops.mitigation.zone_stagger_applied.v1` or `homeops.mitigation.rollback.v1` |
+| `data.event_data` | object | HA event payload for the selected mitigation event |
 | `data.context_id` | string (optional) | Home Assistant context ID for the emitted event |
 
 **Example:**
@@ -137,9 +148,11 @@ event data for the consumer to validate and translate.
 ```
 
 > **Note:** The consumer service reads both observer shapes and derives
-> higher-level events. Mitigation decisions are written as
-> `homeops.mitigation.zone_stagger_applied.v1` records in the derived log.
-> See `services/consumer/` for details.
+> higher-level events. Mitigation decisions and automatic rollbacks are written
+> as `homeops.mitigation.zone_stagger_applied.v1` and
+> `homeops.mitigation.rollback.v1` records in the derived log. Rollback records
+> also drive the urgent Telegram alert when the consumer has Telegram
+> credentials configured. See `services/consumer/` for details.
 
 ---
 
@@ -260,7 +273,7 @@ See [`deploy/logrotate/README.md`](../../deploy/logrotate/README.md) for install
 
 ## Schema Validation
 
-`validate_schema.py` is a standalone script that validates JSONL output from the observer against the state-change and mitigation-event schemas.
+`validate_schema.py` is a standalone script that validates JSONL output from the observer against the state-change, mitigation-decision, and mitigation-rollback schemas.
 
 ### Usage
 
@@ -284,6 +297,7 @@ HA_ENV_FILE=secrets/observer.env python observer.py | python3 validate_schema.py
 | `data` contains `entity_id`, `old_state`, `new_state` | Error |
 | `data.new_state` is non-null and non-empty | Error |
 | Mitigation records contain the event type, zone, reason, delay, trigger reference, and outcome | Error |
+| Rollback records contain the incident, failed-attempt, trigger, guard, state, and source-event fields | Error |
 | `entity_id` is one of the 8 known entities | Warning only (printed to stderr) |
 | Binary sensor `new_state` is `"on"`, `"off"`, or `"unavailable"` | Error |
 | `sensor.outdoor_temperature` state is a float or `"unavailable"`/`"unknown"` | Error |

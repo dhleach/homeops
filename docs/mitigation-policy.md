@@ -144,6 +144,28 @@ contradictory state, loss of Home Assistant connectivity, an invalid policy
 configuration, or any indication that the automation would affect the
 primary call.
 
+### Staged automatic rollback contract
+
+The staged overlay records each eligible zone stagger in persistent Home
+Assistant helpers: an attempt count capped at three, an incident identifier,
+and the incident start time. The helpers intentionally omit `initial` so Home
+Assistant restores them after a restart. The count is the number of recorded
+stagger attempts; the continued short-cycle event is the explicit evidence
+that mitigation remains ineffective. A new
+`homeops.mitigation.short_cycle_detected.v1` event is accepted only when it
+matches the active incident, has a unique `trigger_event_id`, and arrives
+within the 60-minute storm window after attempt three. The rollback automation
+then turns `input_boolean.mitigation_enabled` off and emits
+`homeops.mitigation.rollback.v1` with the incident, attempt count, reason,
+trigger reference, and resulting disabled state.
+
+The short-cycle event is an explicit test/adapter contract for this staged
+slice. The current consumer remains read-only with respect to Home Assistant;
+it preserves the rollback event, deduplicates it on replay, and sends the
+urgent Telegram alert using `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID`. A
+missing or failed notification does not undo the durable fail-safe event or
+re-enable mitigation.
+
 ## Human override
 
 Human control has priority over every automatic decision. The implementation
@@ -181,6 +203,8 @@ its applied/skipped decision to the versioned
 observer and consumer JSONL streams. That first mapping covers the zone,
 reason, delay, trigger reference, and outcome fields; later mitigation slices
 must extend it to the full audit record above and preserve idempotence on retry.
+The staged rollback slice adds `homeops.mitigation.rollback.v1` with the
+incident, failed-attempt count, short-cycle trigger, and disabled guard state.
 
 ## Fail-safe and recovery rules
 

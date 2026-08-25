@@ -1,6 +1,8 @@
 """Event processors for floor, furnace, climate, and outdoor temperature events.
 
 Revision history:
+  2026-08-25  Validate and translate automatic mitigation rollback events so
+              fail-safe shutdowns are durable, replayable, and alertable.
   2026-08-25  Validate and translate the staged Home Assistant mitigation event
               into a durable consumer event so applied/skipped decisions survive
               the observer-to-consumer boundary.
@@ -25,6 +27,8 @@ from constants import (
 from utils import utc_ts
 
 MITIGATION_EVENT_TYPE = "homeops.mitigation.zone_stagger_applied.v1"
+MITIGATION_ROLLBACK_EVENT_TYPE = "homeops.mitigation.rollback.v1"
+MITIGATION_SHORT_CYCLE_EVENT_TYPE = "homeops.mitigation.short_cycle_detected.v1"
 _MITIGATION_ZONES = frozenset({"floor_1", "floor_2", "floor_3"})
 _MITIGATION_OUTCOMES = frozenset({"applied", "skipped"})
 
@@ -73,7 +77,7 @@ def process_mitigation_event(
     else:
         normalized_delay = delay_minutes
 
-    return {
+    result = {
         "schema": MITIGATION_EVENT_TYPE,
         "event_type": MITIGATION_EVENT_TYPE,
         "source": "consumer.v1",
@@ -86,6 +90,109 @@ def process_mitigation_event(
             "trigger_event_id": trigger_event_id.strip(),
             "outcome": outcome,
         },
+    }
+    incident_id = event_data.get("incident_id")
+    if incident_id is not None:
+        if not isinstance(incident_id, str) or not incident_id.strip():
+            return None
+        result["data"]["incident_id"] = incident_id.strip()
+    attempt_number = event_data.get("attempt_number")
+    if attempt_number is not None:
+        if isinstance(attempt_number, bool):
+            return None
+        try:
+            normalized_attempt = float(attempt_number)
+        except (TypeError, ValueError):
+            return None
+        if not math.isfinite(normalized_attempt) or not normalized_attempt.is_integer():
+            return None
+        normalized_attempt_int = int(normalized_attempt)
+        if not 1 <= normalized_attempt_int <= 3:
+            return None
+        result["data"]["attempt_number"] = normalized_attempt_int
+    return result
+
+
+def process_mitigation_rollback_event(
+    event_type: str | None,
+    event_data: dict[str, Any] | None,
+    processing_ts: str | None = None,
+) -> dict[str, Any] | None:
+    """Validate and translate an automatic mitigation rollback event."""
+    if event_type != MITIGATION_ROLLBACK_EVENT_TYPE or not isinstance(event_data, dict):
+        return None
+    if event_data.get("event_type") != event_type:
+        return None
+
+    incident_id = event_data.get("incident_id")
+    reason = event_data.get("reason")
+    trigger_event_id = event_data.get("trigger_event_id")
+    storm_started = event_data.get("storm_window_started_at")
+    if not isinstance(incident_id, str) or not incident_id.strip():
+        return None
+    if not isinstance(reason, str) or not reason.strip():
+        return None
+    if not isinstance(trigger_event_id, str) or not trigger_event_id.strip():
+        return None
+    if not isinstance(storm_started, str) or not storm_started.strip():
+        return None
+    try:
+        isoparse(storm_started)
+    except (TypeError, ValueError):
+        return None
+
+    failed_attempts = event_data.get("failed_attempts")
+    if isinstance(failed_attempts, bool) or failed_attempts is None:
+        return None
+    try:
+        normalized_attempts = float(failed_attempts)
+    except (TypeError, ValueError):
+        return None
+    if (
+        not math.isfinite(normalized_attempts)
+        or not normalized_attempts.is_integer()
+        or normalized_attempts < 3
+    ):
+        return None
+    if event_data.get("mitigation_enabled") is not False:
+        return None
+    if event_data.get("rollback_state") != "rolled_back":
+        return None
+
+    source_event_type = event_data.get("source_event_type")
+    if source_event_type != MITIGATION_SHORT_CYCLE_EVENT_TYPE:
+        return None
+
+    result_data: dict[str, Any] = {
+        "event_type": MITIGATION_ROLLBACK_EVENT_TYPE,
+        "incident_id": incident_id.strip(),
+        "failed_attempts": int(normalized_attempts),
+        "reason": reason.strip(),
+        "trigger_event_id": trigger_event_id.strip(),
+        "storm_window_started_at": storm_started.strip(),
+        "mitigation_enabled": False,
+        "rollback_state": "rolled_back",
+        "source_event_type": source_event_type,
+    }
+    for field in ("short_cycle_duration_s", "short_cycle_threshold_s"):
+        value = event_data.get(field)
+        if value not in (None, ""):
+            if isinstance(value, bool):
+                return None
+            try:
+                numeric_value = float(value)
+            except (TypeError, ValueError):
+                return None
+            if not math.isfinite(numeric_value) or numeric_value < 0:
+                return None
+            result_data[field] = int(numeric_value) if numeric_value.is_integer() else numeric_value
+
+    return {
+        "schema": MITIGATION_ROLLBACK_EVENT_TYPE,
+        "event_type": MITIGATION_ROLLBACK_EVENT_TYPE,
+        "source": "consumer.v1",
+        "ts": processing_ts or utc_ts(),
+        "data": result_data,
     }
 
 
