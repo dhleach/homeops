@@ -67,6 +67,8 @@ For the verified address/port map, active-versus-migration boundaries, and
 deployment ownership model, see [`docs/architecture.md`](docs/architecture.md).
 For the release sequence, Pi permission model, rollback guidance, and smoke
 checks, see [`docs/deployment.md`](docs/deployment.md).
+For the proposed HVAC mitigation guardrails and fail-safe policy, see
+[`docs/mitigation-policy.md`](docs/mitigation-policy.md).
 
 
 **Observer** connects to the Home Assistant WebSocket API, subscribes to `state_changed` events for configured entities, and writes one JSON line per event to a JSONL log. It reconnects automatically with exponential backoff.

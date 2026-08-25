@@ -1,5 +1,9 @@
 # Consumer Service
 
+The design policy for future short-cycle mitigation is documented in
+[docs/mitigation-policy.md](../../docs/mitigation-policy.md); it is not an
+active Home Assistant control path.
+
 The consumer is a Python daemon that tails the observer's JSONL event stream in real time and emits higher-level **derived events** — floor heating-call sessions, whole-home heating sessions, thermostat/climate state changes, per-zone heating performance metrics, and in-flight overheating warnings. It is the second stage in the homeops data pipeline.
 
 For the host/network boundary around this service, see the repository-level
