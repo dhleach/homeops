@@ -36,7 +36,7 @@ jobs:
             scripts/analyze_multi_zone_impact.py scripts/floor_hourly_heatmap.py scripts/floor_runtime_trend.py \
             scripts/furnace_temp_scatter.py scripts/generate_report.py scripts/runtime_temp_anomalies.py \
             scripts/zone_heat_loss.py scripts/runtime_per_degree.py scripts/time_to_temp.py \
-            scripts/thermal_query.py \
+            scripts/thermal_query.py scripts/scheduling_query.py \
             scripts/mitigation_e2e.py \
             scripts/tests/test_deploy_smoke_check.py scripts/tests/test_test_counts.py \
             scripts/tests/test_validate_anomalies.py scripts/tests/test_analyze_multi_zone_impact.py \
@@ -45,7 +45,8 @@ jobs:
             scripts/tests/test_furnace_temp_scatter.py scripts/tests/test_generate_report.py \
             scripts/tests/test_runtime_temp_anomalies.py scripts/tests/test_zone_heat_loss.py \
             scripts/tests/test_runtime_per_degree.py scripts/tests/test_time_to_temp.py \
-            scripts/tests/test_mitigation_e2e.py scripts/tests/test_thermal_query.py
+            scripts/tests/test_mitigation_e2e.py scripts/tests/test_thermal_query.py \
+            scripts/tests/test_scheduling_query.py
       - name: Run ruff checks
         run: |
           ruff check \
@@ -64,7 +65,7 @@ jobs:
             scripts/analyze_multi_zone_impact.py scripts/floor_hourly_heatmap.py scripts/floor_runtime_trend.py \
             scripts/furnace_temp_scatter.py scripts/generate_report.py scripts/runtime_temp_anomalies.py \
             scripts/zone_heat_loss.py scripts/runtime_per_degree.py scripts/time_to_temp.py \
-            scripts/thermal_query.py \
+            scripts/thermal_query.py scripts/scheduling_query.py \
             scripts/mitigation_e2e.py \
             scripts/tests/test_deploy_smoke_check.py scripts/tests/test_test_counts.py \
             scripts/tests/test_validate_anomalies.py scripts/tests/test_analyze_multi_zone_impact.py \
@@ -73,7 +74,8 @@ jobs:
             scripts/tests/test_furnace_temp_scatter.py scripts/tests/test_generate_report.py \
             scripts/tests/test_runtime_temp_anomalies.py scripts/tests/test_zone_heat_loss.py \
             scripts/tests/test_runtime_per_degree.py scripts/tests/test_time_to_temp.py \
-            scripts/tests/test_mitigation_e2e.py scripts/tests/test_thermal_query.py
+            scripts/tests/test_mitigation_e2e.py scripts/tests/test_thermal_query.py \
+            scripts/tests/test_scheduling_query.py
 
   pytest:
     runs-on: ubuntu-latest
