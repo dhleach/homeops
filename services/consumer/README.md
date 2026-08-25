@@ -803,7 +803,11 @@ findings/alerts while leaving event collection and state tracking intact. Use
 
 The YAML file is the source of truth for `overrun_ratio`,
 `no_response_minutes`, `storm_count`, `storm_window_hours`, and the other
-existing warning/insight thresholds. Missing, unknown, non-finite, or
+existing warning/insight thresholds. The `mitigation` section is also the
+validated source for the timing values projected into the staged Home
+Assistant overlay under [`homeassistant/`](../../homeassistant/); the
+`input_boolean.mitigation_enabled` guard remains off until isolated
+end-to-end testing is complete. Missing, unknown, non-finite, or
 out-of-range values fail startup rather than silently changing safety behavior.
 
 Non-rule service configuration remains environment-based:
