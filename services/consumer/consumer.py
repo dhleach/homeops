@@ -14,6 +14,9 @@ Business logic lives in focused modules:
   - rules/config.py  validated rules.yaml loading and enabled/threshold settings
 
 Revision history:
+  2026-08-25  Consume automatic mitigation rollback events, persist them with
+              replay deduplication, and send an urgent Telegram alert after
+              the durable event is appended.
   2026-08-25  Consume the observer's staged mitigation-event envelope in both
               live and playback paths and append validated decisions to the
               derived event log.
@@ -57,10 +60,12 @@ from constants import (
 )
 from processors import (
     MITIGATION_EVENT_TYPE,
+    MITIGATION_ROLLBACK_EVENT_TYPE,
     process_climate_event,
     process_floor_event,
     process_furnace_event,
     process_mitigation_event,
+    process_mitigation_rollback_event,
     process_outdoor_temp_event,
 )
 from reporting import emit_daily_summary, emit_floor_daily_summaries, format_daily_summary_message
@@ -163,6 +168,9 @@ def _process_mitigation_observer_event(
     evt: dict[str, Any],
     derived_log: str,
     fresh_restart: bool,
+    *,
+    telegram_bot_token: str = "",
+    telegram_chat_id: str = "",
 ) -> tuple[bool, bool]:
     """Process one observer custom-event envelope.
 
@@ -177,11 +185,15 @@ def _process_mitigation_observer_event(
 
     event_type = observer_data.get("event_type")
     event_data = observer_data.get("event_data")
-    derived = process_mitigation_event(
-        event_type,
-        event_data if isinstance(event_data, dict) else None,
-        processing_ts=evt.get("ts"),
-    )
+    payload = event_data if isinstance(event_data, dict) else None
+    if event_type == MITIGATION_EVENT_TYPE:
+        derived = process_mitigation_event(event_type, payload, processing_ts=evt.get("ts"))
+    elif event_type == MITIGATION_ROLLBACK_EVENT_TYPE:
+        derived = process_mitigation_rollback_event(
+            event_type, payload, processing_ts=evt.get("ts")
+        )
+    else:
+        derived = None
     if derived is None:
         logger.warning(
             "Ignoring invalid mitigation event type=%r data=%r",
@@ -190,6 +202,7 @@ def _process_mitigation_observer_event(
         )
         return fresh_restart, False
 
+    derived_schema = derived["schema"]
     trigger_event_id = derived["data"]["trigger_event_id"]
     try:
         with open(derived_log, encoding="utf-8") as _dlog:
@@ -202,7 +215,7 @@ def _process_mitigation_observer_event(
                     continue
                 _existing_data = _existing.get("data")
                 if (
-                    _existing.get("schema") == MITIGATION_EVENT_TYPE
+                    _existing.get("schema") == derived_schema
                     and isinstance(_existing_data, dict)
                     and _existing_data.get("trigger_event_id") == trigger_event_id
                 ):
@@ -216,7 +229,19 @@ def _process_mitigation_observer_event(
     except OSError as exc:
         logger.warning("Could not inspect derived log for mitigation deduplication: %s", exc)
 
-    return _emit_derived(derived, derived_log, fresh_restart), True
+    fresh_restart = _emit_derived(derived, derived_log, fresh_restart)
+    if derived_schema == MITIGATION_ROLLBACK_EVENT_TYPE:
+        if telegram_bot_token and telegram_chat_id:
+            _send_telegram(
+                telegram_bot_token,
+                telegram_chat_id,
+                _format_mitigation_rollback_message(derived["data"]),
+            )
+        else:
+            logger.warning(
+                "TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID not set, skipping mitigation rollback alert"
+            )
+    return fresh_restart, True
 
 
 def _send_telegram(bot_token: str, chat_id: str, msg: str) -> None:
@@ -262,6 +287,20 @@ def _format_furnace_short_call_message(data: dict) -> str:
         f"Session ended in {duration_s}s (threshold: {threshold_s}s).\n"
         f"Rapid cycling is a precursor to lockout and equipment stress.\n"
         f"Check thermostat setpoints and HVAC filter."
+    )
+
+
+def _format_mitigation_rollback_message(data: dict[str, Any]) -> str:
+    """Format an urgent Telegram alert for an automatic mitigation rollback."""
+    return (
+        "🚨 URGENT: HomeOps mitigation rolled back\n"
+        f"Automatic zone-call mitigation was disabled after "
+        f"{data.get('failed_attempts', 0)} failed attempts.\n"
+        f"Reason: {data.get('reason', 'unknown')}\n"
+        f"Incident: {data.get('incident_id', 'unknown')}\n"
+        f"Trigger: {data.get('trigger_event_id', 'unknown')}\n"
+        "Mitigation guard: OFF\n"
+        "Check the furnace and Home Assistant before re-enabling mitigation."
     )
 
 
@@ -391,7 +430,11 @@ def _playback_phase(
                     last_consumed_observer_ts = ts_str
                 logger.info(f"{_LOG} {ts_str} {schema}: mitigation decision")
                 fresh_restart, _ = _process_mitigation_observer_event(
-                    evt, derived_log, fresh_restart
+                    evt,
+                    derived_log,
+                    fresh_restart,
+                    telegram_bot_token=telegram_bot_token,
+                    telegram_chat_id=telegram_chat_id,
                 )
                 if ts_str:
                     _save_state(
@@ -966,7 +1009,11 @@ def main() -> None:
             if schema == _OBSERVER_EVENT_SCHEMA:
                 print(f"{ts_str} {schema}: mitigation decision", flush=True)
                 fresh_restart, _ = _process_mitigation_observer_event(
-                    evt, derived_log, fresh_restart
+                    evt,
+                    derived_log,
+                    fresh_restart,
+                    telegram_bot_token=telegram_bot_token,
+                    telegram_chat_id=telegram_chat_id,
                 )
                 _save_state(
                     floor_on_since,
@@ -1598,11 +1645,13 @@ if __name__ == "__main__":
 __all__ = [
     # constants
     "MITIGATION_EVENT_TYPE",
+    "MITIGATION_ROLLBACK_EVENT_TYPE",
     "SLOW_TO_HEAT_THRESHOLDS_S",
     "ZONE_TEMP_SNAPSHOT_INTERVAL_S",
     # entry-point functions (defined here)
     "_emit_derived",
     "_format_furnace_short_call_message",
+    "_format_mitigation_rollback_message",
     "_make_furnace_short_call_event",
     "_format_floor_anomaly_message",
     "_playback_phase",
@@ -1620,6 +1669,7 @@ __all__ = [
     "process_floor_event",
     "process_furnace_event",
     "process_mitigation_event",
+    "process_mitigation_rollback_event",
     "process_outdoor_temp_event",
     # alerts
     "check_floor_2_escalation",

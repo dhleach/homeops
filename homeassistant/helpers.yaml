@@ -29,3 +29,26 @@ input_number:
     unit_of_measurement: min
     mode: box
     initial: 5
+
+  # These stateful helpers intentionally omit `initial`: Home Assistant restores
+  # their last values after a restart so an incident cannot silently reset.
+  homeops_mitigation_attempt_count:
+    name: HomeOps mitigation attempts in current incident
+    min: 0
+    max: 3
+    step: 1
+    mode: box
+
+input_datetime:
+  homeops_mitigation_storm_started_at:
+    name: HomeOps mitigation storm started at
+    has_date: true
+    has_time: true
+
+input_text:
+  homeops_mitigation_incident_id:
+    name: HomeOps mitigation incident ID
+    max: 64
+  homeops_mitigation_last_rollback_trigger_id:
+    name: HomeOps mitigation last rollback trigger ID
+    max: 64

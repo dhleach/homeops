@@ -1,6 +1,7 @@
 """Tests for observer state and custom-event schema validation.
 
 Revision history:
+  2026-08-25  Cover valid and invalid automatic mitigation rollback payloads.
   2026-08-25  Cover the observer envelope for applied/skipped mitigation
               decisions alongside the existing state-change contract.
 """
@@ -11,11 +12,14 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from validate_schema import validate_line  # noqa: E402
 
 EVENT_TYPE = "homeops.mitigation.zone_stagger_applied.v1"
+ROLLBACK_EVENT_TYPE = "homeops.mitigation.rollback.v1"
 
 
 def _record(**event_overrides):
@@ -33,6 +37,27 @@ def _record(**event_overrides):
         "source": "ha.websocket",
         "ts": "2026-08-25T13:00:00+00:00",
         "data": {"event_type": EVENT_TYPE, "event_data": event_data},
+    }
+
+
+def _rollback_record(**event_overrides):
+    event_data = {
+        "event_type": ROLLBACK_EVENT_TYPE,
+        "incident_id": "0123456789abcdef",
+        "failed_attempts": 3,
+        "reason": "short_cycle_after_three_mitigation_attempts",
+        "trigger_event_id": "fedcba9876543210",
+        "storm_window_started_at": "2026-08-25T12:00:00+00:00",
+        "mitigation_enabled": False,
+        "rollback_state": "rolled_back",
+        "source_event_type": "homeops.mitigation.short_cycle_detected.v1",
+    }
+    event_data.update(event_overrides)
+    return {
+        "schema": "homeops.observer.event.v1",
+        "source": "ha.websocket",
+        "ts": "2026-08-25T13:00:00+00:00",
+        "data": {"event_type": ROLLBACK_EVENT_TYPE, "event_data": event_data},
     }
 
 
@@ -66,3 +91,23 @@ def test_state_change_contract_still_passes() -> None:
     }
 
     assert validate_line(json.dumps(record)) == []
+
+
+def test_valid_rollback_event_passes() -> None:
+    assert validate_line(json.dumps(_rollback_record())) == []
+
+
+@pytest.mark.parametrize(
+    "overrides,expected",
+    [
+        ({"failed_attempts": 2}, "failed_attempts"),
+        ({"mitigation_enabled": True}, "mitigation_enabled"),
+        ({"rollback_state": "active"}, "rollback_state"),
+        ({"source_event_type": "other.event.v1"}, "source_event_type"),
+        ({"storm_window_started_at": "not-a-date"}, "storm_window_started_at"),
+    ],
+)
+def test_invalid_rollback_event_is_rejected(overrides, expected) -> None:
+    errors = validate_line(json.dumps(_rollback_record(**overrides)))
+
+    assert any(expected in error for error in errors)

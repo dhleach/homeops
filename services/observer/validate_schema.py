@@ -6,6 +6,8 @@ Usage:
     cat observer.jsonl | python3 validate_schema.py
 
 Revision history:
+  2026-08-25  Validate the automatic mitigation rollback envelope and its
+              fail-safe payload fields alongside staged zone decisions.
   2026-08-25  Validate the generic observer envelope and staged mitigation
               decision payload alongside state_changed records.
 """
@@ -13,6 +15,7 @@ Revision history:
 import json
 import math
 import sys
+from datetime import datetime
 
 KNOWN_ENTITIES = {
     "binary_sensor.furnace_heating",
@@ -41,6 +44,8 @@ REQUIRED_DATA_FIELDS = {"entity_id", "old_state", "new_state"}
 EXPECTED_SCHEMA = "homeops.observer.state_changed.v1"
 EVENT_SCHEMA = "homeops.observer.event.v1"
 MITIGATION_EVENT_TYPE = "homeops.mitigation.zone_stagger_applied.v1"
+MITIGATION_ROLLBACK_EVENT_TYPE = "homeops.mitigation.rollback.v1"
+MITIGATION_SHORT_CYCLE_EVENT_TYPE = "homeops.mitigation.short_cycle_detected.v1"
 EXPECTED_SOURCE = "ha.websocket"
 MITIGATION_ZONES = {"floor_1", "floor_2", "floor_3"}
 MITIGATION_OUTCOMES = {"applied", "skipped"}
@@ -99,16 +104,90 @@ def validate_line(line: str) -> list[str]:
 
     if schema == EVENT_SCHEMA:
         event_type = data.get("event_type")
-        if event_type != MITIGATION_EVENT_TYPE:
-            errors.append(
-                f"Unexpected event type: {event_type!r} (expected {MITIGATION_EVENT_TYPE!r})"
-            )
         event_data = data.get("event_data")
         if not isinstance(event_data, dict):
             errors.append(
                 f"Field 'data.event_data' must be an object, got: {type(event_data).__name__}"
             )
             return errors
+
+        if event_type == MITIGATION_ROLLBACK_EVENT_TYPE:
+            rollback_fields = {
+                "event_type",
+                "incident_id",
+                "failed_attempts",
+                "reason",
+                "trigger_event_id",
+                "storm_window_started_at",
+                "mitigation_enabled",
+                "rollback_state",
+                "source_event_type",
+            }
+            missing_rollback_fields = rollback_fields - event_data.keys()
+            if missing_rollback_fields:
+                errors.append(f"Missing rollback event fields: {sorted(missing_rollback_fields)}")
+            if event_data.get("event_type") != event_type:
+                errors.append(
+                    "Field 'data.event_data.event_type' must match the observer event type"
+                )
+            for field in ("incident_id", "reason", "trigger_event_id"):
+                if (
+                    not isinstance(event_data.get(field), str)
+                    or not event_data.get(field, "").strip()
+                ):
+                    errors.append(f"Rollback field '{field}' must be a non-empty string")
+            storm_started = event_data.get("storm_window_started_at")
+            if not isinstance(storm_started, str) or not storm_started.strip():
+                errors.append("Rollback field 'storm_window_started_at' must be a non-empty string")
+            else:
+                try:
+                    datetime.fromisoformat(storm_started.replace("Z", "+00:00"))
+                except ValueError:
+                    errors.append("Rollback field 'storm_window_started_at' must be ISO 8601")
+            failed_attempts = event_data.get("failed_attempts")
+            if isinstance(failed_attempts, bool) or failed_attempts is None:
+                errors.append("Rollback field 'failed_attempts' must be an integer >= 3")
+            else:
+                try:
+                    attempts_value = float(failed_attempts)
+                except (TypeError, ValueError):
+                    errors.append("Rollback field 'failed_attempts' must be an integer >= 3")
+                else:
+                    if (
+                        not math.isfinite(attempts_value)
+                        or not attempts_value.is_integer()
+                        or attempts_value < 3
+                    ):
+                        errors.append("Rollback field 'failed_attempts' must be an integer >= 3")
+            if event_data.get("mitigation_enabled") is not False:
+                errors.append("Rollback field 'mitigation_enabled' must be false")
+            if event_data.get("rollback_state") != "rolled_back":
+                errors.append("Rollback field 'rollback_state' must be 'rolled_back'")
+            if event_data.get("source_event_type") != MITIGATION_SHORT_CYCLE_EVENT_TYPE:
+                errors.append(
+                    "Rollback field 'source_event_type' must be the short-cycle event type"
+                )
+            for field in ("short_cycle_duration_s", "short_cycle_threshold_s"):
+                value = event_data.get(field)
+                if value in (None, ""):
+                    continue
+                if isinstance(value, bool):
+                    errors.append(f"Rollback field '{field}' must be a non-negative number")
+                    continue
+                try:
+                    numeric_value = float(value)
+                except (TypeError, ValueError):
+                    errors.append(f"Rollback field '{field}' must be a non-negative number")
+                else:
+                    if not math.isfinite(numeric_value) or numeric_value < 0:
+                        errors.append(f"Rollback field '{field}' must be a non-negative number")
+            return errors
+
+        if event_type != MITIGATION_EVENT_TYPE:
+            errors.append(
+                f"Unexpected event type: {event_type!r} (expected one of "
+                f"{MITIGATION_EVENT_TYPE!r}, {MITIGATION_ROLLBACK_EVENT_TYPE!r})"
+            )
         missing_event_data = MITIGATION_DATA_FIELDS - event_data.keys()
         if missing_event_data:
             errors.append(f"Missing mitigation event fields: {sorted(missing_event_data)}")

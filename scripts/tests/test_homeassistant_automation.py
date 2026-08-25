@@ -1,6 +1,8 @@
 """Contract tests for the staged Home Assistant mitigation overlay.
 
 Revision history:
+  2026-08-25  Cover durable attempt bookkeeping and automatic rollback after
+              a continued short-cycle event within the incident window.
   2026-08-25  Require applied and skipped mitigation events to carry the zone,
               reason, delay, trigger reference, and outcome fields.
   2026-08-25  Added YAML and configuration-projection checks so the opt-in HA
@@ -28,15 +30,18 @@ def _template_conditions(conditions):
     return [item["value_template"] for item in conditions if item.get("condition") == "template"]
 
 
-def test_automation_is_a_valid_single_item_list():
+def test_automations_are_a_valid_staged_list():
     automations = _load_yaml(AUTOMATION_FILE)
 
     assert isinstance(automations, list)
-    assert len(automations) == 1
-    assert automations[0]["id"] == "homeops_zone_call_stagger"
-    assert automations[0]["initial_state"] is False
-    assert automations[0]["mode"] == "single"
-    assert automations[0]["max_exceeded"] == "silent"
+    assert len(automations) == 2
+    assert {automation["id"] for automation in automations} == {
+        "homeops_zone_call_stagger",
+        "homeops_mitigation_automatic_rollback",
+    }
+    assert all(automation["initial_state"] is False for automation in automations)
+    assert all(automation["mode"] == "single" for automation in automations)
+    assert all(automation["max_exceeded"] == "silent" for automation in automations)
 
 
 def test_triggers_cover_each_zone_call_transition():
@@ -81,9 +86,9 @@ def test_conditions_are_guarded_and_require_a_secondary_call_and_recent_furnace_
 def test_action_turns_off_waits_for_configured_delay_and_resumes_climate_only():
     automation = _load_yaml(AUTOMATION_FILE)[0]
     actions = automation["actions"]
-    off_action = actions[3]
-    delay_action = actions[4]
-    choice = actions[5]["choose"][0]
+    off_action = actions[6]
+    delay_action = actions[7]
+    choice = actions[8]["choose"][0]
     resume_action = choice["sequence"][0]
 
     assert off_action["action"] == "climate.set_hvac_mode"
@@ -108,15 +113,19 @@ def test_action_turns_off_waits_for_configured_delay_and_resumes_climate_only():
         "reason": "{{ mitigation_reason }}",
         "delay_minutes": "{{ stagger_minutes }}",
         "trigger_event_id": "{{ trigger_event_id }}",
+        "incident_id": "{{ incident_id }}",
+        "attempt_number": "{{ attempt_number }}",
         "outcome": "applied",
     }
-    assert actions[5]["default"][0]["event"] == "homeops.mitigation.zone_stagger_applied.v1"
-    assert actions[5]["default"][0]["event_data"] == {
+    assert actions[8]["default"][0]["event"] == "homeops.mitigation.zone_stagger_applied.v1"
+    assert actions[8]["default"][0]["event_data"] == {
         "event_type": "homeops.mitigation.zone_stagger_applied.v1",
         "zone": "{{ trigger.id }}",
         "reason": "resume_gate_failed",
         "delay_minutes": "{{ stagger_minutes }}",
         "trigger_event_id": "{{ trigger_event_id }}",
+        "incident_id": "{{ incident_id }}",
+        "attempt_number": "{{ attempt_number }}",
         "outcome": "skipped",
     }
     assert {
@@ -133,6 +142,80 @@ def test_action_turns_off_waits_for_configured_delay_and_resumes_climate_only():
     assert "is_state(target_climate, 'off')" in resume_template
 
 
+def test_stagger_tracks_attempt_number_and_starts_a_new_incident_after_expiry():
+    automation = _load_yaml(AUTOMATION_FILE)[0]
+    actions = automation["actions"]
+
+    attempt_condition = actions[3]["value_template"]
+    assert "homeops_mitigation_attempt_count" in attempt_condition
+    assert "homeops_mitigation_storm_started_at" in attempt_condition
+    assert "3600" in attempt_condition
+
+    tracking = actions[4]["variables"]
+    assert "active_incident" in tracking
+    assert "incident_id" in tracking
+    assert "attempt_number" in tracking
+    assert "homeops_mitigation_incident_id" in tracking["active_incident"]
+
+    bookkeeping = actions[5]["choose"][0]["sequence"]
+    assert bookkeeping[0]["action"] == "input_number.set_value"
+    assert bookkeeping[0]["target"]["entity_id"] == "input_number.homeops_mitigation_attempt_count"
+    assert bookkeeping[1]["action"] == "input_text.set_value"
+    assert bookkeeping[2]["action"] == "input_datetime.set_datetime"
+    assert bookkeeping[2]["data"] == {"timestamp": "{{ now().timestamp() }}"}
+    assert bookkeeping[3]["action"] == "input_text.set_value"
+    assert actions[5]["default"][0]["action"] == "input_number.set_value"
+
+
+def test_automatic_rollback_disables_guard_and_emits_auditable_event():
+    rollback = _load_yaml(AUTOMATION_FILE)[1]
+
+    assert rollback["id"] == "homeops_mitigation_automatic_rollback"
+    assert rollback["triggers"] == [
+        {
+            "trigger": "event",
+            "event_type": "homeops.mitigation.short_cycle_detected.v1",
+        }
+    ]
+    assert rollback["conditions"][0] == {
+        "condition": "state",
+        "entity_id": "input_boolean.mitigation_enabled",
+        "state": "on",
+    }
+    rollback_condition = rollback["conditions"][1]["value_template"]
+    assert "attempts >= 3" in rollback_condition
+    assert "age <= 3600" in rollback_condition
+    assert "incident_id" in rollback_condition
+    assert "last_rollback_trigger_id" in rollback_condition
+
+    actions = rollback["actions"]
+    assert actions[1] == {
+        "action": "input_boolean.turn_off",
+        "target": {"entity_id": "input_boolean.mitigation_enabled"},
+    }
+    assert actions[2] == {
+        "event": "homeops.mitigation.rollback.v1",
+        "event_data": {
+            "event_type": "homeops.mitigation.rollback.v1",
+            "incident_id": "{{ rollback_incident_id }}",
+            "failed_attempts": "{{ rollback_failed_attempts }}",
+            "reason": "{{ rollback_reason }}",
+            "trigger_event_id": "{{ rollback_trigger_event_id }}",
+            "storm_window_started_at": "{{ rollback_storm_window_started_at }}",
+            "mitigation_enabled": False,
+            "rollback_state": "rolled_back",
+            "source_event_type": "homeops.mitigation.short_cycle_detected.v1",
+            "short_cycle_duration_s": "{{ rollback_duration_s }}",
+            "short_cycle_threshold_s": "{{ rollback_threshold_s }}",
+        },
+    }
+    assert actions[3]["action"] == "input_text.set_value"
+    assert (
+        actions[3]["target"]["entity_id"]
+        == "input_text.homeops_mitigation_last_rollback_trigger_id"
+    )
+
+
 def test_helper_projection_matches_validated_mitigation_settings_and_starts_safe():
     config = load_rules_config().rule("mitigation")
     helpers = _load_yaml(HELPERS_FILE)
@@ -145,3 +228,21 @@ def test_helper_projection_matches_validated_mitigation_settings_and_starts_safe
     assert stagger_helper["initial"] == config["zone_stagger_minutes"]
     assert furnace_helper["max"] == 60
     assert stagger_helper["max"] == 15
+
+    attempt_helper = helpers["input_number"]["homeops_mitigation_attempt_count"]
+    assert attempt_helper["min"] == 0
+    assert attempt_helper["max"] == 3
+    assert attempt_helper["step"] == 1
+    assert "initial" not in attempt_helper
+
+    storm_helper = helpers["input_datetime"]["homeops_mitigation_storm_started_at"]
+    assert storm_helper["has_date"] is True
+    assert storm_helper["has_time"] is True
+    assert "initial" not in storm_helper
+
+    incident_helper = helpers["input_text"]["homeops_mitigation_incident_id"]
+    rollback_helper = helpers["input_text"]["homeops_mitigation_last_rollback_trigger_id"]
+    assert incident_helper["max"] == 64
+    assert rollback_helper["max"] == 64
+    assert "initial" not in incident_helper
+    assert "initial" not in rollback_helper

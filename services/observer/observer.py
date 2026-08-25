@@ -2,6 +2,8 @@
 """Stream Home Assistant state and mitigation events to JSONL.
 
 Revision history:
+  2026-08-25  Subscribe to and preserve the staged mitigation rollback event so
+              the consumer can durably alert on automatic fail-safe shutdown.
   2026-08-25  Subscribe to the staged mitigation event and preserve it in a
               generic observer envelope so the consumer can durably record the
               applied/skipped decision and replay it after a restart.
@@ -23,6 +25,8 @@ logger = get_logger("observer")
 
 _STATE_CHANGED_EVENT_TYPE = "state_changed"
 _MITIGATION_EVENT_TYPE = "homeops.mitigation.zone_stagger_applied.v1"
+_MITIGATION_ROLLBACK_EVENT_TYPE = "homeops.mitigation.rollback.v1"
+_MITIGATION_EVENT_TYPES = (_MITIGATION_EVENT_TYPE, _MITIGATION_ROLLBACK_EVENT_TYPE)
 _STATE_CHANGED_SCHEMA = "homeops.observer.state_changed.v1"
 _EVENT_SCHEMA = "homeops.observer.event.v1"
 
@@ -70,7 +74,7 @@ def _build_observer_record(
             "data": event_data,
         }
 
-    if event_type == _MITIGATION_EVENT_TYPE:
+    if event_type in _MITIGATION_EVENT_TYPES:
         context = event.get("context") or {}
         wrapper_data: dict[str, Any] = {
             "event_type": event_type,
@@ -167,25 +171,26 @@ async def main():
                 if not sub_resp.get("success", False):
                     raise RuntimeError(f"Subscribe failed: {sub_resp}")
 
-                # 4) Subscribe to the staged mitigation decision event.  It is
+                # 4) Subscribe to explicit mitigation events.  They are
                 # intentionally separate from state_changed so the observer
                 # never has to infer a mitigation decision from thermostat state.
-                sub_id = 2
-                await ws.send(
-                    json.dumps(
-                        {
-                            "id": sub_id,
-                            "type": "subscribe_events",
-                            "event_type": _MITIGATION_EVENT_TYPE,
-                        }
+                for sub_id, mitigation_event_type in enumerate(_MITIGATION_EVENT_TYPES, start=2):
+                    await ws.send(
+                        json.dumps(
+                            {
+                                "id": sub_id,
+                                "type": "subscribe_events",
+                                "event_type": mitigation_event_type,
+                            }
+                        )
                     )
-                )
-                mitigation_sub_resp = json.loads(await ws.recv())
-                if not mitigation_sub_resp.get("success", False):
-                    raise RuntimeError(f"Subscribe failed: {mitigation_sub_resp}")
+                    mitigation_sub_resp = json.loads(await ws.recv())
+                    if not mitigation_sub_resp.get("success", False):
+                        raise RuntimeError(f"Subscribe failed: {mitigation_sub_resp}")
 
                 logger.info(
-                    f"Subscribed to state_changed and {_MITIGATION_EVENT_TYPE}. "
+                    "Subscribed to state_changed and "
+                    f"{', '.join(sorted(_MITIGATION_EVENT_TYPES))}. "
                     f"Watching: {', '.join(sorted(watch)) if watch else '(ALL)'}"
                 )
 
