@@ -886,6 +886,33 @@ settings, or modify consumer state. See
 [`docs/time-to-temp-2026-08.md`](../../docs/time-to-temp-2026-08.md) for the
 latest Pi-history validation and its telemetry limitations.
 
+The repository-level [`scripts/thermal_query.py`](../../scripts/thermal_query.py)
+is the LLM-facing composition layer for these read-only reports. It accepts a
+natural-language question plus an explicit primary zone and outdoor
+temperature, then returns compact model metadata, furnace-session baseline
+statistics, data-quality counters, and bounded allowlisted source-event
+evidence. It does not invoke a provider or control Home Assistant. A positive
+setpoint delta may be supplied directly; alternatively, the tool derives it
+from a target and current temperature. A target without a current temperature
+is retained as context but is explicitly marked unable to produce a duration
+prediction.
+
+```bash
+python3 scripts/thermal_query.py \
+  --question "How long should floor 2 take to reach 68°F?" \
+  --zone floor_2 \
+  --outdoor 30 \
+  --target 68 \
+  --current 65 \
+  --log state/consumer/events.jsonl \
+  --format json
+```
+
+The tool is a prompt-context boundary, not a replacement for the public
+`POST /api/diagnostic` route. That route currently uses its own live
+Prometheus snapshot on EC2; wiring historical Pi event access into that
+provider path remains a separate deployment decision.
+
 ## Staged mitigation replay
 
 [`scripts/mitigation_e2e.py`](../../scripts/mitigation_e2e.py) replays three
