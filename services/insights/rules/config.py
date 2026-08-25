@@ -5,6 +5,9 @@ loader here avoids spreading environment-variable parsing and threshold
 validation across individual rules.
 
 Revision history:
+  2026-08-25  Validate the mitigation timing settings that feed the staged
+              Home Assistant helper projection, keeping automation thresholds
+              out of the automation itself.
   2026-08-24  Added a dependency-free YAML-compatible loader and strict schema
               validation so rule thresholds and enabled flags are safe on the
               Pi, whose service virtualenv does not include PyYAML.
@@ -237,6 +240,7 @@ def _validate_section(rule_name: str, section: Mapping[str, Any]) -> dict[str, A
         "time_of_day_pattern": common | {"threshold_ratio", "min_events", "min_window_events"},
         "storm": common
         | {"storm_count", "storm_window_hours", "outdoor_drop_f", "runtime_change_ratio"},
+        "mitigation": common | {"furnace_warmup_minutes", "zone_stagger_minutes"},
     }
     expected = fields[rule_name]
     unknown = set(section) - expected
@@ -401,6 +405,23 @@ def _validate_section(rule_name: str, section: Mapping[str, Any]) -> dict[str, A
                 maximum=1,
             ),
         )
+    elif rule_name == "mitigation":
+        result.update(
+            furnace_warmup_minutes=_number(
+                section["furnace_warmup_minutes"],
+                "rules.mitigation.furnace_warmup_minutes",
+                minimum=1,
+                maximum=60,
+                integer=True,
+            ),
+            zone_stagger_minutes=_number(
+                section["zone_stagger_minutes"],
+                "rules.mitigation.zone_stagger_minutes",
+                minimum=1,
+                maximum=15,
+                integer=True,
+            ),
+        )
     return result
 
 
@@ -427,6 +448,7 @@ def _validate_document(document: Mapping[str, Any], path: Path) -> dict[str, dic
         "efficiency_degradation",
         "time_of_day_pattern",
         "storm",
+        "mitigation",
     }
     unknown = set(rules) - expected_rules
     missing = expected_rules - set(rules)

@@ -1,0 +1,111 @@
+# Staged HomeOps automation. This file is a valid automations.yaml list but
+# is not copied by the normal CI deployment. Enable it only in an isolated HA
+# test environment after reviewing docs/mitigation-policy.md.
+
+- id: homeops_zone_call_stagger
+  alias: HomeOps - stagger secondary zone call
+  description: >-
+    Opt-in, fail-closed staging automation. A newly active secondary zone is
+    paused for the configured duration when another zone is already calling
+    and the furnace has only recently started. The input_boolean guard is
+    deliberately off by default.
+  initial_state: false
+  mode: single
+  max_exceeded: silent
+  triggers:
+    - trigger: state
+      entity_id: binary_sensor.floor_1_heating_call
+      from: "off"
+      to: "on"
+      id: floor_1
+    - trigger: state
+      entity_id: binary_sensor.floor_2_heating_call
+      from: "off"
+      to: "on"
+      id: floor_2
+    - trigger: state
+      entity_id: binary_sensor.floor_3_heating_call
+      from: "off"
+      to: "on"
+      id: floor_3
+  conditions:
+    - condition: state
+      entity_id: input_boolean.mitigation_enabled
+      state: "on"
+    - condition: template
+      value_template: >-
+        {% set trigger_entity = trigger.entity_id %}
+        {% set floor_calls = [
+          'binary_sensor.floor_1_heating_call',
+          'binary_sensor.floor_2_heating_call',
+          'binary_sensor.floor_3_heating_call'
+        ] %}
+        {% set active_entities = expand(floor_calls)
+          | selectattr('state', 'eq', 'on')
+          | map(attribute='entity_id') | list %}
+        {{ trigger_entity in floor_calls
+           and (active_entities | reject('equalto', trigger_entity) | list | length > 0) }}
+    - condition: state
+      entity_id: binary_sensor.furnace_heating
+      state: "on"
+    - condition: template
+      value_template: >-
+        {% set warmup_limit =
+          states('input_number.homeops_mitigation_furnace_warmup_minutes') | float(0) %}
+        {% set furnace_started =
+          as_timestamp(states.binary_sensor.furnace_heating.last_changed, default=0) %}
+        {{ warmup_limit > 0
+           and furnace_started > 0
+           and (as_timestamp(now()) - furnace_started) < warmup_limit * 60 }}
+  actions:
+    - variables:
+        target_climate: >-
+          {% set zone_climates = {
+            'floor_1': 'climate.floor_1_thermostat',
+            'floor_2': 'climate.floor_2_thermostat',
+            'floor_3': 'climate.floor_3_thermostat'
+          } %}
+          {{ zone_climates.get(trigger.id, '') }}
+    - variables:
+        original_mode: "{{ states(target_climate) }}"
+        original_setpoint: "{{ state_attr(target_climate, 'temperature') }}"
+    - condition: template
+      value_template: >-
+        {{ target_climate != ''
+           and original_mode == 'heat'
+           and original_setpoint is not none
+           and (original_setpoint | float(-1)) >= 0
+           and (states('input_number.homeops_mitigation_zone_stagger_minutes')
+                | float(0)) > 0 }}
+    - action: climate.set_hvac_mode
+      target:
+        entity_id: "{{ target_climate }}"
+      data:
+        hvac_mode: "off"
+    - delay:
+        minutes: >-
+          {{ states('input_number.homeops_mitigation_zone_stagger_minutes') | int(0) }}
+    - choose:
+        - conditions:
+            - condition: state
+              entity_id: input_boolean.mitigation_enabled
+              state: "on"
+            - condition: state
+              entity_id: binary_sensor.furnace_heating
+              state: "on"
+            - condition: template
+              value_template: >-
+                {% set setpoint = state_attr(target_climate, 'temperature') %}
+                {% set current = state_attr(target_climate, 'current_temperature') %}
+                {{ is_state(target_climate, 'off')
+                   and original_mode == 'heat'
+                   and setpoint is not none
+                   and current is not none
+                   and (setpoint | float(-1)) == (original_setpoint | float(-2))
+                   and (current | float(999)) < (setpoint | float(-1)) }}
+          sequence:
+            - action: climate.set_hvac_mode
+              target:
+                entity_id: "{{ target_climate }}"
+              data:
+                hvac_mode: "heat"

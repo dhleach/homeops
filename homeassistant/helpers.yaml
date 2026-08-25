@@ -1,0 +1,31 @@
+# Home Assistant helper definitions for the staged HomeOps mitigation flow.
+#
+# The numeric initial values are projections of the validated
+# services/insights/rules.yaml `rules.mitigation` section. Keep this file in
+# sync with that source; the repository test checks the projection. The
+# boolean intentionally starts false so installing this overlay cannot enable
+# thermostat writes by itself.
+
+input_boolean:
+  mitigation_enabled:
+    name: HomeOps mitigation enabled
+    icon: mdi:shield-check
+    initial: false
+
+input_number:
+  homeops_mitigation_furnace_warmup_minutes:
+    name: HomeOps mitigation furnace warmup limit
+    min: 1
+    max: 60
+    step: 1
+    unit_of_measurement: min
+    mode: box
+    initial: 10
+  homeops_mitigation_zone_stagger_minutes:
+    name: HomeOps mitigation zone stagger duration
+    min: 1
+    max: 15
+    step: 1
+    unit_of_measurement: min
+    mode: box
+    initial: 5

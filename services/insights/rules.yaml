@@ -72,3 +72,10 @@ rules:
     storm_window_hours: 1
     outdoor_drop_f: 10
     runtime_change_ratio: 0.1
+
+  # These values are projected into the staged Home Assistant helper config.
+  # The helper guard remains off until the mitigation flow has been tested.
+  mitigation:
+    enabled: false
+    furnace_warmup_minutes: 10
+    zone_stagger_minutes: 5
