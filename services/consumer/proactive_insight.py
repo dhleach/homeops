@@ -803,6 +803,14 @@ class ProactiveInsightCoordinator:
                 error_code="no_context_events",
                 context_chars=context_chars,
             )
+        if "state.json not available" in context:
+            return self._result(
+                now=processed_at,
+                status="insufficient_context",
+                anomaly=anomaly,
+                error_code="missing_context_state",
+                context_chars=context_chars,
+            )
 
         try:
             prompt = build_proactive_insight_prompt(

@@ -285,6 +285,22 @@ class TestCoordinator:
         assert result.error_code == "no_context_events"
         assert provider.calls == []
 
+    def test_missing_state_context_fails_closed(self, tmp_path):
+        provider = FakeProvider()
+        coordinator = _coordinator(
+            tmp_path,
+            provider=provider,
+            context=(
+                "Generated: now | Events loaded: 1\nCURRENT CONDITIONS\n  state.json not available"
+            ),
+        )
+
+        result = coordinator.process(_anomaly(), now=NOW)
+
+        assert result.status == "insufficient_context"
+        assert result.error_code == "missing_context_state"
+        assert provider.calls == []
+
     def test_success_delivers_and_persists_audit_contract(self, tmp_path):
         provider = FakeProvider()
         delivery = FakeDelivery()
