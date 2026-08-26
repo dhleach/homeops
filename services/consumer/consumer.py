@@ -14,6 +14,10 @@ Business logic lives in focused modules:
   - rules/config.py  validated rules.yaml loading and enabled/threshold settings
 
 Revision history:
+  2026-08-26  Add the default-off proactive anomaly insight boundary after
+              validated floor-runtime anomalies, keeping provider calls,
+              Telegram delivery, and replay deduplication behind the bounded
+              coordinator in proactive_insight.py.
   2026-08-25  Consume automatic mitigation rollback events, persist them with
               replay deduplication, and send an urgent Telegram alert after
               the durable event is appended.
@@ -42,6 +46,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "insights"))
 
 from log_config import get_logger
 from metrics import HvacMetrics
+from proactive_insight import (
+    ProactiveInsightCoordinator,
+    build_proactive_insight_from_env,
+)
 from rules.config import RulesConfig, RulesConfigError, load_rules_config
 
 from alerts import (
@@ -333,6 +341,39 @@ def _format_floor_anomaly_message(data: dict) -> str:
     )
 
 
+def _emit_proactive_insight(
+    anomaly_event: dict[str, Any],
+    derived_log: str,
+    coordinator: ProactiveInsightCoordinator | None,
+) -> None:
+    """Run and append one proactive insight audit result when configured."""
+    if coordinator is None:
+        return
+    try:
+        result = coordinator.process(anomaly_event)
+        # A duplicate is intentionally not appended: the durable sent-ID store
+        # has already recorded the user-facing message, and replaying an audit
+        # line would make the derived log grow without adding information.
+        if result.status == "duplicate":
+            logger.info("Skipping duplicate proactive insight")
+            return
+        audit_event = result.to_event()
+        print(json.dumps(audit_event), flush=True)
+        append_jsonl(derived_log, audit_event)
+        if result.status == "sent":
+            logger.info("Proactive anomaly insight delivered")
+        else:
+            logger.warning(
+                "Proactive anomaly insight not delivered: status=%s error=%s",
+                result.status,
+                result.error_code,
+            )
+    except Exception as exc:
+        # LLM insight is supplementary; a provider or audit failure must never
+        # stop the deterministic HVAC event pipeline.
+        logger.exception("Proactive anomaly insight failed closed: %s", exc)
+
+
 def _playback_phase(
     observer_log: str,
     last_consumed_ts: str,
@@ -352,6 +393,7 @@ def _playback_phase(
     furnace_short_call_threshold_s: int = 120,
     telegram_bot_token: str = "",
     telegram_chat_id: str = "",
+    proactive_insight: ProactiveInsightCoordinator | None = None,
 ) -> dict[str, Any]:
     """
     Replay missed observer events from *last_consumed_ts* to EOF.
@@ -523,6 +565,7 @@ def _playback_phase(
                             if telegram_bot_token and telegram_chat_id:
                                 _anom_msg = _format_floor_anomaly_message(_anom_evt["data"])
                                 _send_telegram(telegram_bot_token, telegram_chat_id, _anom_msg)
+                            _emit_proactive_insight(_anom_evt, derived_log, proactive_insight)
 
             state_saved = False
 
@@ -831,6 +874,28 @@ def main() -> None:
     telegram_command_interval_s = int(os.environ.get("TELEGRAM_COMMAND_CHECK_INTERVAL_S", "30"))
     logger.info(f"Telegram command check interval: {telegram_command_interval_s}s")
 
+    proactive_insight = build_proactive_insight_from_env(
+        derived_log=derived_log,
+        state_path=STATE_FILE,
+    )
+    if proactive_insight.config.config_error:
+        logger.warning(
+            "Proactive anomaly insight disabled by invalid configuration: %s",
+            proactive_insight.config.config_error,
+        )
+    elif proactive_insight.config.enabled:
+        logger.info(
+            "Proactive anomaly insight enabled: provider=%s model=%s daily_budget=%s",
+            proactive_insight.config.provider,
+            proactive_insight.config.model,
+            proactive_insight.config.daily_budget,
+        )
+    else:
+        logger.info(
+            "Proactive anomaly insight disabled "
+            "(set HOMEOPS_PROACTIVE_INSIGHT_ENABLED=true to enable)"
+        )
+
     _register_sigterm_handler()
 
     floor_entities = _FLOOR_ENTITIES
@@ -955,6 +1020,7 @@ def main() -> None:
             furnace_short_call_threshold_s=furnace_short_call_threshold_s,
             telegram_bot_token=telegram_bot_token,
             telegram_chat_id=telegram_chat_id,
+            proactive_insight=proactive_insight,
         )
         floor_on_since = _pb_result["floor_on_since"]
         furnace_on_since = _pb_result["furnace_on_since"]
@@ -1113,6 +1179,7 @@ def main() -> None:
                             if telegram_bot_token and telegram_chat_id:
                                 _anom_msg = _format_floor_anomaly_message(_anom_evt["data"])
                                 _send_telegram(telegram_bot_token, telegram_chat_id, _anom_msg)
+                            _emit_proactive_insight(_anom_evt, derived_log, proactive_insight)
 
             # Per-floor call sessions are derived from floor_* heating_call sensors.
             if entity_id in floor_entities:

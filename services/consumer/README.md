@@ -4,7 +4,7 @@ The design policy for future short-cycle mitigation is documented in
 [docs/mitigation-policy.md](../../docs/mitigation-policy.md); it is not an
 active Home Assistant control path.
 
-The consumer is a Python daemon that tails the observer's JSONL event stream in real time and emits higher-level **derived events** — floor heating-call sessions, whole-home heating sessions, thermostat/climate state changes, per-zone heating performance metrics, mitigation decisions, automatic mitigation rollbacks, and in-flight overheating warnings. It is the second stage in the homeops data pipeline.
+The consumer is a Python daemon that tails the observer's JSONL event stream in real time and emits higher-level **derived events** — floor heating-call sessions, whole-home heating sessions, thermostat/climate state changes, per-zone heating performance metrics, mitigation decisions, automatic mitigation rollbacks, in-flight overheating warnings, and (when explicitly enabled) bounded LLM explanations for validated runtime anomalies. It is the second stage in the homeops data pipeline.
 
 For the host/network boundary around this service, see the repository-level
 [`docs/architecture.md`](../../docs/architecture.md) and
@@ -19,6 +19,7 @@ For the host/network boundary around this service, see the repository-level
 - [Event Schema](#event-schema)
 - [Data model reference](#data-model-reference)
 - [In-Flight Floor-2 Warning](#in-flight-floor-2-warning)
+- [Proactive Anomaly Insight](#proactive-anomaly-insight)
 - [Read-only multi-zone scheduling query](#read-only-multi-zone-scheduling-query)
 - [Bootstrap Behavior](#bootstrap-behavior)
 - [Configuration Reference](#configuration-reference)
@@ -35,10 +36,10 @@ observer
        ▼
   consumer.py  ──►  stdout (derived JSONL)
                ──►  DERIVED_EVENT_LOG (append-only JSONL file)
-               ──►  Telegram alerts  (floor-2 warnings and mitigation rollback)
+               ──►  Telegram alerts  (warnings, anomaly insights, and rollback)
 ```
 
-The consumer reads the observer's raw `state_changed` events and explicit Home Assistant event records. It produces semantically richer records: when a floor starts or ends a heating call, when the furnace starts or ends a heating session, when a thermostat's setpoint, current temperature, or HVAC mode changes, when a zone reaches its setpoint (along with how long it took), when a zone overshoots or undershoots its setpoint after heating ends, when floor 2 has been calling for longer than the configured threshold (a sign that the furnace may overheat), when a staged mitigation decision was applied or skipped, when repeated short cycling causes the mitigation guard to roll back, and a daily summary of furnace runtime and outdoor temperatures.
+The consumer reads the observer's raw `state_changed` events and explicit Home Assistant event records. It produces semantically richer records: when a floor starts or ends a heating call, when the furnace starts or ends a heating session, when a thermostat's setpoint, current temperature, or HVAC mode changes, when a zone reaches its setpoint (along with how long it took), when a zone overshoots or undershoots its setpoint after heating ends, when floor 2 has been calling for longer than the configured threshold (a sign that the furnace may overheat), when a staged mitigation decision was applied or skipped, when repeated short cycling causes the mitigation guard to roll back, and a daily summary of furnace runtime and outdoor temperatures. A validated floor-runtime anomaly can optionally trigger a separate plain-English explanation without allowing the model to control Home Assistant.
 
 ---
 
@@ -47,7 +48,7 @@ The consumer reads the observer's raw `state_changed` events and explicit Home A
 
 ### Module structure
 
-The consumer is split across nine focused modules:
+The consumer is split across ten focused modules:
 
 | Module | Responsibility |
 |---|---|
@@ -60,6 +61,7 @@ The consumer is split across nine focused modules:
 | `reporting.py` | `emit_daily_summary`, `format_daily_summary_message` — end-of-day summary generation and Telegram formatting |
 | `metrics.py` | `HvacMetrics` — Prometheus gauge definitions, update helpers, and HTTP server (port 8001); foundation for the homeops.now public dashboard data pipeline |
 | `hvac_context.py` | HVAC context summarizer — reads `state.json` + `events.jsonl` and outputs a structured plain-text summary of current conditions, zone runtimes, recent sessions, and warnings for LLM input; lookback and daily-summary dates share an explicit UTC reference time |
+| `proactive_insight.py` | Provider-neutral anomaly explanation coordinator — validates/allowlists triggers, bounds context/output/provider calls, delivers through Telegram, and persists successful insight IDs for replay deduplication |
 
 ---
 
@@ -108,7 +110,7 @@ Every derived event is:
 >
 > That document contains complete field tables with source/rationale columns, design notes, and planned (not-yet-implemented) events. The sections below are the working reference for the currently implemented event types.
 
-The consumer emits 27 derived event types. All share a common envelope. The
+The consumer emits 28 derived event types. All share a common envelope. The
 authoritative list is maintained in `docs/event-schemas/consumer-events.md`; the
 working sections below cover the most frequently inspected event payloads.
 
@@ -711,6 +713,48 @@ The warning fires **at most once per floor-2 call session**, regardless of how l
 
 ---
 
+## Proactive Anomaly Insight
+
+When `floor_runtime_anomaly.v1` fires, the consumer can build a bounded
+48-hour HVAC context, ask the configured provider for a concise explanation,
+and send the result to the configured Telegram chat. This path is deliberately
+staged and **disabled by default**; it never writes thermostat state or calls a
+Home Assistant service. The provider boundary is injected and provider-neutral,
+so CI uses fakes and makes no live LLM or Telegram calls.
+
+The trigger is strict: only a fully validated
+`homeops.consumer.floor_runtime_anomaly.v1` event is eligible. Arbitrary event
+fields are discarded before prompt construction, and the prompt labels both
+the anomaly and HVAC context as untrusted evidence. Empty/sparse context,
+malformed configuration, provider failures, and Telegram failures all fail
+closed while leaving the deterministic event pipeline running.
+
+Successful deliveries emit a
+`homeops.consumer.proactive_anomaly_insight.v1` audit event containing the
+stable anomaly/insight ID, provider/model, bounded character counts, delivery
+status, and the bounded provider result. Failed and disabled attempts are
+audited with an error/status; replay duplicates are suppressed. Successful
+insight IDs and the UTC-day provider-call count are stored atomically in
+`HOMEOPS_PROACTIVE_INSIGHT_STATE` (default
+`state/consumer/proactive-insight-state.json`). The default budget is three
+provider calls per UTC day.
+
+Enable the staged path only after setting all required secrets/configuration:
+
+```dotenv
+HOMEOPS_PROACTIVE_INSIGHT_ENABLED=true
+GEMINI_API_KEY=<provider-key>
+TELEGRAM_BOT_TOKEN=<bot-token>
+TELEGRAM_CHAT_ID=<chat-id>
+```
+
+The complete variable list and bounds are in the Configuration Reference
+below. The default limits are a 48-hour lookback, 8,000 context characters,
+1,200 output characters, a 10-second timeout, and three provider calls per UTC
+day.
+
+---
+
 ## Bootstrap Behavior
 
 When the consumer starts it calls `last_furnace_on_since()` to scan the observer log in reverse and determine whether the furnace is currently mid-session. This prevents a spurious `heating_session_started` event if the furnace was already on when the consumer (re)started.
@@ -991,8 +1035,18 @@ Non-rule service configuration remains environment-based:
 | `HOMEOPS_RULES_CONFIG` | `services/insights/rules.yaml` | Rules YAML path; loaded and validated once at startup |
 | `METRICS_PORT` | `8001` | Prometheus metrics HTTP port |
 | `TELEGRAM_COMMAND_CHECK_INTERVAL_S` | `30` | Polling interval for Telegram commands |
-| `TELEGRAM_BOT_TOKEN` | _(unset)_ | Telegram Bot API token for overheating and rollback alerts |
-| `TELEGRAM_CHAT_ID` | _(unset)_ | Telegram chat ID to receive overheating and rollback alerts |
+| `TELEGRAM_BOT_TOKEN` | _(unset)_ | Telegram Bot API token for overheating, rollback, and proactive insight alerts |
+| `TELEGRAM_CHAT_ID` | _(unset)_ | Telegram chat ID to receive overheating, rollback, and proactive insight alerts |
+| `GEMINI_API_KEY` | _(unset)_ | Provider credential required when proactive insight is enabled; never written to event data |
+| `HOMEOPS_PROACTIVE_INSIGHT_ENABLED` | `false` | Enable provider-backed explanations for validated runtime anomalies |
+| `HOMEOPS_PROACTIVE_INSIGHT_PROVIDER` | `gemini` | Provider adapter name; unsupported values fail closed |
+| `HOMEOPS_PROACTIVE_INSIGHT_MODEL` | `gemini-2.5-flash` | Model passed to the provider adapter |
+| `HOMEOPS_PROACTIVE_INSIGHT_LOOKBACK_HOURS` | `48` | HVAC context lookback; valid range is 1–168 hours |
+| `HOMEOPS_PROACTIVE_INSIGHT_MAX_CONTEXT_CHARS` | `8000` | Maximum context sent to the provider; valid range is 512–16,000 |
+| `HOMEOPS_PROACTIVE_INSIGHT_MAX_OUTPUT_CHARS` | `1200` | Maximum provider result retained/delivered; valid range is 128–4,000 |
+| `HOMEOPS_PROACTIVE_INSIGHT_TIMEOUT_S` | `10` | Provider/Telegram timeout; valid range is 1–10 seconds |
+| `HOMEOPS_PROACTIVE_INSIGHT_DAILY_BUDGET` | `3` | Maximum provider calls per UTC day; valid range is 1–20 |
+| `HOMEOPS_PROACTIVE_INSIGHT_STATE` | `state/consumer/proactive-insight-state.json` | Atomic successful-ID and daily-budget state file |
 
 ---
 

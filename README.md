@@ -2,7 +2,7 @@
 
 **Live dashboard → [homeops.now](https://homeops.now) · API → [api.homeops.now/api/current-temps](https://api.homeops.now/api/current-temps)**
 
-A full-stack observability platform for a 3-zone home HVAC system — event-driven Python pipeline on a Raspberry Pi 5, live metrics in Prometheus + Grafana on AWS EC2, React dashboard on S3 + CloudFront, FastAPI backend, all provisioned with Terraform. 27 derived event types, 1102 Python tests, and 34 React component tests.
+A full-stack observability platform for a 3-zone home HVAC system — event-driven Python pipeline on a Raspberry Pi 5, live metrics in Prometheus + Grafana on AWS EC2, React dashboard on S3 + CloudFront, FastAPI backend, all provisioned with Terraform. 28 derived event types, 1132 Python tests, and 34 React component tests.
 
 ## The Problem
 
@@ -13,13 +13,14 @@ Home Assistant alone can't prevent this. It sees state changes; it doesn't reaso
 ## What It Does
 
 - **Real-time overheating prevention** — tracks how long floor 2 has been calling for heat; fires a Telegram alert before the limit switch trips (configurable threshold, default 45 min)
-- **27 derived event types** from raw HA state changes and explicit HA mitigation decisions — floor call sessions, floor heating performance, furnace sessions, furnace diagnostics, thermostat setpoint/mode/temp changes, zone temperature snapshots, outdoor temperature, daily summaries, system watchdog, staged zone-stagger outcomes, and automatic mitigation rollbacks
+- **28 derived event types** from raw HA state changes and explicit HA mitigation decisions — floor call sessions, floor heating performance, furnace sessions, furnace diagnostics, thermostat setpoint/mode/temp changes, zone temperature snapshots, outdoor temperature, daily summaries, system watchdog, staged zone-stagger outcomes, automatic mitigation rollbacks, and opt-in proactive anomaly explanations
 - **Heating cycle analytics** — `zone_time_to_temp` (how fast each zone heats), `zone_overshoot` (how far past setpoint the zone runs), `zone_setpoint_miss` (calls that fail to reach setpoint), `zone_slow_to_heat_warning` (zones heating below expected rate), and furnace duty cycle via `furnace_duty_cycle.py`
 - **Thermostat entity tracking** — setpoint changes, mode changes, current temp updates, and setpoint-reached events per zone
 - **Event-driven pipeline** — observer writes raw `state_changed`, mitigation-decision, and rollback events to JSONL; consumer tails that file and emits semantically rich derived events downstream
+- **Opt-in proactive HVAC insight** — validated runtime anomalies can receive a bounded plain-English explanation through a provider-neutral LLM seam and Telegram delivery; disabled by default with replay deduplication and a daily call budget
 - **Schema-versioned events** — every event carries a `schema` field (e.g. `homeops.consumer.floor_2_long_call_warning.v1`) for safe downstream evolution
 - **Production-grade operations** — runs as `systemd` services on the Pi, log rotation via `logrotate`, exponential-backoff reconnects on the WebSocket
-- **1102 Python tests + 34 React component tests**, GitHub Actions CI, Ruff lint/format enforcement on every PR, and post-deploy public smoke checks
+- **1132 Python tests + 34 React component tests**, GitHub Actions CI, Ruff lint/format enforcement on every PR, and post-deploy public smoke checks
 - **Opt-in mitigation overlay** — staged Home Assistant zone-call staggering with a disabled-by-default guard and validated timing projections; it is not deployed by the normal application release
 
 ## Architecture
@@ -39,7 +40,7 @@ Home Assistant alone can't prevent this. It sees state changes; it doesn't reaso
 │                 ┌─────────────┤          exposition)     │
 │                 ▼             ▼                          │
 │        state/consumer/   Telegram alerts                 │
-│        events.jsonl      (floor-2 + rollback)            │
+│        events.jsonl      (derived + insight audit)       │
 │       (derived events)                                   │
 └──────────────────────────────────────────────────────────┘
                               │ scrape every 15s (Tailscale)
@@ -77,7 +78,7 @@ Home Assistant validation boundary, see
 
 **Observer** connects to the Home Assistant WebSocket API, subscribes to `state_changed` events for configured entities, and writes one JSON line per event to a JSONL log. It reconnects automatically with exponential backoff.
 
-**Consumer** tails the observer log in real time. It routes each event by entity ID, maintains per-zone heating session state, emits higher-level derived events, and exports live Prometheus metrics via `/metrics`.
+**Consumer** tails the observer log in real time. It routes each event by entity ID, maintains per-zone heating session state, emits higher-level derived events, and exports live Prometheus metrics via `/metrics`. When explicitly enabled, validated runtime anomalies also pass through a bounded LLM explanation and Telegram delivery path.
 
 **EC2 dashboard stack** — Prometheus scrapes the Pi's `/metrics` endpoint every 15 seconds over Tailscale and the backend's internal diagnostic metrics over EC2 loopback. Grafana reads from Prometheus and serves 4 provisioned dashboards. FastAPI queries Prometheus and exposes structured JSON at `/api/current-temps`; Ask HomeOps requires a Cognito-verified bearer principal, independent per-user/IP quota state in loopback-only Valkey, a process-wide provider-call backstop, low-cardinality abuse/cost metrics, and a deterministic read-only prompt-safety boundary. The browser uses authorization code + PKCE and never receives a client secret. Nginx proxies the public API surfaces behind a TLS subdomain but does not expose backend `/metrics`. The active production stack uses Docker Compose with host networking; the Kubernetes manifests are a separate migration surface.
 
@@ -87,7 +88,7 @@ All infrastructure (EC2, S3, CloudFront, Route53, ACM, IAM) is managed with Terr
 
 ## Event Types
 
-The consumer emits **27 derived event types**:
+The consumer emits **28 derived event types**:
 
 | Category | Events |
 |---|---|
@@ -102,6 +103,7 @@ The consumer emits **27 derived event types**:
 | System | `observer_silence_warning.v1` |
 | Summaries | `furnace_daily_summary.v1`, `floor_daily_summary.v1` |
 | Mitigation | `homeops.mitigation.zone_stagger_applied.v1`, `homeops.mitigation.rollback.v1` |
+| LLM explanations | `proactive_anomaly_insight.v1` (default-off) |
 
 All events share a common envelope (`schema`, `source`, `ts`, `data`) and are written as newline-delimited JSON.
 
@@ -183,6 +185,9 @@ homeops/
 │       ├── processors.py         # floor, furnace, climate, outdoor-temp handlers
 │       ├── alerts.py             # floor-2 warning, escalation, silence, temp snapshot
 │       ├── reporting.py          # daily summary generation and formatting
+│       ├── metrics.py             # Prometheus gauges and metrics endpoint
+│       ├── hvac_context.py        # bounded structured context for LLM input
+│       ├── proactive_insight.py   # opt-in anomaly explanation and delivery boundary
 │       ├── requirements.txt
 │       └── README.md             # full consumer reference
 ├── scripts/
@@ -317,6 +322,16 @@ Run both services in separate terminals or deploy as `systemd` units.
 | `HOMEOPS_RULES_CONFIG` | `services/insights/rules.yaml` | Validated rule thresholds and enabled flags |
 | `TELEGRAM_BOT_TOKEN` | _(unset)_ | Telegram Bot API token |
 | `TELEGRAM_CHAT_ID` | _(unset)_ | Telegram chat ID for alerts |
+| `GEMINI_API_KEY` | _(unset)_ | Provider credential required only when proactive insight is enabled |
+| `HOMEOPS_PROACTIVE_INSIGHT_ENABLED` | `false` | Enable bounded LLM explanations for validated runtime anomalies |
+| `HOMEOPS_PROACTIVE_INSIGHT_PROVIDER` | `gemini` | Provider adapter name; unsupported values fail closed |
+| `HOMEOPS_PROACTIVE_INSIGHT_MODEL` | `gemini-2.5-flash` | Model passed to the selected provider |
+| `HOMEOPS_PROACTIVE_INSIGHT_LOOKBACK_HOURS` | `48` | HVAC context lookback, bounded to 1–168 hours |
+| `HOMEOPS_PROACTIVE_INSIGHT_MAX_CONTEXT_CHARS` | `8000` | Maximum context sent to the provider |
+| `HOMEOPS_PROACTIVE_INSIGHT_MAX_OUTPUT_CHARS` | `1200` | Maximum provider response retained/delivered |
+| `HOMEOPS_PROACTIVE_INSIGHT_TIMEOUT_S` | `10` | Provider and Telegram timeout, bounded to 1–10 seconds |
+| `HOMEOPS_PROACTIVE_INSIGHT_DAILY_BUDGET` | `3` | Maximum provider calls per UTC day |
+| `HOMEOPS_PROACTIVE_INSIGHT_STATE` | `state/consumer/proactive-insight-state.json` | Atomic state for successful-ID deduplication and daily budget |
 
 The consumer loads `services/insights/rules.yaml` once at startup. It controls
 the thresholds and `enabled` flag for floor-runtime anomalies, no-response and
@@ -360,7 +375,7 @@ PYTHONPATH=services/consumer:services/observer:services/insights:dashboard/backe
 NODE_ENV=test npm --prefix dashboard/frontend test
 ```
 
-1102 Python tests cover observer reconnect logic, consumer event derivation, floor-2 long-call warning and escalation, thermostat tracking, heating cycle analytics, consumer state persistence, Prometheus metrics gauge updates, the FastAPI backend, Ask HomeOps authentication/quota/budget/observability/prompt-safety guards, deployment smoke checks, insights engine rules, historical anomaly replay/reporting, multi-zone impact analysis, hourly zone-call frequency reporting, the floor-call data-model contract, daily furnace temperature/runtime scatter export, the self-contained HTML trend report, temperature-adjusted runtime anomaly analysis, zone cooling-curve heat-loss analysis, per-zone furnace-runtime-per-degree efficiency analysis, per-zone time-to-temperature modeling, natural-language thermal query context composition, multi-zone scheduling query safety, shared rule configuration validation, enabled-rule gates, outdoor-temperature storm detection, direct consumer import-path validation, staged Home Assistant mitigation configuration, event logging, automatic rollback, mitigation end-to-end replay, and test-count validation. The frontend has 34 React component tests. The canonical counts live in [`docs/test-counts.json`](docs/test-counts.json) and are verified against CI runner output.
+1132 Python tests cover observer reconnect logic, consumer event derivation, floor-2 long-call warning and escalation, thermostat tracking, heating cycle analytics, consumer state persistence, Prometheus metrics gauge updates, the FastAPI backend, Ask HomeOps authentication/quota/budget/observability/prompt-safety guards, deployment smoke checks, insights engine rules, historical anomaly replay/reporting, multi-zone impact analysis, hourly zone-call frequency reporting, the floor-call data-model contract, daily furnace temperature/runtime scatter export, the self-contained HTML trend report, temperature-adjusted runtime anomaly analysis, zone cooling-curve heat-loss analysis, per-zone furnace-runtime-per-degree efficiency analysis, per-zone time-to-temperature modeling, natural-language thermal query composition, multi-zone scheduling query safety, shared rule configuration validation, enabled-rule gates, outdoor-temperature storm detection, direct consumer import-path validation, staged Home Assistant mitigation configuration, event logging, automatic rollback, mitigation end-to-end replay, proactive anomaly insight, missing-context, replay-guard, and test-count validation. The frontend has 34 React component tests. The canonical counts live in [`docs/test-counts.json`](docs/test-counts.json) and are verified against CI runner output.
 
 The staged mitigation flow can also be replayed without live Home Assistant or
 Telegram writes:

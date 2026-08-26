@@ -21,6 +21,9 @@ Write to file:
     python3 hvac_context.py --output /tmp/hvac_context.txt
 
 Revision history:
+  2026-08-26  Include validated floor-runtime anomaly events in the bounded
+              warning context so proactive explanations can see their trigger
+              without admitting arbitrary event schemas into the prompt.
   2026-08-21  Derive daily-summary date selection from the same explicit UTC
               reference time as context generation so one-hour lookbacks remain
               correct during the first UTC hour.
@@ -74,6 +77,7 @@ RELEVANT_SCHEMAS = {
     "homeops.consumer.floor_2_long_call_warning.v1",
     "homeops.consumer.furnace_short_call_warning.v1",
     "homeops.consumer.floor_not_responding.v1",
+    "homeops.consumer.floor_runtime_anomaly.v1",
     "homeops.consumer.anomaly_detected.v1",
     "homeops.consumer.observer_silence_alert.v1",
 }
@@ -343,6 +347,7 @@ def _build_warnings_section(events: list[dict[str, Any]], since: datetime) -> st
         "homeops.consumer.floor_2_long_call_warning.v1": "Floor 2 long call",
         "homeops.consumer.furnace_short_call_warning.v1": "Furnace short call",
         "homeops.consumer.floor_not_responding.v1": "Floor not responding",
+        "homeops.consumer.floor_runtime_anomaly.v1": "Floor runtime anomaly",
         "homeops.consumer.anomaly_detected.v1": "Anomaly detected",
         "homeops.consumer.observer_silence_alert.v1": "Observer silence",
     }
