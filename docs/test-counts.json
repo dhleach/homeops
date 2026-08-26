@@ -1,8 +1,8 @@
 {
   "schema": "homeops.test-counts.v1",
-  "python": 1102,
+  "python": 1131,
   "react": 34,
-  "total": 1136,
+  "total": 1165,
   "sources": {
     "python": "pytest JUnit XML report",
     "react": "Vitest JSON reporter"

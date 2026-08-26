@@ -770,9 +770,14 @@ Fires at end-of-day when a floor's daily heating runtime significantly exceeds i
 historical baseline. Evaluated after `furnace_daily_summary.v1` is written, once per floor
 per day.
 
-**Telegram alert:** A Telegram message is sent when this event fires (once per floor per
-day at rollover). Message includes floor label, date, runtime vs. baseline, and severity.
-Fires in both the live main loop and the playback phase.
+**Telegram alert:** A deterministic Telegram message is sent when this event fires (once per
+floor per day at rollover). Message includes floor label, date, runtime vs. baseline, and
+severity. Fires in both the live main loop and the playback phase.
+
+**Proactive insight:** When `HOMEOPS_PROACTIVE_INSIGHT_ENABLED=true` and the provider,
+Telegram, and context guards pass, the consumer also emits a bounded
+`proactive_anomaly_insight.v1` audit event and sends a plain-English explanation. The
+feature is disabled by default; it never changes thermostat/Home Assistant state.
 
 **Guards:**
 - Requires at least **3 prior data points** in the lookback window — skips if history is
@@ -795,11 +800,14 @@ today (prevents circular reference with the current-day summary).
 | `data.floor` | string | caller | Floor identifier, e.g. `"floor_2"`. |
 | `data.runtime_s` | int | today's daily summary | Today's total heating runtime in seconds. |
 | `data.baseline_mean_s` | float | rolling history | Mean daily runtime over the lookback window. |
+| `data.baseline_stddev_s` | float | rolling history | Standard deviation of the baseline runtime samples. |
 | `data.threshold_multiplier` | float | config (default 1.5) | Multiplier applied to mean to compute threshold. |
 | `data.threshold_s` | float | computed | `baseline_mean_s × threshold_multiplier` — the value `runtime_s` exceeded. |
 | `data.lookback_days` | int | config (default 14) | Number of prior days included in baseline. |
 | `data.history_count` | int | computed | Actual number of data points used (≤ `lookback_days`). |
 | `data.date` | string | caller | Date of the anomaly, `"YYYY-MM-DD"`. |
+| `data.confidence` | float | confidence rule | Confidence score in the range 0–1. |
+| `data.severity` | string | confidence rule | `low`, `medium`, or `high`. |
 
 ### JSON Example
 
@@ -817,6 +825,64 @@ today (prevents circular reference with the current-day summary).
     "lookback_days": 14,
     "history_count": 12,
     "date": "2026-03-29"
+  }
+}
+```
+
+---
+
+## Event: `homeops.consumer.proactive_anomaly_insight.v1`
+
+Records the result of the optional LLM explanation attempt for a validated
+`floor_runtime_anomaly.v1` event. The consumer writes one audit record for a
+non-duplicate evaluation, including disabled and fail-closed outcomes. A
+successful replay is identified by the stable `insight_id` and does not produce
+another delivery or audit line.
+
+The trigger allowlist currently contains only
+`homeops.consumer.floor_runtime_anomaly.v1`. The coordinator copies only the
+documented anomaly fields into the prompt; arbitrary event fields and messages
+are discarded. Context, prompt, response, timeout, and UTC-day provider-call
+limits are configurable within bounded ranges. The default path is disabled.
+
+### Field Table
+
+| Field | Type | Description |
+|---|---|---|
+| `schema` | string | Always `homeops.consumer.proactive_anomaly_insight.v1`. |
+| `source` | string | Always `consumer.v1`. |
+| `ts` | ISO 8601 string | Time the coordinator processed the evaluation. |
+| `data.insight_id` | string \| null | Stable SHA-256-derived ID of the allowlisted anomaly contract; null when validation rejects the input. |
+| `data.trigger_schema` | string \| null | Validated trigger schema; null for a rejected input. |
+| `data.status` | string | `sent`, `disabled`, `configuration_error`, `insufficient_context`, `context_error`, `provider_error`, `delivery_error`, `state_error`, `budget_exhausted`, or `rejected`. |
+| `data.provider` | string \| null | Provider adapter name, currently `gemini` in the production factory. |
+| `data.model` | string \| null | Provider model identifier. |
+| `data.context_chars` | int | Number of context characters considered before prompt construction. |
+| `data.prompt_chars` | int | Number of prompt characters sent to the provider, or `0` when no prompt was sent. |
+| `data.response_chars` | int | Number of provider-result characters retained, or `0` when no result was available. |
+| `data.delivery_status` | string | `sent`, `failed`, `sent_untracked`, `already_sent`, or `not_attempted`. |
+| `data.error_code` | string \| null | Stable failure code when the attempt did not complete successfully. |
+| `data.response_text` | string (optional) | Bounded provider result retained for `sent` or delivery-failure audit records. |
+
+### JSON Example
+
+```json
+{
+  "schema": "homeops.consumer.proactive_anomaly_insight.v1",
+  "source": "consumer.v1",
+  "ts": "2026-08-26T17:00:00+00:00",
+  "data": {
+    "insight_id": "anomaly-0123456789abcdef01234567",
+    "trigger_schema": "homeops.consumer.floor_runtime_anomaly.v1",
+    "status": "sent",
+    "provider": "gemini",
+    "model": "gemini-2.5-flash",
+    "context_chars": 1840,
+    "prompt_chars": 2480,
+    "response_chars": 96,
+    "delivery_status": "sent",
+    "error_code": null,
+    "response_text": "Floor 2 ran well above its baseline. Check airflow at the floor-2 vents and the filter."
   }
 }
 ```
