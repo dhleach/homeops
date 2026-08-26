@@ -1,0 +1,98 @@
+name: Publish PR lifecycle merge event
+
+on:
+  pull_request:
+    types: [closed]
+
+permissions:
+  actions: none
+  contents: none
+  pull-requests: none
+
+jobs:
+  publish:
+    name: Publish sanitized merge trigger
+    if: github.event.pull_request.merged == true && github.event.pull_request.base.ref == 'master'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+      contents: none
+      pull-requests: none
+    env:
+      DELIVERY_ID: github:actions:${{ github.run_id }}:${{ github.run_attempt }}
+
+    steps:
+      # Do not check out or execute PR-controlled code.  The event payload is
+      # the only input needed to create the bounded trigger projection.
+      - name: Build sanitized trigger projection
+        run: |
+          python3 - "$GITHUB_EVENT_PATH" "$RUNNER_TEMP/pr-lifecycle-trigger.json" <<'PY'
+          import json
+          import os
+          import re
+          import sys
+          from datetime import datetime, timezone
+          from pathlib import Path
+
+          event_path = Path(sys.argv[1])
+          output_path = Path(sys.argv[2])
+          payload = json.loads(event_path.read_text(encoding="utf-8"))
+          pull_request = payload["pull_request"]
+          repository = payload["repository"]["full_name"]
+          body = pull_request.get("body") or ""
+          marker_prefix = "<!-- openclaw-pr-lifecycle:v1"
+          marker_pattern = re.compile(
+              r"<!-- openclaw-pr-lifecycle:v1[ \t]*\r?\n"
+              r"[^\r\n]+\r?\n-->"
+          )
+          markers = marker_pattern.findall(body)
+          # Keep only the marker, never unrelated PR prose.  A malformed or
+          # duplicated marker remains visibly invalid to the host normalizer.
+          if body.count(marker_prefix) == 1 and len(markers) == 1:
+              marker_body = markers[0]
+          elif marker_prefix in body:
+              marker_body = marker_prefix
+          else:
+              marker_body = ""
+
+          base = pull_request.get("base") or {}
+          head = pull_request.get("head") or {}
+          trigger = {
+              "schema_version": "pr-lifecycle-trigger.v1",
+              "delivery_id": os.environ["DELIVERY_ID"],
+              "observed_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+              "repository": repository,
+              "source": {
+                  "provider": "github",
+                  "event_name": "pull_request",
+                  "action": payload.get("action"),
+                  "merged": pull_request.get("merged"),
+              },
+              "pull_request": {
+                  "number": pull_request.get("number"),
+                  "html_url": pull_request.get("html_url"),
+                  "title": pull_request.get("title"),
+                  "body": marker_body,
+                  "state": pull_request.get("state"),
+                  "merged": pull_request.get("merged"),
+                  "head_sha": head.get("sha"),
+                  "merge_sha": pull_request.get("merge_commit_sha"),
+                  "base_branch": base.get("ref"),
+                  "merged_at": pull_request.get("merged_at"),
+              },
+          }
+          output_path.write_text(
+              json.dumps(trigger, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+              + "\n",
+              encoding="utf-8",
+          )
+          PY
+
+      - name: Upload durable trigger artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr-lifecycle-event
+          path: ${{ runner.temp }}/pr-lifecycle-trigger.json
+          if-no-files-found: error
+          retention-days: 30

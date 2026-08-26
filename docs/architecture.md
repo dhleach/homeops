@@ -93,6 +93,11 @@ closed with `503`, and the included memory backend is local/test-only.
 - **Active CI/CD:** `.github/workflows/deploy.yml` updates the Pi first, then the
   EC2 Docker Compose backend; `.github/workflows/frontend-deploy.yml` builds
   and publishes the React app to S3/CloudFront.
+- **PR lifecycle signal:** .github/workflows/pr-lifecycle-merge.yml runs only
+  for a merged pull request targeting master. It publishes a bounded,
+  marker-only pr-lifecycle-event artifact for the private OpenClaw
+  reconciliation backstop; it does not deploy, expose a webhook, or execute
+  pull-request code.
 - **Active infrastructure:** Terraform provisions the EC2 host, Elastic IP,
   DNS, CloudFront, S3, certificates, IAM, and host bootstrap. The EC2
   bootstrap can join the Tailnet and an optional k3s cluster.
