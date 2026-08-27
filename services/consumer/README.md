@@ -21,6 +21,7 @@ For the host/network boundary around this service, see the repository-level
 - [In-Flight Floor-2 Warning](#in-flight-floor-2-warning)
 - [Proactive Anomaly Insight](#proactive-anomaly-insight)
 - [Thermal prediction target contract](#thermal-prediction-target-contract)
+- [Thermal prediction feature schema](#thermal-prediction-feature-schema)
 - [Read-only multi-zone scheduling query](#read-only-multi-zone-scheduling-query)
 - [Bootstrap Behavior](#bootstrap-behavior)
 - [Configuration Reference](#configuration-reference)
@@ -942,6 +943,19 @@ rules, and explicit treatment for incomplete or censored sessions. It does
 not change the consumer or imply that cooling data is currently available.
 The existing `zone_time_to_temp.v1` history remains heating evidence until a
 label builder snapshots the starting mode and setpoint correctly.
+
+## Thermal prediction feature schema
+
+The point-in-time feature contract for future thermal-model training lives in
+[`docs/thermal-prediction-features.md`](../../docs/thermal-prediction-features.md).
+It defines the mode-aware start snapshot, directional setpoint gap, outdoor
+temperature freshness, concurrent-zone snapshot, local time-of-day, prior
+same-zone runtime, optional humidity/occupancy/weather fields, provenance, and
+null behavior. Every feature is sourced from information available at
+`prediction_ts` (`active_start_ts`); completed-session outcomes and future
+readings are explicitly excluded. Heat and cool share one schema, while
+cooling remains unavailable until normalized cooling-call instrumentation
+exists. This document does not change consumer events or thermostat behavior.
 
 The repository-level [`scripts/thermal_query.py`](../../scripts/thermal_query.py)
 is the LLM-facing composition layer for these read-only reports. It accepts a
