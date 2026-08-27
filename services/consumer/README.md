@@ -20,6 +20,7 @@ For the host/network boundary around this service, see the repository-level
 - [Data model reference](#data-model-reference)
 - [In-Flight Floor-2 Warning](#in-flight-floor-2-warning)
 - [Proactive Anomaly Insight](#proactive-anomaly-insight)
+- [Thermal prediction target contract](#thermal-prediction-target-contract)
 - [Read-only multi-zone scheduling query](#read-only-multi-zone-scheduling-query)
 - [Bootstrap Behavior](#bootstrap-behavior)
 - [Configuration Reference](#configuration-reference)
@@ -930,6 +931,17 @@ This analysis does not add a consumer event schema, change thermostat
 settings, or modify consumer state. See
 [`docs/time-to-temp-2026-08.md`](../../docs/time-to-temp-2026-08.md) for the
 latest Pi-history validation and its telemetry limitations.
+
+## Thermal prediction target contract
+
+The canonical target definitions for future mode-aware ML work live in
+[`docs/thermal-prediction-targets.md`](../../docs/thermal-prediction-targets.md).
+That contract defines per-zone `time_to_setpoint_s` and `zone_runtime_s`
+labels, the call-start prediction boundary, directional heat/cool crossing
+rules, and explicit treatment for incomplete or censored sessions. It does
+not change the consumer or imply that cooling data is currently available.
+The existing `zone_time_to_temp.v1` history remains heating evidence until a
+label builder snapshots the starting mode and setpoint correctly.
 
 The repository-level [`scripts/thermal_query.py`](../../scripts/thermal_query.py)
 is the LLM-facing composition layer for these read-only reports. It accepts a
