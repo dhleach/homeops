@@ -154,6 +154,11 @@ explicit HA event data for the consumer to validate and translate.
 > also drive the urgent Telegram alert when the consumer has Telegram
 > credentials configured. See `services/consumer/` for details.
 
+For downstream ML label semantics, see the repository-level
+[`docs/thermal-prediction-targets.md`](../../docs/thermal-prediction-targets.md).
+The observer preserves raw climate state changes; it does not infer missing
+session boundaries or manufacture cooling labels.
+
 ---
 
 ## Entity Reference
