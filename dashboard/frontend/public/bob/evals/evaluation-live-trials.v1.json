@@ -1,0 +1,380 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "schema_version": "evaluation-live-trials.v1",
+  "report_id": "evaluation-live-trials:dashboard-scripted-fixture:v1",
+  "status": "unknown",
+  "mode": "scripted",
+  "versions": {
+    "report": "evaluation-live-trials.v1",
+    "config": "evaluation-live-trials-config.v1",
+    "dataset": "agent-eval-regression.v1",
+    "prompt": "public-historical-scenario.v1",
+    "harness": "openclaw-evaluation-sandbox.v1",
+    "rubric": "open-ended-quality.v1",
+    "models": ["scripted/model-a", "scripted/model-b"]
+  },
+  "execution": {
+    "sandbox_only": true,
+    "model_network_enabled": false,
+    "tool_network_enabled": false,
+    "external_mutations_enabled": false,
+    "production_path_enabled": false,
+    "max_concurrency": 1,
+    "fast_pr_gate": "separate_and_untouched",
+    "python": "3.11",
+    "runtime": "CPython",
+    "credential_boundary": "adapter-owned"
+  },
+  "budget": {
+    "max_trials": 4,
+    "max_total_cost_usd": 1.0,
+    "max_total_tokens": 1000,
+    "max_duration_seconds": 60.0,
+    "trials_started": 4,
+    "cost_usd": 0.31,
+    "total_tokens": 620,
+    "elapsed_seconds": 0.42
+  },
+  "rate_limit": {
+    "minimum_interval_seconds": 0.0,
+    "max_concurrency": 1,
+    "ordering": "sequential"
+  },
+  "summary": {
+    "models": 2,
+    "scenarios": 2,
+    "trials_requested": 4,
+    "trials_recorded": 4,
+    "passed": 3,
+    "failed": 0,
+    "unknown": 1,
+    "blocked": 0
+  },
+  "models": {
+    "scripted/model-a": {
+      "model": "scripted/model-a",
+      "trials": 2,
+      "cases": 2,
+      "trials_per_case": 1,
+      "known_cases": 2,
+      "unknown_cases": 0,
+      "pass_at_k": 1.0,
+      "pass_pow_k": 1.0,
+      "latency_ms": {"p50": 240.0, "p95": 300.0},
+      "retries": 0,
+      "token_usage": {
+        "input_tokens": 180.0,
+        "output_tokens": 100.0,
+        "total_tokens": 280.0
+      },
+      "cost_usd": 0.13,
+      "quality_statuses": {"pass": 2},
+      "failure_categories": []
+    },
+    "scripted/model-b": {
+      "model": "scripted/model-b",
+      "trials": 2,
+      "cases": 2,
+      "trials_per_case": 1,
+      "known_cases": 1,
+      "unknown_cases": 1,
+      "pass_at_k": 1.0,
+      "pass_pow_k": 1.0,
+      "latency_ms": {"p50": 260.0, "p95": 340.0},
+      "retries": 1,
+      "token_usage": {
+        "input_tokens": 210.0,
+        "output_tokens": 130.0,
+        "total_tokens": 340.0
+      },
+      "cost_usd": 0.18,
+      "quality_statuses": {"pass": 1, "unknown": 1},
+      "failure_categories": [
+        {"category": "quality:insufficient_evidence", "count": 1}
+      ]
+    }
+  },
+  "failure_categories": [
+    {"category": "quality:insufficient_evidence", "count": 1}
+  ],
+  "calibration": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "schema_version": "evaluation-calibration.v1",
+    "status": "passed",
+    "labels_received": 3,
+    "known_labels": 2,
+    "unknown_labels": 1,
+    "agreement_rate": 1.0,
+    "minimum_agreement": 0.8,
+    "min_known_labels": 2,
+    "dimensions": {
+      "quality": {
+        "labels": 2,
+        "known": 2,
+        "unknown": 0,
+        "agreements": 2,
+        "agreement_rate": 1.0
+      },
+      "groundedness": {
+        "labels": 1,
+        "known": 0,
+        "unknown": 1,
+        "agreements": 0,
+        "agreement_rate": null
+      }
+    }
+  },
+  "artifacts": {
+    "aggregate_json": "evaluation-live-trials.v1.json",
+    "trial_evidence": "trials/<trial_id>.json",
+    "calibration_json": "evaluation-calibration.v1.json",
+    "raw_model_outputs_published": false,
+    "raw_prompts_published": false
+  },
+  "trials": [
+    {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "schema_version": "evaluation-live-trial.v1",
+      "trial_id": "scripted-model-a-openclaw-regression-notion-url-key-drift-trial-1",
+      "case_id": "openclaw-regression-notion-url-key-drift",
+      "family": "notion_deduplication",
+      "model": "scripted/model-a",
+      "trial_index": 1,
+      "seed": 1,
+      "status": "passed",
+      "success": true,
+      "failure_categories": [],
+      "trace_id": "scripted-model-a-notion-trial-1:trace",
+      "trace_ref": "trials/scripted-model-a-openclaw-regression-notion-url-key-drift-trial-1.json",
+      "prompt": {
+        "id": "public-historical-scenario",
+        "version": 1,
+        "fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "message_count": 2,
+        "roles": ["system", "user"]
+      },
+      "harness": {"id": "openclaw-evaluation-sandbox", "version": "v1"},
+      "environment": {
+        "python": "3.11",
+        "implementation": "CPython",
+        "model_network_enabled": false,
+        "tool_network_enabled": false,
+        "external_mutations_enabled": false,
+        "production_path_enabled": false,
+        "credential_boundary": "adapter-owned"
+      },
+      "budget": {
+        "max_trials": 4,
+        "max_total_cost_usd": 1.0,
+        "max_total_tokens": 1000,
+        "max_duration_seconds": 60.0,
+        "min_interval_seconds": 0.0,
+        "trial_index": 1
+      },
+      "metrics": {
+        "latency_ms": 220.0,
+        "retries": 0,
+        "tool_calls": 2,
+        "input_tokens": 90.0,
+        "output_tokens": 50.0,
+        "total_tokens": 140.0,
+        "cost_usd": 0.06
+      },
+      "response": {
+        "type": "dict",
+        "fingerprint": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "quality": {
+        "overall": "pass",
+        "reason_code": "rubric_passed",
+        "dimensions": {
+          "quality": {"status": "pass", "score": 0.9, "confidence": 0.95, "reason_code": "clear", "evidence_count": 1},
+          "groundedness": {"status": "pass", "score": 0.9, "confidence": 0.95, "reason_code": "grounded", "evidence_count": 1}
+        }
+      }
+    },
+    {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "schema_version": "evaluation-live-trial.v1",
+      "trial_id": "scripted-model-a-openclaw-regression-builtin-hidden-location-trial-1",
+      "case_id": "openclaw-regression-builtin-hidden-location",
+      "family": "job_location",
+      "model": "scripted/model-a",
+      "trial_index": 1,
+      "seed": 1,
+      "status": "passed",
+      "success": true,
+      "failure_categories": [],
+      "trace_id": "scripted-model-a-builtin-trial-1:trace",
+      "trace_ref": "trials/scripted-model-a-openclaw-regression-builtin-hidden-location-trial-1.json",
+      "prompt": {
+        "id": "public-historical-scenario",
+        "version": 1,
+        "fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "message_count": 2,
+        "roles": ["system", "user"]
+      },
+      "harness": {"id": "openclaw-evaluation-sandbox", "version": "v1"},
+      "environment": {
+        "python": "3.11",
+        "implementation": "CPython",
+        "model_network_enabled": false,
+        "tool_network_enabled": false,
+        "external_mutations_enabled": false,
+        "production_path_enabled": false,
+        "credential_boundary": "adapter-owned"
+      },
+      "budget": {
+        "max_trials": 4,
+        "max_total_cost_usd": 1.0,
+        "max_total_tokens": 1000,
+        "max_duration_seconds": 60.0,
+        "min_interval_seconds": 0.0,
+        "trial_index": 1
+      },
+      "metrics": {
+        "latency_ms": 300.0,
+        "retries": 0,
+        "tool_calls": 2,
+        "input_tokens": 90.0,
+        "output_tokens": 50.0,
+        "total_tokens": 140.0,
+        "cost_usd": 0.07
+      },
+      "response": {
+        "type": "dict",
+        "fingerprint": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      },
+      "quality": {
+        "overall": "pass",
+        "reason_code": "rubric_passed",
+        "dimensions": {
+          "quality": {"status": "pass", "score": 0.92, "confidence": 0.96, "reason_code": "clear", "evidence_count": 1},
+          "groundedness": {"status": "pass", "score": 0.91, "confidence": 0.96, "reason_code": "grounded", "evidence_count": 1}
+        }
+      }
+    },
+    {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "schema_version": "evaluation-live-trial.v1",
+      "trial_id": "scripted-model-b-openclaw-regression-notion-url-key-drift-trial-1",
+      "case_id": "openclaw-regression-notion-url-key-drift",
+      "family": "notion_deduplication",
+      "model": "scripted/model-b",
+      "trial_index": 1,
+      "seed": 1,
+      "status": "passed",
+      "success": true,
+      "failure_categories": [],
+      "trace_id": "scripted-model-b-notion-trial-1:trace",
+      "trace_ref": "trials/scripted-model-b-openclaw-regression-notion-url-key-drift-trial-1.json",
+      "prompt": {
+        "id": "public-historical-scenario",
+        "version": 1,
+        "fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "message_count": 2,
+        "roles": ["system", "user"]
+      },
+      "harness": {"id": "openclaw-evaluation-sandbox", "version": "v1"},
+      "environment": {
+        "python": "3.11",
+        "implementation": "CPython",
+        "model_network_enabled": false,
+        "tool_network_enabled": false,
+        "external_mutations_enabled": false,
+        "production_path_enabled": false,
+        "credential_boundary": "adapter-owned"
+      },
+      "budget": {
+        "max_trials": 4,
+        "max_total_cost_usd": 1.0,
+        "max_total_tokens": 1000,
+        "max_duration_seconds": 60.0,
+        "min_interval_seconds": 0.0,
+        "trial_index": 1
+      },
+      "metrics": {
+        "latency_ms": 260.0,
+        "retries": 1,
+        "tool_calls": 2,
+        "input_tokens": 105.0,
+        "output_tokens": 65.0,
+        "total_tokens": 170.0,
+        "cost_usd": 0.08
+      },
+      "response": {
+        "type": "dict",
+        "fingerprint": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      },
+      "quality": {
+        "overall": "pass",
+        "reason_code": "rubric_passed",
+        "dimensions": {
+          "quality": {"status": "pass", "score": 0.88, "confidence": 0.9, "reason_code": "clear", "evidence_count": 1},
+          "groundedness": {"status": "pass", "score": 0.87, "confidence": 0.9, "reason_code": "grounded", "evidence_count": 1}
+        }
+      }
+    },
+    {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "schema_version": "evaluation-live-trial.v1",
+      "trial_id": "scripted-model-b-openclaw-regression-builtin-hidden-location-trial-1",
+      "case_id": "openclaw-regression-builtin-hidden-location",
+      "family": "job_location",
+      "model": "scripted/model-b",
+      "trial_index": 1,
+      "seed": 1,
+      "status": "unknown",
+      "success": null,
+      "failure_categories": ["quality:insufficient_evidence"],
+      "trace_id": "scripted-model-b-builtin-trial-1:trace",
+      "trace_ref": "trials/scripted-model-b-openclaw-regression-builtin-hidden-location-trial-1.json",
+      "prompt": {
+        "id": "public-historical-scenario",
+        "version": 1,
+        "fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "message_count": 2,
+        "roles": ["system", "user"]
+      },
+      "harness": {"id": "openclaw-evaluation-sandbox", "version": "v1"},
+      "environment": {
+        "python": "3.11",
+        "implementation": "CPython",
+        "model_network_enabled": false,
+        "tool_network_enabled": false,
+        "external_mutations_enabled": false,
+        "production_path_enabled": false,
+        "credential_boundary": "adapter-owned"
+      },
+      "budget": {
+        "max_trials": 4,
+        "max_total_cost_usd": 1.0,
+        "max_total_tokens": 1000,
+        "max_duration_seconds": 60.0,
+        "min_interval_seconds": 0.0,
+        "trial_index": 1
+      },
+      "metrics": {
+        "latency_ms": 340.0,
+        "retries": 1,
+        "tool_calls": 1,
+        "input_tokens": 105.0,
+        "output_tokens": 65.0,
+        "total_tokens": 170.0,
+        "cost_usd": 0.10
+      },
+      "response": {
+        "type": "dict",
+        "fingerprint": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+      },
+      "quality": {
+        "overall": "unknown",
+        "reason_code": "insufficient_confidence",
+        "dimensions": {
+          "quality": {"status": "unknown", "score": null, "confidence": 0.4, "reason_code": "insufficient_confidence", "evidence_count": 0},
+          "groundedness": {"status": "unknown", "score": null, "confidence": 0.4, "reason_code": "insufficient_confidence", "evidence_count": 0}
+        }
+      }
+    }
+  ]
+}

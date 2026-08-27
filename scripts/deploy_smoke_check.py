@@ -8,6 +8,9 @@ Revision history:
               partially populated API response cannot pass the release gate.
   2026-08-21  Validate that the deployed OpenAPI contract includes the authenticated
               diagnostic route and its safe auth/quota response set before release.
+  2026-08-27  Added an opt-in Bob evaluation route check that validates the short
+              CloudFront path and the published artifacts' offline, redacted,
+              non-production boundary after the separate Terraform rollout.
 """
 
 from __future__ import annotations
@@ -22,6 +25,7 @@ from urllib.request import Request, urlopen
 
 DEFAULT_FRONTEND_URL = "https://homeops.now"
 DEFAULT_API_URL = "https://api.homeops.now"
+DEFAULT_BOB_EVALUATION_PATH = "/bob/evals/"
 _MAX_BODY_BYTES = 1_000_000
 
 
@@ -86,6 +90,90 @@ def _check_frontend(base_url: str, fetcher: Fetcher, timeout: float) -> str:
     if missing:
         raise SmokeCheckError(f"{response.url}: frontend missing markers: {', '.join(missing)}")
     return "frontend: HTTP 200 and SPA shell present"
+
+
+def _check_bob_evaluation(base_url: str, fetcher: Fetcher, timeout: float) -> str:
+    """Verify the public Bob route and its safe evaluation artifact boundary."""
+    page_response = fetcher(_join(base_url, DEFAULT_BOB_EVALUATION_PATH), timeout)
+    _require_status(page_response)
+    page = page_response.body.decode("utf-8", errors="replace").lower()
+    required_markers = (
+        "evaluation observability",
+        'id="gate-status"',
+        "optional live-model observations",
+    )
+    missing = [marker for marker in required_markers if marker not in page]
+    if missing:
+        raise SmokeCheckError(
+            f"{page_response.url}: Bob evaluation route missing markers: {', '.join(missing)}"
+        )
+
+    report_response = fetcher(
+        _join(base_url, f"{DEFAULT_BOB_EVALUATION_PATH}evaluation-report.v1.json"), timeout
+    )
+    _require_status(report_response)
+    report = _json(report_response)
+    if not isinstance(report, dict):
+        raise SmokeCheckError(f"{report_response.url}: deterministic report is not an object")
+    if report.get("schema_version") != "evaluation-report.v1":
+        raise SmokeCheckError(f"{report_response.url}: unexpected deterministic report schema")
+    if report.get("mode") != "deterministic" or report.get("status") != "passed":
+        raise SmokeCheckError(
+            f"{report_response.url}: deterministic report is not a passed release result"
+        )
+    report_execution = report.get("execution")
+    if not isinstance(report_execution, dict):
+        raise SmokeCheckError(f"{report_response.url}: deterministic execution metadata is missing")
+    if (
+        any(
+            report_execution.get(field) is not False
+            for field in ("network_enabled", "external_mutations_enabled", "credentials_loaded")
+        )
+        or report_execution.get("model_calls") != 0
+    ):
+        raise SmokeCheckError(
+            f"{report_response.url}: deterministic report does not prove offline execution"
+        )
+    report_artifacts = report.get("artifacts")
+    if (
+        not isinstance(report_artifacts, dict)
+        or report_artifacts.get("seeded_traces_published") is not False
+    ):
+        raise SmokeCheckError(f"{report_response.url}: seeded traces are not withheld")
+    release_gate = report.get("release_gate")
+    if not isinstance(release_gate, dict) or release_gate.get("status") != "passed":
+        raise SmokeCheckError(f"{report_response.url}: release gate is not passed")
+
+    live_response = fetcher(
+        _join(base_url, f"{DEFAULT_BOB_EVALUATION_PATH}evaluation-live-trials.v1.json"), timeout
+    )
+    _require_status(live_response)
+    live = _json(live_response)
+    if not isinstance(live, dict):
+        raise SmokeCheckError(f"{live_response.url}: live-trial fixture is not an object")
+    if live.get("schema_version") != "evaluation-live-trials.v1" or live.get("mode") != "scripted":
+        raise SmokeCheckError(
+            f"{live_response.url}: live-trial artifact is not the scripted fixture"
+        )
+    live_execution = live.get("execution")
+    if not isinstance(live_execution, dict) or any(
+        live_execution.get(field) is not False
+        for field in (
+            "model_network_enabled",
+            "tool_network_enabled",
+            "external_mutations_enabled",
+            "production_path_enabled",
+        )
+    ):
+        raise SmokeCheckError(f"{live_response.url}: live-trial fixture is not sandbox-only")
+    live_artifacts = live.get("artifacts")
+    if not isinstance(live_artifacts, dict) or any(
+        live_artifacts.get(field) is not False
+        for field in ("raw_model_outputs_published", "raw_prompts_published")
+    ):
+        raise SmokeCheckError(f"{live_response.url}: raw live-trial material is not withheld")
+
+    return "bob/evals: public route and redacted deterministic/live artifacts are safe"
 
 
 def _check_api(base_url: str, fetcher: Fetcher, timeout: float) -> list[str]:
@@ -180,9 +268,12 @@ def run_smoke_checks(
     timeout: float = 15.0,
     include_observability: bool = True,
     fetcher: Fetcher = fetch_url,
+    include_bob_evaluation: bool = False,
 ) -> list[str]:
     """Run all release checks in sequence and return human-readable results."""
     results = [_check_frontend(frontend_url, fetcher, timeout)]
+    if include_bob_evaluation:
+        results.append(_check_bob_evaluation(frontend_url, fetcher, timeout))
     results.extend(_check_api(api_url, fetcher, timeout))
     if include_observability:
         results.extend(_check_observability(api_url, fetcher, timeout))
@@ -199,6 +290,11 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Only check the frontend and API; useful before Grafana is provisioned.",
     )
+    parser.add_argument(
+        "--check-bob-evaluation",
+        action="store_true",
+        help="Also verify the deployed /bob/evals/ route and redacted artifacts.",
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -207,6 +303,7 @@ def main(argv: list[str] | None = None) -> int:
             api_url=args.api_url,
             timeout=args.timeout,
             include_observability=not args.skip_observability,
+            include_bob_evaluation=args.check_bob_evaluation,
         )
     except SmokeCheckError as exc:
         print(f"FAIL: {exc}", file=sys.stderr)

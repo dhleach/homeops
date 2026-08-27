@@ -1,0 +1,332 @@
+<!doctype html>
+<!--
+Revision history:
+  2026-08-27  Add an optional redacted live-trial/calibration view beside the
+              authoritative deterministic report, with an explicit no-artifact
+              state and no-gating boundary.
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OpenClaw evaluation observability</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #182338;
+      --muted: #65718a;
+      --line: #dce3ef;
+      --panel: #ffffff;
+      --wash: #f4f7fb;
+      --blue: #356ae6;
+      --green: #137a4b;
+      --green-wash: #ddf8ea;
+      --red: #a52a35;
+      --red-wash: #ffe4e6;
+      --amber: #8a5a00;
+      --amber-wash: #fff4d6;
+      font: 15px/1.45 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; color: var(--ink); background: var(--wash); }
+    main { max-width: 1220px; margin: 0 auto; padding: 32px 22px 60px; }
+    header { margin-bottom: 22px; }
+    .eyebrow { color: var(--blue); font-size: .78rem; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }
+    h1 { margin: 5px 0 7px; font-size: clamp(2rem, 4vw, 3.2rem); letter-spacing: -.04em; }
+    h2 { margin: 30px 0 10px; font-size: 1.25rem; }
+    p { margin: 7px 0; }
+    .muted { color: var(--muted); }
+    .banner { align-items: center; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; display: flex; gap: 14px; justify-content: space-between; padding: 15px 17px; }
+    .badge { border-radius: 999px; display: inline-block; font-weight: 800; padding: 5px 10px; }
+    .pass { background: var(--green-wash); color: var(--green); }
+    .fail { background: var(--red-wash); color: var(--red); }
+    .unknown { background: var(--amber-wash); color: var(--amber); }
+    .grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(165px, 1fr)); margin: 18px 0; }
+    .card, .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; }
+    .card { padding: 15px; }
+    .card-label { color: var(--muted); font-size: .82rem; }
+    .card-value { display: block; font-size: 1.65rem; font-weight: 800; margin-top: 3px; }
+    .panel { overflow: hidden; }
+    .panel > .panel-head { border-bottom: 1px solid var(--line); padding: 13px 15px; }
+    .panel > .panel-body { padding: 0 15px; }
+    table { border-collapse: collapse; width: 100%; }
+    th, td { border-bottom: 1px solid var(--line); padding: 9px 7px; text-align: left; vertical-align: top; }
+    th { color: var(--muted); font-size: .78rem; text-transform: uppercase; letter-spacing: .04em; }
+    tr:last-child td { border-bottom: 0; }
+    .two-col { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); }
+    .bar-row { align-items: center; display: grid; gap: 9px; grid-template-columns: minmax(145px, 1fr) 3fr 45px; margin: 10px 0; }
+    .bar { background: #e8edf6; border-radius: 99px; height: 11px; overflow: hidden; }
+    .bar > span { background: var(--blue); border-radius: inherit; display: block; height: 100%; min-width: 2px; }
+    .case { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; margin: 10px 0; padding: 12px 14px; }
+    .case summary { cursor: pointer; font-weight: 750; }
+    .case-meta { color: var(--muted); font-size: .88rem; margin: 8px 0; }
+    .case table { font-size: .86rem; }
+    code { background: #edf1f7; border-radius: 4px; padding: 2px 4px; }
+    #error { background: var(--red-wash); border: 1px solid #f1b8be; border-radius: 10px; color: var(--red); display: none; padding: 12px; }
+    .optional-panel { margin-top: 28px; }
+    .optional-label { color: var(--amber); font-weight: 800; }
+    #live-error { background: var(--amber-wash); border: 1px solid #ead18b; border-radius: 10px; color: var(--amber); display: none; padding: 12px; }
+    #live-empty { background: var(--panel); border: 1px dashed #d6bd67; border-radius: 12px; color: var(--muted); display: none; padding: 16px; }
+    #live-content { display: none; }
+    .compact { font-size: .9rem; }
+    @media (max-width: 640px) { main { padding: 22px 13px 45px; } .banner { align-items: flex-start; flex-direction: column; } .bar-row { grid-template-columns: 1fr 2fr 35px; } }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div class="eyebrow">OpenClaw · agent evaluation</div>
+      <h1>Evaluation observability</h1>
+      <p class="muted">A public-safe view of deterministic release-gate evidence and optional live-model observations. The page reads adjacent redacted artifacts and never calls Gmail, a model, or the live EMAIL-13 producer.</p>
+    </header>
+
+    <div id="error" role="alert"></div>
+    <section class="banner" aria-live="polite">
+      <div><strong id="report-id">Loading report…</strong><p class="muted" id="report-context"></p></div>
+      <span class="badge" id="gate-status">Loading</span>
+    </section>
+
+    <section class="grid" aria-label="Reliability summary">
+      <div class="card"><span class="card-label">pass^k · primary</span><strong class="card-value" id="pass-pow-k">—</strong></div>
+      <div class="card"><span class="card-label">pass@k · secondary</span><strong class="card-value" id="pass-at-k">—</strong></div>
+      <div class="card"><span class="card-label">fixed gates</span><strong class="card-value" id="fixed-cases">—</strong></div>
+      <div class="card"><span class="card-label">seeded defects caught</span><strong class="card-value" id="seeded-cases">—</strong></div>
+      <div class="card"><span class="card-label">p50 / p95 logical latency</span><strong class="card-value" id="latency">—</strong></div>
+      <div class="card"><span class="card-label">total cost</span><strong class="card-value" id="cost">—</strong></div>
+    </section>
+
+    <section class="optional-panel" aria-labelledby="live-heading">
+      <h2 id="live-heading">Optional live-model observations</h2>
+      <p class="muted">These measurements are separately budgeted and non-gating. They may compare model variance and open-ended quality, but they never change the deterministic release decision above.</p>
+      <div id="live-error" role="status"></div>
+      <div id="live-empty">No optional live-trial artifact is published for this build. The deterministic evidence above remains the complete release-gate result.</div>
+      <div id="live-content">
+        <div class="banner">
+          <div><strong id="live-report-id">Loading live observations…</strong><p class="muted" id="live-context"></p></div>
+          <span class="badge unknown" id="live-status">Optional · non-gating</span>
+        </div>
+
+        <section class="grid" aria-label="Live-trial summary">
+          <div class="card"><span class="card-label">recorded trials</span><strong class="card-value" id="live-trials-count">—</strong></div>
+          <div class="card"><span class="card-label">models observed</span><strong class="card-value" id="live-model-count">—</strong></div>
+          <div class="card"><span class="card-label">Unknown outcomes</span><strong class="card-value" id="live-unknown-count">—</strong></div>
+          <div class="card"><span class="card-label">budget used</span><strong class="card-value" id="live-budget">—</strong></div>
+          <div class="card"><span class="card-label">tokens used</span><strong class="card-value" id="live-token-count">—</strong></div>
+          <div class="card"><span class="card-label">judge calibration</span><strong class="card-value" id="live-calibration-status">—</strong></div>
+        </section>
+
+        <div class="two-col">
+          <div class="panel"><div class="panel-head"><strong>Model comparison</strong></div><div class="panel-body"><table class="compact"><thead><tr><th>Model</th><th>Trials</th><th>Known / unknown cases</th><th>pass@k</th><th>pass^k</th><th>Quality</th><th>p50 / p95</th><th>Tokens</th><th>Cost</th></tr></thead><tbody id="live-models"></tbody></table></div></div>
+          <div class="panel"><div class="panel-head"><strong>Judge calibration</strong></div><div class="panel-body"><table><tbody id="live-calibration"></tbody></table><table class="compact"><thead><tr><th>Dimension</th><th>Labels</th><th>Known / unknown</th><th>Agreement</th></tr></thead><tbody id="live-calibration-dimensions"></tbody></table></div></div>
+        </div>
+
+        <h2>Live failure-category observations</h2>
+        <div class="panel"><div class="panel-body" id="live-categories"></div></div>
+
+        <h2>Redacted trial observations</h2>
+        <p class="muted">Trial rows contain bounded status and metric metadata only. Model output, prompt text, tool payloads, state, credentials, and session content are not published.</p>
+        <div class="panel"><div class="panel-body"><table class="compact"><thead><tr><th>Model</th><th>Scenario</th><th>Trial</th><th>Status</th><th>Success</th><th>Quality</th><th>Latency</th><th>Tokens</th><th>Cost</th><th>Failures</th></tr></thead><tbody id="live-trial-table"></tbody></table></div></div>
+      </div>
+    </section>
+
+    <section class="two-col">
+      <div class="panel"><div class="panel-head"><strong>Version and boundary</strong></div><div class="panel-body"><table><tbody id="versions"></tbody></table></div></div>
+      <div class="panel"><div class="panel-head"><strong>Baseline comparison</strong></div><div class="panel-body"><table><tbody id="baseline"></tbody></table></div></div>
+    </section>
+
+    <h2>Reliability and resource trends</h2>
+    <div class="panel"><div class="panel-body"><table><thead><tr><th>Run</th><th>pass^k</th><th>pass@k</th><th>p50</th><th>p95</th><th>Retries</th><th>Tokens</th><th>Cost</th></tr></thead><tbody id="trends"></tbody></table></div></div>
+
+    <h2>Failure-category heatmap</h2>
+    <div class="panel"><div class="panel-body" id="categories"></div></div>
+
+    <h2>Scenario and family heatmap</h2>
+    <div class="panel"><div class="panel-body">
+      <table><thead><tr><th>Family</th><th>Cases</th><th>Fixed passed</th><th>Seeded caught</th></tr></thead><tbody id="families"></tbody></table>
+      <table><thead><tr><th>Scenario</th><th>Family</th><th>Fixed</th><th>Seeded</th><th>Coverage</th></tr></thead><tbody id="scenario-heatmap"></tbody></table>
+    </div></div>
+
+    <h2>Redacted trace timelines</h2>
+    <p class="muted">Arguments, results, state payloads, email bodies, credentials, and session text are intentionally absent. Expand a scenario to inspect model → tool → state event metadata.</p>
+    <div id="scenarios"></div>
+  </main>
+
+  <script>
+    (() => {
+      const reportUrl = "./evaluation-report.v1.json";
+      const liveTrialsUrl = "./evaluation-live-trials.v1.json";
+      const $ = (id) => document.getElementById(id);
+      const text = (id, value) => { $(id).textContent = String(value ?? "—"); };
+      const formatRate = (value) => `${(Number(value || 0) * 100).toFixed(1)}%`;
+      const formatOptionalRate = (value) => value == null ? "Unknown" : formatRate(value);
+      const formatCost = (value) => `$${Number(value || 0).toFixed(2)}`;
+      const formatOptionalCost = (value) => value == null ? "Unknown" : formatCost(value);
+      const formatOptionalNumber = (value, suffix = "") => value == null ? "Unknown" : `${value}${suffix}`;
+      const formatStatus = (value) => String(value ?? "unknown").replaceAll("_", " ");
+      const formatQuality = (statuses) => Object.entries(statuses || {}).map(([status, count]) => `${status}: ${count}`).join(", ") || "Unknown";
+      const cell = (value) => { const node = document.createElement("td"); node.textContent = String(value ?? "—"); return node; };
+      const row = (label, value) => { const node = document.createElement("tr"); node.append(cell(label), cell(value)); return node; };
+      const setBadge = (id, label, status) => {
+        const badge = $(id);
+        const tone = status === "passed" ? "pass" : status === "unknown" ? "unknown" : "fail";
+        badge.textContent = label;
+        badge.className = `badge ${tone}`;
+      };
+
+      function renderLive(report) {
+        const content = $("live-content");
+        const empty = $("live-empty");
+        if (!report) {
+          content.style.display = "none";
+          empty.style.display = "block";
+          return;
+        }
+        content.style.display = "block";
+        empty.style.display = "none";
+        $("live-error").style.display = "none";
+        const summary = report.summary || {};
+        const execution = report.execution || {};
+        const budget = report.budget || {};
+        const calibration = report.calibration || {};
+        text("live-report-id", report.report_id);
+        text("live-context", `mode=${report.mode} · model network=${execution.model_network_enabled} · sandbox only=${execution.sandbox_only}`);
+        setBadge("live-status", `Optional · ${formatStatus(report.status)} · non-gating`, report.status);
+        text("live-trials-count", `${summary.trials_recorded || 0}/${summary.trials_requested || 0}`);
+        text("live-model-count", summary.models || 0);
+        text("live-unknown-count", summary.unknown || 0);
+        text("live-budget", `${formatOptionalCost(budget.cost_usd)} / ${formatOptionalCost(budget.max_total_cost_usd)}`);
+        text("live-token-count", `${budget.total_tokens || 0} / ${budget.max_total_tokens || 0}`);
+        text("live-calibration-status", formatStatus(calibration.status));
+
+        const models = $("live-models");
+        models.replaceChildren();
+        Object.entries(report.models || {}).forEach(([name, model]) => {
+          const node = document.createElement("tr");
+          [name, model.trials, `${model.known_cases} / ${model.unknown_cases}`, formatOptionalRate(model.pass_at_k), formatOptionalRate(model.pass_pow_k), formatQuality(model.quality_statuses), `${formatOptionalNumber(model.latency_ms?.p50)} / ${formatOptionalNumber(model.latency_ms?.p95)} ms`, formatOptionalNumber(model.token_usage?.total_tokens), formatOptionalCost(model.cost_usd)].forEach((value) => node.append(cell(value)));
+          models.append(node);
+        });
+
+        const calibrationBody = $("live-calibration");
+        calibrationBody.replaceChildren();
+        [["Status", formatStatus(calibration.status)], ["Agreement", formatOptionalRate(calibration.agreement_rate)], ["Known labels", `${calibration.known_labels || 0}/${calibration.min_known_labels || 0}`], ["Unknown labels", calibration.unknown_labels || 0], ["Minimum agreement", formatOptionalRate(calibration.minimum_agreement)]].forEach(([label, value]) => calibrationBody.append(row(label, value)));
+        const dimensions = $("live-calibration-dimensions");
+        dimensions.replaceChildren();
+        Object.entries(calibration.dimensions || {}).forEach(([name, value]) => {
+          const node = document.createElement("tr");
+          [name, value.labels, `${value.known} / ${value.unknown}`, formatOptionalRate(value.agreement_rate)].forEach((item) => node.append(cell(item)));
+          dimensions.append(node);
+        });
+
+        const categories = $("live-categories");
+        categories.replaceChildren();
+        const values = report.failure_categories || [];
+        const max = Math.max(1, ...values.map((item) => Number(item.count || 0)));
+        values.forEach((item) => {
+          const wrap = document.createElement("div"); wrap.className = "bar-row";
+          const label = document.createElement("span"); label.textContent = item.category;
+          const bar = document.createElement("div"); bar.className = "bar";
+          const fill = document.createElement("span"); fill.style.width = `${(Number(item.count || 0) / max) * 100}%`; bar.append(fill);
+          wrap.append(label, bar, cell(item.count)); categories.append(wrap);
+        });
+        if (!values.length) { const emptyCategories = document.createElement("p"); emptyCategories.className = "muted"; emptyCategories.textContent = "No live failure categories."; categories.append(emptyCategories); }
+
+        const trials = $("live-trial-table");
+        trials.replaceChildren();
+        (report.trials || []).forEach((trial) => {
+          const metrics = trial.metrics || {};
+          const node = document.createElement("tr");
+          [trial.model, trial.case_id, trial.trial_index, formatStatus(trial.status), trial.success == null ? "Unknown" : trial.success, formatStatus(trial.quality?.overall), formatOptionalNumber(metrics.latency_ms, " ms"), formatOptionalNumber(metrics.total_tokens), formatOptionalCost(metrics.cost_usd), (trial.failure_categories || []).join(", ") || "—"].forEach((value) => node.append(cell(value)));
+          trials.append(node);
+        });
+      }
+
+      function render(report) {
+        const summary = report.summary || {};
+        const quality = report.quality || {};
+        const latency = quality.latency_ms || {};
+        const baseline = report.baseline_comparison || {};
+        text("report-id", report.report_id);
+        text("report-context", `mode=${report.mode} · dataset=${report.dataset?.id} v${report.dataset?.version}`);
+        const gate = $("gate-status");
+        gate.textContent = `Release gate: ${report.release_gate?.status || report.status}`;
+        gate.className = `badge ${report.release_gate?.status === "passed" ? "pass" : "fail"}`;
+        text("pass-pow-k", formatRate(quality.pass_pow_k));
+        text("pass-at-k", formatRate(quality.pass_at_k));
+        text("fixed-cases", `${summary.fixed_cases_passed || 0}/${summary.cases || 0}`);
+        text("seeded-cases", `${summary.seeded_failures_caught || 0}/${summary.cases || 0}`);
+        text("latency", `${latency.p50 || 0} / ${latency.p95 || 0} ms`);
+        text("cost", formatCost(quality.cost_usd));
+
+        const versions = $("versions");
+        versions.replaceChildren();
+        [["Report", report.versions?.report], ["Baseline", report.versions?.baseline], ["Dataset", `${report.versions?.dataset} v${report.dataset?.version}`], ["Grader / trace", `${report.versions?.grader} / ${report.versions?.trace}`], ["Model / prompt", `${report.versions?.model} / ${report.versions?.prompt}`], ["Execution", `offline=${report.execution?.offline}, network=${report.execution?.network_enabled}`], ["Raw content", report.dashboard?.raw_content_included ? "included" : "omitted"]].forEach(([label, value]) => versions.append(row(label, value)));
+        const baselineBody = $("baseline");
+        baselineBody.replaceChildren();
+        baselineBody.append(row("Status", baseline.status || "not_compared"), row("Baseline", baseline.baseline_id || "—"), row("Critical regressions", (baseline.critical_regressions || []).length), row("Noncritical deltas", (baseline.noncritical_deltas || []).length));
+
+        const trends = $("trends");
+        trends.replaceChildren();
+        (report.trends || []).forEach((item) => {
+          const node = document.createElement("tr");
+          [item.label, formatRate(item.pass_pow_k), formatRate(item.pass_at_k), `${item.p50_latency_ms} ms`, `${item.p95_latency_ms} ms`, item.retries, item.total_tokens, formatCost(item.cost_usd)].forEach((value) => node.append(cell(value)));
+          trends.append(node);
+        });
+
+        const categories = $("categories");
+        categories.replaceChildren();
+        const values = quality.failure_categories || [];
+        const max = Math.max(1, ...values.map((item) => Number(item.count || 0)));
+        values.forEach((item) => {
+          const wrap = document.createElement("div"); wrap.className = "bar-row";
+          const label = document.createElement("span"); label.textContent = item.category;
+          const bar = document.createElement("div"); bar.className = "bar";
+          const fill = document.createElement("span"); fill.style.width = `${(Number(item.count || 0) / max) * 100}%`; bar.append(fill);
+          wrap.append(label, bar, cell(item.count)); categories.append(wrap);
+        });
+        if (!values.length) { const empty = document.createElement("p"); empty.className = "muted"; empty.textContent = "No seeded failure categories."; categories.append(empty); }
+
+        const families = $("families"); families.replaceChildren();
+        Object.entries(report.families || {}).forEach(([name, value]) => { const node = document.createElement("tr"); [name, value.cases, value.fixed_passed, value.seeded_failures_caught].forEach((item) => node.append(cell(item))); families.append(node); });
+
+        const scenarioHeatmap = $("scenario-heatmap"); scenarioHeatmap.replaceChildren();
+        (report.cases || []).forEach((item) => { const node = document.createElement("tr"); [item.id, item.family, item.fixed?.status, item.seeded?.status, (item.coverage || []).join(", ")].forEach((value) => node.append(cell(value))); scenarioHeatmap.append(node); });
+
+        const scenarios = $("scenarios"); scenarios.replaceChildren();
+        (report.cases || []).forEach((item) => {
+          const details = document.createElement("details"); details.className = "case";
+          const summaryNode = document.createElement("summary"); summaryNode.textContent = `${item.id} · ${item.family} · fixed=${item.fixed?.status} · seeded=${item.seeded?.status}`; details.append(summaryNode);
+          const meta = document.createElement("p"); meta.className = "case-meta"; meta.textContent = `Sources: ${(item.source_refs || []).join(", ")}`; details.append(meta);
+          const traces = document.createElement("p"); traces.className = "case-meta";
+          ["fixed", "seeded"].forEach((variant, index) => {
+            const value = item.trace_refs?.[variant];
+            if (typeof value !== "string" || !value.startsWith("cases/")) return;
+            if (index) traces.append(" · ");
+            const link = document.createElement("a"); link.href = value; link.textContent = `${variant} trace`;
+            traces.append(link);
+          });
+          details.append(traces);
+          const table = document.createElement("table"); const head = document.createElement("thead"); const headRow = document.createElement("tr"); ["Seq", "Event", "Model / operation", "Status"].forEach((value) => { const node = document.createElement("th"); node.textContent = value; headRow.append(node); }); head.append(headRow); table.append(head);
+          const body = document.createElement("tbody");
+          (item.fixed?.timeline || []).forEach((event) => { const eventRow = document.createElement("tr"); [event.sequence, event.event_type, event.model || event.operation || "", event.status || ""].forEach((value) => eventRow.append(cell(value))); body.append(eventRow); });
+          table.append(body); details.append(table); scenarios.append(details);
+        });
+      }
+
+      fetch(reportUrl, { cache: "no-store" }).then((response) => {
+        if (!response.ok) throw new Error(`Report fetch failed: ${response.status}`);
+        return response.json();
+      }).then(render).catch((error) => { $("error").style.display = "block"; $("error").textContent = `${error.message}. Serve this directory so the relative redacted artifact can be loaded.`; $("gate-status").textContent = "Report unavailable"; $("gate-status").className = "badge fail"; });
+
+      fetch(liveTrialsUrl, { cache: "no-store" }).then((response) => {
+        if (response.status === 404) return null;
+        if (!response.ok) throw new Error(`Live-trial artifact fetch failed: ${response.status}`);
+        return response.json();
+      }).then(renderLive).catch((error) => {
+        renderLive(null);
+        $("live-error").style.display = "block";
+        $("live-error").textContent = `${error.message}. Optional observations are unavailable; the deterministic release gate remains authoritative.`;
+      });
+    })();
+  </script>
+</body>
+</html>
