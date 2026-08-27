@@ -156,6 +156,8 @@ explicit HA event data for the consumer to validate and translate.
 
 For downstream ML label semantics, see the repository-level
 [`docs/thermal-prediction-targets.md`](../../docs/thermal-prediction-targets.md).
+For the downstream ML feature and point-in-time leakage contract, see
+[`docs/thermal-prediction-features.md`](../../docs/thermal-prediction-features.md).
 The observer preserves raw climate state changes; it does not infer missing
 session boundaries or manufacture cooling labels.
 

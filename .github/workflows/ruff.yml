@@ -47,7 +47,8 @@ jobs:
             scripts/tests/test_runtime_temp_anomalies.py scripts/tests/test_zone_heat_loss.py \
             scripts/tests/test_runtime_per_degree.py scripts/tests/test_time_to_temp.py \
             scripts/tests/test_mitigation_e2e.py scripts/tests/test_thermal_query.py \
-            scripts/tests/test_scheduling_query.py scripts/tests/test_thermal_prediction_targets_docs.py
+            scripts/tests/test_scheduling_query.py scripts/tests/test_thermal_prediction_targets_docs.py \
+            scripts/tests/test_thermal_prediction_features_docs.py
       - name: Run ruff checks
         run: |
           ruff check \
@@ -77,7 +78,8 @@ jobs:
             scripts/tests/test_runtime_temp_anomalies.py scripts/tests/test_zone_heat_loss.py \
             scripts/tests/test_runtime_per_degree.py scripts/tests/test_time_to_temp.py \
             scripts/tests/test_mitigation_e2e.py scripts/tests/test_thermal_query.py \
-            scripts/tests/test_scheduling_query.py scripts/tests/test_thermal_prediction_targets_docs.py
+            scripts/tests/test_scheduling_query.py scripts/tests/test_thermal_prediction_targets_docs.py \
+            scripts/tests/test_thermal_prediction_features_docs.py
 
   pytest:
     runs-on: ubuntu-latest

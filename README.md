@@ -76,6 +76,8 @@ Home Assistant validation boundary, see
 [`docs/mitigation-test-results.md`](docs/mitigation-test-results.md).
 For the mode-aware thermal prediction labels and incomplete-session rules, see
 [`docs/thermal-prediction-targets.md`](docs/thermal-prediction-targets.md).
+For the point-in-time thermal prediction feature schema and leakage rules, see
+[`docs/thermal-prediction-features.md`](docs/thermal-prediction-features.md).
 
 
 **Observer** connects to the Home Assistant WebSocket API, subscribes to `state_changed` events for configured entities, and writes one JSON line per event to a JSONL log. It reconnects automatically with exponential backoff.
@@ -218,6 +220,7 @@ homeops/
 │   ├── data-model.md                 # normalized floor-call session/statistics contracts
 │   ├── multi-zone-scheduling-query.md # read-only floor-2 scheduling contract and safety math
 │   ├── thermal-prediction-targets.md  # mode-aware ML target and censoring contract
+│   ├── thermal-prediction-features.md # point-in-time ML feature and leakage contract
 │   ├── test-counts.json              # CI-verified Python and React test counts
 │   └── event-schemas/
 │       └── consumer-events.md    # authoritative event schema reference
@@ -378,7 +381,7 @@ PYTHONPATH=services/consumer:services/observer:services/insights:dashboard/backe
 NODE_ENV=test npm --prefix dashboard/frontend test
 ```
 
-1134 Python tests cover observer reconnect logic, consumer event derivation, floor-2 long-call warning and escalation, thermostat tracking, heating cycle analytics, consumer state persistence, Prometheus metrics gauge updates, the FastAPI backend, Ask HomeOps authentication/quota/budget/observability/prompt-safety guards, deployment smoke checks, insights engine rules, historical anomaly replay/reporting, multi-zone impact analysis, hourly zone-call frequency reporting, the floor-call data-model contract, daily furnace temperature/runtime scatter export, the self-contained HTML trend report, temperature-adjusted runtime anomaly analysis, zone cooling-curve heat-loss analysis, per-zone furnace-runtime-per-degree efficiency analysis, per-zone time-to-temperature modeling, natural-language thermal query composition, multi-zone scheduling query safety, shared rule configuration validation, enabled-rule gates, outdoor-temperature storm detection, direct consumer import-path validation, staged Home Assistant mitigation configuration, event logging, automatic rollback, mitigation end-to-end replay, proactive anomaly insight, missing-context, replay-guard, thermal prediction target contract, and test-count validation. The frontend has 34 React component tests. The canonical counts live in [`docs/test-counts.json`](docs/test-counts.json) and are verified against CI runner output.
+1137 Python tests cover observer reconnect logic, consumer event derivation, floor-2 long-call warning and escalation, thermostat tracking, heating cycle analytics, consumer state persistence, Prometheus metrics gauge updates, the FastAPI backend, Ask HomeOps authentication/quota/budget/observability/prompt-safety guards, deployment smoke checks, insights engine rules, historical anomaly replay/reporting, multi-zone impact analysis, hourly zone-call frequency reporting, the floor-call data-model contract, daily furnace temperature/runtime scatter export, the self-contained HTML trend report, temperature-adjusted runtime anomaly analysis, zone cooling-curve heat-loss analysis, per-zone furnace-runtime-per-degree efficiency analysis, per-zone time-to-temperature modeling, natural-language thermal query composition, multi-zone scheduling query safety, shared rule configuration validation, enabled-rule gates, outdoor-temperature storm detection, direct consumer import-path validation, staged Home Assistant mitigation configuration, event logging, automatic rollback, mitigation end-to-end replay, proactive anomaly insight, missing-context, replay-guard, thermal prediction target contract, thermal prediction feature schema, and test-count validation. The frontend has 34 React component tests. The canonical counts live in [`docs/test-counts.json`](docs/test-counts.json) and are verified against CI runner output.
 
 The staged mitigation flow can also be replayed without live Home Assistant or
 Telegram writes:
