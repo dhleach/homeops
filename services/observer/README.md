@@ -165,7 +165,7 @@ session boundaries or manufacture cooling labels.
 
 ## Entity Reference
 
-The production example watches eight entities: four binary sensors, three
+The production example watches twelve entities: eight binary sensors, three
 climate thermostats, and one outdoor-temperature sensor. The observer itself
 has no hard-coded allowlist; `WATCH_ENTITIES` controls the subscription filter.
 
@@ -175,16 +175,22 @@ has no hard-coded allowlist; `WATCH_ENTITIES` controls the subscription filter.
 | `binary_sensor.floor_1_heating_call` | Floor 1 Heating Call | Floor 1 | `on` when the floor-1 zone thermostat is calling for heat |
 | `binary_sensor.floor_2_heating_call` | Floor 2 Heating Call | Floor 2 | `on` when the floor-2 zone thermostat is calling for heat |
 | `binary_sensor.floor_3_heating_call` | Floor 3 Heating Call | Floor 3 | `on` when the floor-3 zone thermostat is calling for heat |
+| `binary_sensor.floor_1_cooling_call` | Floor 1 Cooling Call | Floor 1 | `on` when the floor-1 thermostat's `hvac_action` is `cooling` |
+| `binary_sensor.floor_2_cooling_call` | Floor 2 Cooling Call | Floor 2 | `on` when the floor-2 thermostat's `hvac_action` is `cooling` |
+| `binary_sensor.floor_3_cooling_call` | Floor 3 Cooling Call | Floor 3 | `on` when the floor-3 thermostat's `hvac_action` is `cooling` |
+| `binary_sensor.ac_cooling` | AC Cooling | Whole home | Inferred `on` state when any floor cooling-call helper is `on`; not compressor telemetry |
 | `climate.floor_1_thermostat` | Floor 1 Thermostat | Floor 1 | HVAC mode plus current temperature and setpoint attributes |
 | `climate.floor_2_thermostat` | Floor 2 Thermostat | Floor 2 | HVAC mode plus current temperature and setpoint attributes |
 | `climate.floor_3_thermostat` | Floor 3 Thermostat | Floor 3 | HVAC mode plus current temperature and setpoint attributes |
 | `sensor.outdoor_temperature` | Outdoor Temperature | Environment | Outdoor temperature state in °F |
 
-The four binary sensors have states `"on"` / `"off"`; the furnace sensor tracks
-the actual burner while the per-floor sensors track zone calls. Climate states
-are HVAC modes (`heat`, `cool`, or `off`) and carry numeric attributes. A floor
-can be calling for heat while the furnace is temporarily off (e.g. between
-cycles), so the two dimensions are independent.
+The eight binary sensors have states `"on"` / `"off"`; the furnace sensor tracks
+the actual burner, the six per-floor sensors track heating/cooling calls, and
+`ac_cooling` is an inferred whole-home cooling-demand aggregate rather than
+compressor telemetry. Climate states are HVAC modes (`heat`, `cool`, or `off`)
+and carry numeric attributes. A floor can be calling for heat or cooling while
+the corresponding whole-home equipment signal is temporarily different, so
+the zone-call and whole-home dimensions are independent.
 
 ---
 
@@ -203,7 +209,7 @@ The observer loads environment variables from a dotenv file, then allows process
 ### Example `secrets/observer.env`
 
 ```dotenv
-WATCH_ENTITIES=binary_sensor.furnace_heating,binary_sensor.floor_1_heating_call,binary_sensor.floor_2_heating_call,binary_sensor.floor_3_heating_call,climate.floor_1_thermostat,climate.floor_2_thermostat,climate.floor_3_thermostat,sensor.outdoor_temperature
+WATCH_ENTITIES=binary_sensor.furnace_heating,binary_sensor.floor_1_heating_call,binary_sensor.floor_2_heating_call,binary_sensor.floor_3_heating_call,binary_sensor.floor_1_cooling_call,binary_sensor.floor_2_cooling_call,binary_sensor.floor_3_cooling_call,binary_sensor.ac_cooling,climate.floor_1_thermostat,climate.floor_2_thermostat,climate.floor_3_thermostat,sensor.outdoor_temperature
 HA_ENV_FILE=secrets/ha.env
 OBSERVER_EVENT_LOG=state/observer/events.jsonl
 ```
@@ -313,7 +319,7 @@ HA_ENV_FILE=secrets/observer.env python observer.py | python3 validate_schema.py
 | `data.new_state` is non-null and non-empty | Error |
 | Mitigation records contain the event type, zone, reason, delay, trigger reference, and outcome | Error |
 | Rollback records contain the incident, failed-attempt, trigger, guard, state, and source-event fields | Error |
-| `entity_id` is one of the 8 known entities | Warning only (printed to stderr) |
+| `entity_id` is one of the 12 known entities | Warning only (printed to stderr) |
 | Binary sensor `new_state` is `"on"`, `"off"`, or `"unavailable"` | Error |
 | `sensor.outdoor_temperature` state is a float or `"unavailable"`/`"unknown"` | Error |
 
