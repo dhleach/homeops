@@ -114,14 +114,15 @@ data "aws_iam_policy_document" "ask_homeops_runtime_read" {
     effect    = "Allow"
     actions   = ["ssm:GetParameter"]
     resources = [
-      "arn:aws:ssm:${var.aws_region}:*:parameter/homeops/${var.environment}/ask-homeops-*"
+      "arn:aws:ssm:${var.aws_region}:*:parameter/homeops/${var.environment}/ask-homeops-*",
+      "arn:aws:ssm:${var.aws_region}:*:parameter/homeops/${var.environment}/openai-api-key"
     ]
   }
 }
 
 resource "aws_iam_policy" "ask_homeops_runtime_read" {
   name        = "homeops-ec2-ask-homeops-runtime-${var.environment}"
-  description = "Allow EC2 to read Ask HomeOps OIDC and limiter runtime settings"
+  description = "Allow EC2 to read Ask HomeOps runtime settings and provider key"
   policy      = data.aws_iam_policy_document.ask_homeops_runtime_read.json
 
   tags = {

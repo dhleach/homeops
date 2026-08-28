@@ -24,7 +24,10 @@ concurrency group. A push to `master` runs:
 4. `scripts/deploy_smoke_check.py` verifies the public frontend, API,
    telemetry, Grafana, and Prometheus interfaces. Pass
    `--check-bob-evaluation` after the CloudFront route is provisioned to also
-   verify `/bob/evals/` and both redacted evaluation artifacts.
+   verify `/bob/evals/` and both redacted evaluation artifacts. Once a valid
+   demo access token is available, add `--check-diagnostic` to make one safe
+   authenticated request and fail if Ask HomeOps returns an error or an empty
+   answer.
 
 The separate frontend workflow runs `npm ci`, builds with
 `VITE_API_URL=https://api.homeops.now`, syncs the private S3 bucket, invalidates
@@ -60,8 +63,9 @@ authorization-code + PKCE app client, and the
 non-secret OIDC and Valkey settings to
 `/homeops/production/ask-homeops-*` SSM parameters. The EC2 deploy script reads
 those values with the instance role and refreshes the ignored, mode-0600
-`dashboard/.env` before recreating the backend. The Gemini key remains in its
-existing encrypted SSM parameter.
+`dashboard/.env` before recreating the backend. The OpenAI GPT-5.6 Luna key is
+read from `/homeops/production/openai-api-key`; the Gemini key remains available
+in its existing encrypted SSM parameter for an explicit rollback.
 
 After applying the Cognito resources:
 
@@ -82,9 +86,11 @@ After applying the Cognito resources:
 
    The user pool is admin-create-only, so an invite is deliberate rather than
    allowing arbitrary public registrations.
-3. Push/merge the application change so the backend deploy refreshes SSM config
+3. Store the OpenAI API key as an encrypted SSM parameter at
+   `/homeops/production/openai-api-key` and ensure the EC2 role can read it.
+4. Push/merge the application change so the backend deploy refreshes SSM config
    and the frontend deploy embeds only public OIDC metadata.
-4. Confirm the browser redirects to Cognito managed login, returns to
+5. Confirm the browser redirects to Cognito managed login, returns to
    `/auth/callback`, and sends an access token on `POST /api/diagnostic`.
 
 The backend accepts Cognito's `client_id` access-token claim and verifies the
@@ -187,6 +193,10 @@ curl -fsS https://api.homeops.now/health
 curl -fsS https://api.homeops.now/api/current-temps
 curl -fsS https://api.homeops.now/grafana/api/health
 curl -fsS https://api.homeops.now/prometheus/-/healthy
+
+# Optional authenticated completeness probe; never commit or print the token.
+HOMEOPS_DIAGNOSTIC_TOKEN='<access-token>' \
+  python3 scripts/deploy_smoke_check.py --check-diagnostic
 ```
 
 For the full address and port map, see [`architecture.md`](architecture.md).

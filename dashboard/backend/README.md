@@ -11,7 +11,7 @@ interface at `https://api.homeops.now`.
 |---|---|
 | `GET /health` | Process liveness; returns `{"status":"ok"}` |
 | `GET /api/current-temps` | Current floor/outdoor temperatures, setpoints, calls, furnace state, and freshness timestamp |
-| `POST /api/diagnostic` | Authenticated Gemini-backed HVAC diagnostic using live Prometheus context |
+| `POST /api/diagnostic` | Authenticated GPT-5.6 Luna-backed HVAC diagnostic using live Prometheus context |
 | `GET /metrics` | Internal diagnostic abuse/cost metrics for EC2-local Prometheus; not a public route |
 | `GET /openapi.json` | Generated API contract |
 
@@ -25,11 +25,11 @@ fails closed with a generic `503`. The threat model and quota policy live in
 [`docs/ask-homeops-threat-model.md`](../../docs/ask-homeops-threat-model.md).
 
 The endpoint rejects blank, oversized, or unexpected request fields; caps
-questions at 1,000 characters and model output at 256 tokens; bounds Prometheus
-context assembly to 5 seconds; and bounds each Gemini request to 10 seconds.
-Provider and missing configuration failures return a generic safe error rather
-than exception text. Before any Prometheus or Gemini work, the endpoint applies
-independent per-user and per-IP windows using the verified token subject and a
+questions at 1,000 characters and provider output at 1,024 tokens; bounds
+Prometheus context assembly to 5 seconds; and bounds each OpenAI request to 15
+seconds. Provider and missing configuration failures return a generic safe
+error rather than exception text. Before any Prometheus or provider work, the
+endpoint applies independent per-user and per-IP windows using the verified token subject and a
 client IP resolved only from configured trusted proxy hops. The baseline limits
 are 10 user requests/minute, 30 IP requests/minute, 100 user requests/day, 200
 IP requests/day, and 2/5 user/IP in-flight calls. Quota rejections are HTTP
@@ -47,19 +47,24 @@ provider budget as the final single-instance cost backstop.
 Ask HomeOps treats the question as untrusted content, never as an instruction.
 Known requests to reveal prompts/private memory, use tools, change policy, or
 write thermostat state receive a stable read-only refusal before Prometheus or
-Gemini work. The Gemini request has a fixed system instruction that reiterates
+provider work. The OpenAI request has a fixed system instruction that reiterates
 the same boundary, registers no tools, and limits the model to explaining the
 supplied telemetry; it cannot execute commands, access files, or control a
 thermostat. Adversarial requests and control-plane fields are covered by the
-backend regression suite.
+backend regression suite. Gemini remains available only when explicitly selected
+as a rollback provider.
 
 The backend publishes low-cardinality request/provider outcome, latency, input
 size, estimated output-token, in-flight, daily-budget, model, and approximate
 cost metrics. The Prometheus scrape is bound to EC2 loopback; Nginx explicitly
 returns 404 for public `/metrics` requests.
-The quota defaults can be overridden with `ASK_HOMEOPS_GLOBAL_MAX_IN_FLIGHT`
+The default provider is OpenAI GPT-5.6 Luna. Set
+`ASK_HOMEOPS_DIAGNOSTIC_PROVIDER=gemini` only for an explicit rollback. The
+quota defaults can be overridden with `ASK_HOMEOPS_GLOBAL_MAX_IN_FLIGHT`
 and `ASK_HOMEOPS_GLOBAL_DAILY_CALL_LIMIT`; the approximate cost estimator uses
-the optional `GEMINI_INPUT_COST_USD_PER_MILLION_TOKENS` and
+the optional provider-specific `OPENAI_INPUT_COST_USD_PER_MILLION_TOKENS`,
+`OPENAI_OUTPUT_COST_USD_PER_MILLION_TOKENS`,
+`GEMINI_INPUT_COST_USD_PER_MILLION_TOKENS`, and
 `GEMINI_OUTPUT_COST_USD_PER_MILLION_TOKENS` overrides.
 
 `/api/current-temps` returns a structured response with nullable telemetry
@@ -79,7 +84,9 @@ uvicorn main:app --reload --host 127.0.0.1 --port 8000
 ```
 
 The backend expects Prometheus at `http://localhost:9090` and reads
-`GEMINI_API_KEY` only for `/api/diagnostic`. Never commit that key. The
+`OPENAI_API_KEY` for `/api/diagnostic` by default. Never commit either provider
+key. Set `ASK_HOMEOPS_DIAGNOSTIC_PROVIDER=gemini` and provide
+`GEMINI_API_KEY` only when deliberately rolling back. The
 limiter reference backend can be selected with
 `ASK_HOMEOPS_LIMITER_BACKEND=memory` for local development only. Production
 uses `ASK_HOMEOPS_LIMITER_BACKEND=redis` and

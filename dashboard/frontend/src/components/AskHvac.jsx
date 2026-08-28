@@ -91,7 +91,7 @@ export function AskHvac({ apiUrl, auth = {} }) {
           <span className="text-2xl">🤖</span>
           <div>
             <h2 className="text-lg font-semibold text-white">Ask HomeOps</h2>
-            <p className="text-xs text-slate-400">Powered by Gemini 2.5 Flash · live HVAC data</p>
+            <p className="text-xs text-slate-400">Powered by GPT-5.6 Luna · live HVAC data</p>
           </div>
       </div>
       </div>

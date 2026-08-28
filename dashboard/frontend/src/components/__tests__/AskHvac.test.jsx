@@ -37,7 +37,7 @@ describe("AskHvac", () => {
   it("renders header and subtitle", () => {
     render(<AskHvac apiUrl="https://api.homeops.now" />);
     expect(screen.getByText("Ask HomeOps")).toBeInTheDocument();
-    expect(screen.getByText("Powered by Gemini 2.5 Flash · live HVAC data")).toBeInTheDocument();
+    expect(screen.getByText("Powered by GPT-5.6 Luna · live HVAC data")).toBeInTheDocument();
   });
 
   it("renders all 3 suggested question chips", () => {
@@ -67,9 +67,9 @@ describe("AskHvac", () => {
   });
 
   it("renders error text when error is provided", () => {
-    mockState = { answer: null, loading: false, error: "GEMINI_API_KEY not configured" };
+    mockState = { answer: null, loading: false, error: "Diagnostic service temporarily unavailable" };
     render(<AskHvac apiUrl="https://api.homeops.now" />);
-    expect(screen.getByText("GEMINI_API_KEY not configured")).toBeInTheDocument();
+    expect(screen.getByText("Diagnostic service temporarily unavailable")).toBeInTheDocument();
   });
 
   it("Ask button is disabled while loading", () => {

@@ -72,7 +72,7 @@ These are the endpoints the release gate checks after deployment:
 | `https://api.homeops.now/health` | `{"status":"ok"}` | FastAPI process liveness |
 | `https://api.homeops.now/openapi.json` | Includes `/health` and `/api/current-temps` | API contract is served |
 | `https://api.homeops.now/api/current-temps` | Required telemetry fields and `error: null` | Prometheus → FastAPI data path |
-| `https://api.homeops.now/api/diagnostic` | `POST` diagnostic route | Gemini-backed HVAC analysis; requires a verified bearer principal and bounded user/IP quotas before provider work |
+| `https://api.homeops.now/api/diagnostic` | `POST` diagnostic route | OpenAI GPT-5.6 Luna-backed HVAC analysis; requires a verified bearer principal and bounded user/IP quotas before provider work |
 | `https://api.homeops.now/metrics` | HTTP 404 | Backend abuse/cost metrics are internal-only and scraped from EC2 loopback |
 | `https://api.homeops.now/grafana/api/health` | `database: ok` | Grafana process/data health |
 | `https://api.homeops.now/prometheus/-/healthy` | Body contains `Healthy` | Prometheus process health |

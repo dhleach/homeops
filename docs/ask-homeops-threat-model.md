@@ -2,13 +2,14 @@
 
 **Policy version:** `homeops.ask-homeops-policy.v1`  
 **Status:** Baseline implemented for the pre-Bob-demo security gate; production recovery and final public exposure remain gated
-**Last reviewed:** 2026-08-21
+**Last reviewed:** 2026-08-27
 **Applies to:** `POST https://api.homeops.now/api/diagnostic`
 
 This document defines the security boundary and initial resource policy for
-Ask HomeOps. It remains intentionally provider-agnostic: the application now
-has the bearer-principal and atomic limiter contracts, but this document does
-not choose an identity vendor or a storage product for limiter state.
+Ask HomeOps. Its provider boundary is deliberately isolated from the endpoint
+policy; the current default is OpenAI GPT-5.6 Luna, while Gemini remains an
+explicit rollback adapter. The document does not grant either provider access
+to tools, actuation, or private runtime state.
 
 ## Executive decision
 
@@ -42,17 +43,17 @@ FastAPI /api/diagnostic
         ├── Cognito OIDC/JWKS token verification
         ├── atomic per-user/IP quotas in loopback Valkey :6379
         ├── read-only Prometheus queries on EC2 :9090
-        └── Gemini generateContent request
+        └── OpenAI Responses API request
                 │ API key stays server-side
                 ▼
-        Google Gemini API
+        OpenAI API
 ```
 
 The active deployment is Docker Compose with host networking on one EC2
 instance. Nginx is the public edge; FastAPI is not directly exposed as a
 public port. The frontend sends the homeowner's question to the endpoint, and
 the backend builds a current HVAC snapshot from Prometheus before making one
-Gemini request.
+OpenAI request. Gemini can be selected only as an explicit rollback.
 
 The endpoint boundary requires a standard bearer credential and a verified
 Cognito access token carrying the configured
@@ -74,9 +75,10 @@ still enforced by FastAPI.
 
 | Asset | Security objective |
 |---|---|
-| `GEMINI_API_KEY` / SSM-backed secret | Never disclose to clients, logs, prompts, or source control; prevent unbounded paid-provider use. |
+| `OPENAI_API_KEY` / SSM-backed secret | Never disclose to clients, logs, prompts, or source control; prevent unbounded paid-provider use. |
+| Gemini rollback key / SSM-backed secret | Never disclose to clients, logs, prompts, or source control; keep rollback access explicit and bounded. |
 | Live HVAC telemetry | Treat temperatures, setpoints, calls, runtimes, and timestamps as private household operational data. |
-| Gemini/provider budget | Bound requests, input, output, concurrency, and daily consumption; fail closed when the global budget is exhausted. |
+| Diagnostic provider budget | Bound requests, input, output, concurrency, and daily consumption; fail closed when the global budget is exhausted. |
 | API availability | Prevent one client or provider stall from exhausting the single EC2 backend. |
 | Diagnostic response | Keep it read-only, homeowner-focused, bounded, and free of internal errors or credentials. |
 | Authentication identity | Derive quotas from a verified token subject, never from a client-supplied header or body field. |
@@ -86,12 +88,12 @@ still enforced by FastAPI.
 
 | Threat | Attack path | Impact | Required control |
 |---|---|---|---|
-| Unrestricted resource consumption | Scripted `POST` requests or many concurrent connections | Gemini spend, Prometheus/EC2 exhaustion, degraded dashboard | Edge IP limit, user quota, global daily cap, concurrency limit, request/time/token bounds, and metrics. |
+| Unrestricted resource consumption | Scripted `POST` requests or many concurrent connections | Provider spend, Prometheus/EC2 exhaustion, degraded dashboard | Edge IP limit, user quota, global daily cap, concurrency limit, request/time/token bounds, and metrics. |
 | Identity or quota bypass | Spoofed `X-Forwarded-For`, forged user header, expired/unsigned token | A caller evades limits or acts as another user | Trust client IP only from the configured proxy chain; validate token signature, issuer, audience, and expiry; use verified `sub`. |
 | Prompt injection / instruction extraction | Question asks the model to ignore its role, reveal system instructions, or invent telemetry | Misleading answer or disclosure of internal prompt/context | Treat question as untrusted content; deterministically refuse known prompt/memory/tool/policy/control requests before provider work; keep the model read-only; never grant tools or actuation; cap output; test jailbreak-shaped inputs. System instructions are guidance, not a complete security boundary. |
 | Household telemetry inference | Anonymous caller repeatedly asks for current conditions or timing patterns | Occupancy/comfort information is exposed | Require auth for the Bob demo; minimize telemetry in responses; review `/api/current-temps` and Grafana exposure separately; do not log raw snapshots. |
 | Secret/error leakage | Provider exception, prompt, response, or environment value reaches client/logs | API-key compromise or sensitive operational disclosure | Generic client errors; log exception type/outcome only; never log API keys, tokens, full questions, prompts, responses, or raw telemetry. |
-| Provider failure and retry storm | Gemini latency/errors cause clients or the app to retry aggressively | Amplified cost and latency; cascading failure | One provider call per request, explicit timeout, no automatic application retries, bounded client retry guidance, and a circuit-breaker follow-up. |
+| Provider failure and retry storm | Provider latency/errors cause clients or the app to retry aggressively | Amplified cost and latency; cascading failure | One provider call per request, explicit timeout, no automatic application retries, bounded client retry guidance, and a circuit-breaker follow-up. |
 | Request-body / slow-request abuse | Large JSON body, slow upload, or long-lived concurrent request | Worker/socket exhaustion before model limits apply | Enforce body and connection timeouts at Nginx, reject unknown fields, cap question length, and cap in-flight work. |
 | Misconfigured public edge | Prometheus/Grafana or backend route is exposed without intended boundary | Telemetry or operational control-plane exposure | Keep Nginx route ownership explicit; smoke-test public routes; do not treat CORS or obscurity as access control. |
 | Supply-chain / deployment confusion | A docs or config change is assumed to be live without a release gate | Policy and runtime diverge | Require CI, deploy, OpenAPI, and post-deploy smoke checks; record deployed SHA; keep secrets in SSM/GitHub secret stores only. |
@@ -106,7 +108,9 @@ PR #226 merged the non-authenticated request guardrails:
 - Each Prometheus query is capped at 2 seconds; telemetry assembly is capped at
   5 seconds.
 - Model context is capped at 4,000 characters.
-- Gemini generation is capped at 256 output tokens and 10 seconds.
+- OpenAI generation is capped at 1,024 output tokens and 15 seconds; incomplete
+  provider responses are returned as an explicit retry-safe error. The Gemini
+  rollback adapter uses the same output cap and a 10-second timeout.
 - Telemetry timeout/failure uses a safe fallback context.
 - Missing configuration and provider failures return a generic error; provider
   exception text is not returned to the client.
@@ -117,8 +121,9 @@ requests. They are necessary, not sufficient, for public Bob exposure.
 ## Controls implemented by the observability follow-up
 
 The global provider backstop and its telemetry are now implemented as a
-process-local safety layer. It reserves provider work before Gemini, rejects
-new work with a generic HTTP 429 when either 20 calls are already in flight or
+process-local safety layer. It reserves provider work before the selected
+provider, rejects new work with a generic HTTP 429 when either 20 calls are
+already in flight or
 500 calls have been reserved in the current UTC day, and always releases an
 in-flight reservation on provider success, failure, or cancellation. The
 daily cap counts attempted provider calls, including provider failures.
@@ -128,7 +133,7 @@ scope, provider outcome, provider/request latency, input character,
 estimated-output-token, in-flight, daily-budget, model, and approximate-cost
 metrics. Prometheus scrapes `/metrics` through EC2 loopback; Nginx returns 404
 for the public `/metrics` route. Regression tests cover daily rollover,
-daily-cap rejection, concurrent-cap rejection before Gemini, label safety, and
+daily-cap rejection, concurrent-cap rejection before provider work, label safety,
 the Nginx/Prometheus contracts.
 
 The global layer is intentionally process-local and is not the shared
@@ -138,7 +143,7 @@ authenticated user/IP limiter required by the public Bob-demo gate.
 
 The diagnostic request model exposes only the homeowner's question. Known
 high-risk request shapes are rejected after authentication and per-user/IP
-quota acquisition but before Prometheus context assembly or Gemini reservation.
+quota acquisition but before Prometheus context assembly or provider reservation.
 The stable refusal does not include telemetry, prompt text, private memory, or
 provider details. The guard covers attempts to:
 
@@ -167,7 +172,7 @@ credentials return `401`, a valid principal without the scope returns `403`,
 and verifier outages return a generic `503`. No verifier exception can
 downgrade a request to anonymous access.
 
-Before Prometheus context assembly or Gemini work, the endpoint atomically
+Before Prometheus context assembly or provider work, the endpoint atomically
 checks the policy's independent user and IP dimensions. Client IP extraction
 trusts forwarding headers only when the direct peer is inside the configured
 proxy networks and selects the configured hop from the right; untrusted
@@ -187,7 +192,7 @@ shared quota state.
 These are deliberately conservative starting values for a single-home,
 portfolio-demo workload. They are policy defaults, not claims about provider
 pricing. Tune them only after observing real request volume and provider usage.
-All windows use UTC and all limits apply before the Gemini call.
+All windows use UTC and all limits apply before the provider call.
 
 | Caller class | Per-IP rate | Per-user rate | Per-IP daily cap | Per-user daily cap | In-flight cap |
 |---|---:|---:|---:|---:|---:|
@@ -252,7 +257,7 @@ consumes the resulting access token:
   primary key; email can change and is more identifying than necessary.
 - Fail closed when the identity provider or key set cannot be validated. Do
   not silently downgrade an authenticated request to anonymous access.
-- Keep the Gemini key server-side. The browser receives only the diagnostic
+- Keep the OpenAI key server-side. The browser receives only the diagnostic
   response or a generic error.
 - Add the security scheme and `401`/`403` responses to the generated OpenAPI
   contract and test the contract in CI.
@@ -263,7 +268,9 @@ to or embedded in the public frontend.
 
 ## Data handling and logging rules
 
-The backend sends the user's question and a current HVAC snapshot to Gemini.
+The backend sends the user's question and a current HVAC snapshot to OpenAI by
+default. The same bounded payload is sent to Gemini only during an explicit
+rollback.
 The snapshot is household operational data even though it contains no name or
 street address. Treat it as private by default.
 
@@ -272,14 +279,15 @@ Do:
 - Assign a request ID at the edge or application boundary.
 - Emit aggregate outcomes, latency, bounded input/output sizes, quota scope,
   and provider status class.
-- Keep the SSM/GitHub/Gemini credentials in their existing secret stores.
+- Keep the SSM/GitHub/OpenAI and rollback-provider credentials in their existing
+  secret stores.
 - Document the provider account's applicable data-use and retention terms before
   expanding the audience beyond the existing dashboard.
 
 Do not:
 
 - Log the raw question, system prompt, HVAC snapshot, model response, bearer
-  token, Gemini key, or full provider error body.
+  token, OpenAI/Gemini key, or full provider error body.
 - Add question text, user ID, IP, or request ID as an unbounded metric label.
 - Treat a successful model answer as evidence that the caller is authorized.
 - Put credentials or copied production telemetry in fixtures, screenshots, or
@@ -315,7 +323,7 @@ Do not expose the demo until all boxes are true:
 - [ ] `429`, `401`, `403`, and provider failure behavior covered by tests.
 - [ ] Metrics and alerts above are present without high-cardinality labels.
 - [ ] Load test proves concurrent requests do not exceed the provider-call
-      budget and that quota rejection happens before Gemini is called.
+      budget and that quota rejection happens before the provider is called.
 - [ ] OpenAPI documents the security scheme and rate-limit responses.
 - [ ] Public telemetry/Grafana exposure has an explicit owner decision.
 - [ ] Production deployment and public smoke checks pass on the release SHA.

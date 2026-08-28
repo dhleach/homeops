@@ -416,10 +416,10 @@ def test_unavailable_store_is_fail_closed() -> None:
 
 
 def test_endpoint_rejects_missing_auth_before_provider(monkeypatch) -> None:
-    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     provider = AsyncMock()
 
-    with patch("main._call_gemini", new=provider):
+    with patch("main._call_openai", new=provider):
         response = client.post("/api/diagnostic", json={"question": "hello"})
 
     assert response.status_code == 401
@@ -429,7 +429,7 @@ def test_endpoint_rejects_missing_auth_before_provider(monkeypatch) -> None:
 
 
 def test_endpoint_rejects_valid_identity_without_scope(monkeypatch) -> None:
-    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     monkeypatch.setattr(
         main,
         "auth_verifier",
@@ -437,7 +437,7 @@ def test_endpoint_rejects_valid_identity_without_scope(monkeypatch) -> None:
     )
     provider = AsyncMock()
 
-    with patch("main._call_gemini", new=provider):
+    with patch("main._call_openai", new=provider):
         response = client.post(
             "/api/diagnostic",
             headers={"Authorization": "Bearer good-token"},
@@ -450,11 +450,11 @@ def test_endpoint_rejects_valid_identity_without_scope(monkeypatch) -> None:
 
 
 def test_endpoint_returns_503_when_limiter_is_unavailable(monkeypatch) -> None:
-    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     monkeypatch.setattr(main, "diagnostic_rate_limiter", UnavailableRateLimitStore())
     provider = AsyncMock()
 
-    with patch("main._call_gemini", new=provider):
+    with patch("main._call_openai", new=provider):
         response = client.post(
             "/api/diagnostic",
             headers=AUTH_HEADERS,
@@ -466,8 +466,8 @@ def test_endpoint_returns_503_when_limiter_is_unavailable(monkeypatch) -> None:
     provider.assert_not_awaited()
 
 
-def test_endpoint_applies_user_quota_before_gemini(monkeypatch) -> None:
-    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+def test_endpoint_applies_user_quota_before_openai(monkeypatch) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     monkeypatch.setattr(main, "diagnostic_rate_limiter", InMemoryRateLimitStore())
     monkeypatch.setattr(
         main,
@@ -490,7 +490,7 @@ def test_endpoint_applies_user_quota_before_gemini(monkeypatch) -> None:
 
     with (
         patch("main._build_hvac_context", new=AsyncMock(return_value="snapshot")),
-        patch("main._call_gemini", new=provider),
+        patch("main._call_openai", new=provider),
     ):
         first = client.post(
             "/api/diagnostic",
@@ -512,7 +512,7 @@ def test_endpoint_applies_user_quota_before_gemini(monkeypatch) -> None:
 
 
 def test_endpoint_does_not_accept_spoofed_ip_header_from_untrusted_peer(monkeypatch) -> None:
-    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     monkeypatch.setattr(main, "diagnostic_rate_limiter", InMemoryRateLimitStore())
     monkeypatch.setattr(
         main,
@@ -535,7 +535,7 @@ def test_endpoint_does_not_accept_spoofed_ip_header_from_untrusted_peer(monkeypa
 
     with (
         patch("main._build_hvac_context", new=AsyncMock(return_value="snapshot")),
-        patch("main._call_gemini", new=provider),
+        patch("main._call_openai", new=provider),
     ):
         first = client.post(
             "/api/diagnostic",
