@@ -1,6 +1,8 @@
 """Tests for observer state and custom-event schema validation.
 
 Revision history:
+  2026-08-27  Cover all four live cooling helper IDs and both binary state
+              transitions while preserving the existing heating contract.
   2026-08-25  Cover valid and invalid automatic mitigation rollback payloads.
   2026-08-25  Cover the observer envelope for applied/skipped mitigation
               decisions alongside the existing state-change contract.
@@ -16,10 +18,22 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from validate_schema import validate_line  # noqa: E402
+from validate_schema import KNOWN_ENTITIES, validate_line  # noqa: E402
 
 EVENT_TYPE = "homeops.mitigation.zone_stagger_applied.v1"
 ROLLBACK_EVENT_TYPE = "homeops.mitigation.rollback.v1"
+COOLING_ENTITIES = (
+    "binary_sensor.floor_1_cooling_call",
+    "binary_sensor.floor_2_cooling_call",
+    "binary_sensor.floor_3_cooling_call",
+    "binary_sensor.ac_cooling",
+)
+REPO_ROOT = Path(__file__).parents[3]
+TRACKED_ALLOWLIST_FILES = (
+    REPO_ROOT / "README.md",
+    REPO_ROOT / "services" / "observer" / "README.md",
+    REPO_ROOT / "secrets" / "observer.env.example",
+)
 
 
 def _record(**event_overrides):
@@ -61,6 +75,20 @@ def _rollback_record(**event_overrides):
     }
 
 
+def _state_record(entity_id: str, *, old_state: str, new_state: str) -> dict:
+    return {
+        "schema": "homeops.observer.state_changed.v1",
+        "source": "ha.websocket",
+        "ts": "2026-08-27T23:13:16+00:00",
+        "data": {
+            "entity_id": entity_id,
+            "old_state": old_state,
+            "new_state": new_state,
+            "attributes": {"device_class": "cold"},
+        },
+    }
+
+
 def test_valid_mitigation_event_passes() -> None:
     assert validate_line(json.dumps(_record())) == []
 
@@ -91,6 +119,30 @@ def test_state_change_contract_still_passes() -> None:
     }
 
     assert validate_line(json.dumps(record)) == []
+
+
+@pytest.mark.parametrize("entity_id", COOLING_ENTITIES)
+@pytest.mark.parametrize("old_state,new_state", [("off", "on"), ("on", "off")])
+def test_cooling_helper_state_changes_are_known_and_valid(
+    entity_id: str, old_state: str, new_state: str
+) -> None:
+    assert entity_id in KNOWN_ENTITIES
+
+    record = _state_record(entity_id, old_state=old_state, new_state=new_state)
+
+    assert validate_line(json.dumps(record)) == []
+
+
+def test_cooling_entities_are_present_in_tracked_allowlist_examples() -> None:
+    for path in TRACKED_ALLOWLIST_FILES:
+        watch_lines = [
+            line
+            for line in path.read_text(encoding="utf-8").splitlines()
+            if line.startswith("WATCH_ENTITIES=")
+        ]
+
+        assert watch_lines, f"{path} is missing a WATCH_ENTITIES example"
+        assert all(entity_id in watch_lines[0] for entity_id in COOLING_ENTITIES), path
 
 
 def test_valid_rollback_event_passes() -> None:

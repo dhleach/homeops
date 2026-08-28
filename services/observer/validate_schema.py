@@ -6,6 +6,9 @@ Usage:
     cat observer.jsonl | python3 validate_schema.py
 
 Revision history:
+  2026-08-27  Add the four deployed cooling helper IDs to known-entity
+              validation so live additive cooling records are checked without
+              changing the existing heating rules.
   2026-08-25  Validate the automatic mitigation rollback envelope and its
               fail-safe payload fields alongside staged zone decisions.
   2026-08-25  Validate the generic observer envelope and staged mitigation
@@ -22,6 +25,10 @@ KNOWN_ENTITIES = {
     "binary_sensor.floor_1_heating_call",
     "binary_sensor.floor_2_heating_call",
     "binary_sensor.floor_3_heating_call",
+    "binary_sensor.floor_1_cooling_call",
+    "binary_sensor.floor_2_cooling_call",
+    "binary_sensor.floor_3_cooling_call",
+    "binary_sensor.ac_cooling",
     "sensor.outdoor_temperature",
     "climate.floor_1_thermostat",
     "climate.floor_2_thermostat",

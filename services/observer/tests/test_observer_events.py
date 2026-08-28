@@ -1,6 +1,8 @@
 """Tests for Home Assistant event-to-observer JSONL conversion.
 
 Revision history:
+  2026-08-27  Cover state-change emission for each deployed cooling helper so
+              the additive allowlist path is tested independently of heating.
   2026-08-25  Cover automatic mitigation rollback-event wrapping alongside the
               existing staged decision event.
   2026-08-25  Cover state-change compatibility, mitigation-event wrapping, and
@@ -12,6 +14,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from observer import _build_observer_record  # noqa: E402
@@ -19,6 +23,12 @@ from observer import _build_observer_record  # noqa: E402
 TS = "2026-08-25T13:00:00+00:00"
 MITIGATION_EVENT = "homeops.mitigation.zone_stagger_applied.v1"
 ROLLBACK_EVENT = "homeops.mitigation.rollback.v1"
+COOLING_ENTITIES = (
+    "binary_sensor.floor_1_cooling_call",
+    "binary_sensor.floor_2_cooling_call",
+    "binary_sensor.floor_3_cooling_call",
+    "binary_sensor.ac_cooling",
+)
 
 
 def test_state_changed_record_keeps_existing_shape_and_watch_filter() -> None:
@@ -47,6 +57,32 @@ def test_state_changed_record_keeps_existing_shape_and_watch_filter() -> None:
     assert (
         _build_observer_record(event, {"binary_sensor.floor_1_heating_call"}, timestamp=TS) is None
     )
+
+
+@pytest.mark.parametrize("entity_id", COOLING_ENTITIES)
+def test_cooling_helper_state_change_is_emitted_when_watched(entity_id: str) -> None:
+    event = {
+        "event_type": "state_changed",
+        "data": {
+            "entity_id": entity_id,
+            "old_state": {"state": "off"},
+            "new_state": {"state": "on", "attributes": {"device_class": "cold"}},
+        },
+    }
+
+    record = _build_observer_record(event, {entity_id}, timestamp=TS)
+
+    assert record == {
+        "schema": "homeops.observer.state_changed.v1",
+        "source": "ha.websocket",
+        "ts": TS,
+        "data": {
+            "entity_id": entity_id,
+            "old_state": "off",
+            "new_state": "on",
+            "attributes": {"device_class": "cold"},
+        },
+    }
 
 
 def test_mitigation_event_is_wrapped_without_entity_filtering() -> None:
