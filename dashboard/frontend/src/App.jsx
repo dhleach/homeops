@@ -6,6 +6,8 @@
  *               HomeOps surface links to the reviewed release-gate evidence.
  *   2026-08-28  Switched zone cards to the authoritative mode-aware API,
  *               added stale/unavailable handling, and surfaced a live summary.
+ *   2026-08-28  Updated the public dashboard labels and supporting copy to
+ *               describe the provisioned heating/cooling Grafana views.
  */
 
 import { useTemps } from "./hooks/useTemps.js";
@@ -24,9 +26,9 @@ const API_URL = import.meta.env.VITE_API_URL ?? "https://api.homeops.now";
 
 const DASHBOARDS = [
   { uid: "homeops-temps",       title: "Floor Temperatures",              description: "Live readings — all floors + outdoor" },
-  { uid: "homeops-zones",       title: "Zone Runtimes + Furnace Status",  description: "Call activity and today's runtime per floor" },
+  { uid: "homeops-zones",       title: "Zone Runtimes + Heating/Cooling Status", description: "Heating/cooling calls and today's runtime per floor" },
   { uid: "homeops-correlation", title: "Outdoor Temp Correlation",        description: "How cold weather drives heating demand" },
-  { uid: "homeops-daily",       title: "Daily Summary + Anomalies",       description: "Session history and floor-2 long-call events" },
+  { uid: "homeops-daily",       title: "Daily Summary + Heating/Cooling History", description: "Heating/cooling session history and floor-2 long-call events" },
 ];
 export default function App() {
   const { data, loading, error, lastUpdated, refresh } = useTemps();
@@ -210,7 +212,7 @@ export default function App() {
             <FeatureTile
               icon="📊"
               title="Prometheus + Grafana"
-              body="Events flow into Prometheus on AWS EC2. Grafana dashboards surface floor runtimes, duty cycles, outdoor temp correlation, and anomalies."
+              body="Events flow into Prometheus on AWS EC2. Grafana dashboards surface heating/cooling activity, runtimes, session history, outdoor correlation, and anomalies."
             />
             <FeatureTile
               icon="🔥"
