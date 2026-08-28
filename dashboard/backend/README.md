@@ -54,6 +54,15 @@ thermostat. Adversarial requests and control-plane fields are covered by the
 backend regression suite. Gemini remains available only when explicitly selected
 as a rollback provider.
 
+The diagnostic context includes the current thermostat-derived cooling calls,
+inferred whole-home AC demand, and conservative per-zone `heating`, `cooling`,
+`idle`, or unavailable actions. It also includes today's cooling runtime when
+the corresponding gauges are present. Missing or contradictory cooling gauges
+remain explicitly unavailable; the context and prompt never turn them into an
+idle state or claim that the compressor is running. A separate thermostat
+`hvac_mode` is not exposed by this context, so an idle zone is described only as
+having no observed heat or cooling call.
+
 The backend publishes low-cardinality request/provider outcome, latency, input
 size, estimated output-token, in-flight, daily-budget, model, and approximate
 cost metrics. The Prometheus scrape is bound to EC2 loopback; Nginx explicitly
