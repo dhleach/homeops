@@ -2,7 +2,7 @@
 
 **Live dashboard → [homeops.now](https://homeops.now) · Bob evaluation evidence → [homeops.now/bob/evals/](https://homeops.now/bob/evals/) · API → [api.homeops.now/api/current-temps](https://api.homeops.now/api/current-temps)**
 
-A full-stack observability platform for a 3-zone home HVAC system — event-driven Python pipeline on a Raspberry Pi 5, live metrics in Prometheus + Grafana on AWS EC2, React dashboard on S3 + CloudFront, FastAPI backend, all provisioned with Terraform. 32 derived event types, 1179 Python tests, and 34 React component tests. The same public surface hosts Bob's reviewed, public-safe agent evaluation evidence at `/bob/evals/`.
+A full-stack observability platform for a 3-zone home HVAC system — event-driven Python pipeline on a Raspberry Pi 5, live metrics in Prometheus + Grafana on AWS EC2, React dashboard on S3 + CloudFront, FastAPI backend, all provisioned with Terraform. 38 derived event types, 1193 Python tests, and 34 React component tests. The same public surface hosts Bob's reviewed, public-safe agent evaluation evidence at `/bob/evals/`.
 
 ## The Problem
 
@@ -13,14 +13,14 @@ Home Assistant alone can't prevent this. It sees state changes; it doesn't reaso
 ## What It Does
 
 - **Real-time overheating prevention** — tracks how long floor 2 has been calling for heat; fires a Telegram alert before the limit switch trips (configurable threshold, default 45 min)
-- **32 derived event types** from raw HA state changes and explicit HA mitigation decisions — heating/cooling floor-call sessions, furnace and inferred-AC sessions, floor heating performance, furnace diagnostics, thermostat setpoint/mode/temp changes, zone temperature snapshots, outdoor temperature, daily summaries, system watchdog, staged zone-stagger outcomes, automatic mitigation rollbacks, and opt-in proactive anomaly explanations
-- **Heating cycle analytics** — `zone_time_to_temp` (how fast each zone heats), `zone_overshoot` (how far past setpoint the zone runs), `zone_setpoint_miss` (calls that fail to reach setpoint), `zone_slow_to_heat_warning` (zones heating below expected rate), and furnace duty cycle via `furnace_duty_cycle.py`
-- **Thermostat entity tracking** — setpoint changes, mode changes, current temp updates, and setpoint-reached events per zone
+- **38 derived event types** from raw HA state changes and explicit HA mitigation decisions — heating/cooling floor-call sessions, furnace and inferred-AC sessions, per-zone heating/cooling thermal outcomes, furnace diagnostics, thermostat setpoint/mode/temp changes, zone temperature snapshots, outdoor temperature, daily summaries, system watchdog, staged zone-stagger outcomes, automatic mitigation rollbacks, and opt-in proactive anomaly explanations
+- **Heating and cooling cycle analytics** — `zone_time_to_temp` / `zone_time_to_cool` (how fast each zone reaches its directional target), `zone_overshoot` / `zone_cooling_undershoot` (post-target behavior), `zone_setpoint_miss` / `zone_cooling_setpoint_miss`, and furnace duty cycle via `furnace_duty_cycle.py`
+- **Thermostat entity tracking** — shared setpoint/mode/current-temp changes plus directional heat/cooling session, target, miss, and post-target events per zone
 - **Event-driven pipeline** — observer writes raw `state_changed`, mitigation-decision, and rollback events to JSONL; consumer tails that file and emits semantically rich derived events downstream
 - **Opt-in proactive HVAC insight** — validated runtime anomalies can receive a bounded plain-English explanation through a provider-neutral LLM seam and Telegram delivery; disabled by default with replay deduplication and a daily call budget
 - **Schema-versioned events** — every event carries a `schema` field (e.g. `homeops.consumer.floor_2_long_call_warning.v1`) for safe downstream evolution
 - **Production-grade operations** — runs as `systemd` services on the Pi, log rotation via `logrotate`, exponential-backoff reconnects on the WebSocket
-- **1179 Python tests + 34 React component tests**, GitHub Actions CI, Ruff lint/format enforcement on every PR, and post-deploy public smoke checks
+- **1193 Python tests + 34 React component tests**, GitHub Actions CI, Ruff lint/format enforcement on every PR, and post-deploy public smoke checks
 - **Opt-in mitigation overlay** — staged Home Assistant zone-call staggering with a disabled-by-default guard and validated timing projections; it is not deployed by the normal application release
 - **Bob evaluation evidence** — a reviewed static snapshot of deterministic release-gate results and a clearly labeled, non-gating scripted live-trial fixture; it never calls Gmail, a model, or the live EMAIL-13 producer
 
@@ -96,7 +96,7 @@ All infrastructure (EC2, S3, CloudFront, Route53, ACM, IAM) is managed with Terr
 
 ## Event Types
 
-The consumer emits **32 derived event types**:
+The consumer emits **38 derived event types**:
 
 | Category | Events |
 |---|---|
@@ -109,6 +109,8 @@ The consumer emits **32 derived event types**:
 | Furnace diagnostics | `furnace_short_call_warning.v1` |
 | Thermostat state | `thermostat_setpoint_changed.v1`, `thermostat_current_temp_updated.v1`, `thermostat_mode_changed.v1`, `thermostat_setpoint_reached.v1` |
 | Heating performance | `zone_time_to_temp.v1`, `zone_overshoot.v1`, `zone_setpoint_miss.v1`, `zone_slow_to_heat_warning.v1`, `zone_temp_snapshot.v1` |
+| Cooling thermostat sessions | `thermostat_cooling_session_started.v1`, `thermostat_cooling_session_ended.v1` |
+| Cooling performance | `thermostat_cooling_setpoint_reached.v1`, `zone_time_to_cool.v1`, `zone_cooling_setpoint_miss.v1`, `zone_cooling_undershoot.v1` |
 | Environmental | `outdoor_temp_updated.v1` |
 | System | `observer_silence_warning.v1` |
 | Summaries | `furnace_daily_summary.v1`, `floor_daily_summary.v1` |
@@ -388,7 +390,7 @@ PYTHONPATH=services/consumer:services/observer:services/insights:dashboard/backe
 NODE_ENV=test npm --prefix dashboard/frontend test
 ```
 
-1179 Python tests cover observer reconnect logic, consumer event derivation, heating and cooling call/session events, floor-2 long-call warning and escalation, thermostat tracking, heating cycle analytics, consumer state persistence, Prometheus metrics gauge updates, the FastAPI backend, Ask HomeOps authentication/quota/budget/observability/prompt-safety guards, deployment smoke checks, insights engine rules, historical anomaly replay/reporting, multi-zone impact analysis, hourly zone-call frequency reporting, the floor-call data-model contract, daily furnace temperature/runtime scatter export, the self-contained HTML trend report, temperature-adjusted runtime anomaly analysis, zone cooling-curve heat-loss analysis, per-zone furnace-runtime-per-degree efficiency analysis, per-zone time-to-temperature modeling, natural-language thermal query composition, multi-zone scheduling query safety, shared rule configuration validation, enabled-rule gates, outdoor-temperature storm detection, direct consumer import-path validation, staged Home Assistant mitigation configuration, event logging, automatic rollback, mitigation end-to-end replay, proactive anomaly insight, missing-context, replay-guard, thermal prediction target contract, thermal prediction feature schema, publication-boundary checks, CloudFront route checks, and test-count validation. The frontend has 34 React component tests. The canonical counts live in [`docs/test-counts.json`](docs/test-counts.json) and are verified against CI runner output.
+1193 Python tests cover observer reconnect logic, consumer event derivation, heating and cooling call/session events, floor-2 long-call warning and escalation, thermostat tracking, heating and cooling cycle analytics, consumer state persistence, Prometheus metrics gauge updates, the FastAPI backend, Ask HomeOps authentication/quota/budget/observability/prompt-safety guards, deployment smoke checks, insights engine rules, historical anomaly replay/reporting, multi-zone impact analysis, hourly zone-call frequency reporting, the floor-call data-model contract, daily furnace temperature/runtime scatter export, the self-contained HTML trend report, temperature-adjusted runtime anomaly analysis, zone cooling-curve heat-loss analysis, per-zone furnace-runtime-per-degree efficiency analysis, per-zone time-to-temperature modeling, natural-language thermal query composition, multi-zone scheduling query safety, shared rule configuration validation, enabled-rule gates, outdoor-temperature storm detection, direct consumer import-path validation, staged Home Assistant mitigation configuration, event logging, automatic rollback, mitigation end-to-end replay, proactive anomaly insight, missing-context, replay-guard, thermal prediction target contract, thermal prediction feature schema, publication-boundary checks, CloudFront route checks, and test-count validation. The frontend has 34 React component tests. The canonical counts live in [`docs/test-counts.json`](docs/test-counts.json) and are verified against CI runner output.
 
 The staged mitigation flow can also be replayed without live Home Assistant or
 Telegram writes:

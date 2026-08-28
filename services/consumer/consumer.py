@@ -15,6 +15,9 @@ Business logic lives in focused modules:
   - rules/config.py  validated rules.yaml loading and enabled/threshold settings
 
 Revision history:
+  2026-08-28  Route thermostat cooling session and directional thermal outcome
+              events through live/playback paths and restore their timestamps
+              across restart without changing heating routing or state.
   2026-08-27  Route additive cooling helper transitions through live and
               playback paths, persisting independent cooling state while
               leaving heating routing, state, and event schemas unchanged.
@@ -114,6 +117,10 @@ _RESTART_CLEAR_SCHEMAS = frozenset(
         "homeops.consumer.zone_setpoint_miss.v1",
         "homeops.consumer.zone_time_to_temp.v1",
         "homeops.consumer.cooling_session_ended.v1",
+        "homeops.consumer.thermostat_cooling_session_ended.v1",
+        "homeops.consumer.zone_time_to_cool.v1",
+        "homeops.consumer.zone_cooling_setpoint_miss.v1",
+        "homeops.consumer.zone_cooling_undershoot.v1",
     }
 )
 
@@ -677,6 +684,7 @@ def _playback_phase(
                     processing_ts=ts_str,
                     slow_to_heat_thresholds_s=slow_to_heat_thresholds_s,
                     slow_to_heat_enabled=slow_to_heat_settings["enabled"],
+                    cooling_floor_on_since=cooling_floor_on_since,
                 )
                 for derived in derived_events:
                     fresh_restart = _emit_derived(derived, derived_log, fresh_restart)
@@ -984,6 +992,8 @@ def main() -> None:
             s = dict(es)
             s["heating_start_ts"] = _parse_dt(s.get("heating_start_ts"))
             s["setpoint_reached_ts"] = _parse_dt(s.get("setpoint_reached_ts"))
+            s["cooling_start_ts"] = _parse_dt(s.get("cooling_start_ts"))
+            s["cooling_setpoint_reached_ts"] = _parse_dt(s.get("cooling_setpoint_reached_ts"))
             climate_state[eid] = s
         daily_state = saved.get("daily_state") or _empty_daily_state()
         logger.info(f"Resumed from state file (saved_at={saved.get('saved_at')})")
@@ -1341,6 +1351,7 @@ def main() -> None:
                     processing_ts=ts_str,
                     slow_to_heat_thresholds_s=slow_to_heat_thresholds_s,
                     slow_to_heat_enabled=slow_to_heat_settings["enabled"],
+                    cooling_floor_on_since=cooling_floor_on_since,
                 )
                 for derived in derived_events:
                     fresh_restart = _emit_derived(derived, derived_log, fresh_restart)
