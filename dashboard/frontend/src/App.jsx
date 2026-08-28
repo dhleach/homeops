@@ -4,6 +4,8 @@
  *               Ask HomeOps diagnostic widget.
  *   2026-08-27  Added the recruiter-facing Bob evaluation route so the public
  *               HomeOps surface links to the reviewed release-gate evidence.
+ *   2026-08-28  Switched zone cards to the authoritative mode-aware API,
+ *               added stale/unavailable handling, and surfaced a live summary.
  */
 
 import { useTemps } from "./hooks/useTemps.js";
@@ -12,7 +14,9 @@ import { OutdoorCard } from "./components/OutdoorCard.jsx";
 import { LiveIndicator } from "./components/LiveIndicator.jsx";
 import { ErrorBanner } from "./components/ErrorBanner.jsx";
 import { AskHvac } from "./components/AskHvac.jsx";
+import { LiveSummary } from "./components/LiveSummary.jsx";
 import { useAuth } from "./hooks/useAuth.js";
+import { toZoneTelemetry, ZONE_ORDER } from "./hvac.js";
 
 const GRAFANA_BASE = import.meta.env.VITE_GRAFANA_URL ?? "https://api.homeops.now/grafana";
 const GRAFANA_URL = `${GRAFANA_BASE}/d/homeops-temps`;
@@ -24,11 +28,16 @@ const DASHBOARDS = [
   { uid: "homeops-correlation", title: "Outdoor Temp Correlation",        description: "How cold weather drives heating demand" },
   { uid: "homeops-daily",       title: "Daily Summary + Anomalies",       description: "Session history and floor-2 long-call events" },
 ];
-const ZONE_ORDER = ["floor_3", "floor_2", "floor_1"];
-
 export default function App() {
   const { data, loading, error, lastUpdated, refresh } = useTemps();
   const auth = useAuth();
+  const telemetryStale = Boolean(error || data?.error);
+  const apiError = error || data?.error;
+  const zoneData = data
+    ? Object.fromEntries(
+      ZONE_ORDER.map((zone) => [zone, toZoneTelemetry(data, zone, { stale: telemetryStale })]),
+    )
+    : null;
 
   return (
     <div className="flex min-h-screen flex-col bg-surface">
@@ -100,7 +109,7 @@ export default function App() {
         </div>
 
         {/* Error banner */}
-        {error && !loading && <div className="mb-6"><ErrorBanner message={error} /></div>}
+        {apiError && !loading && <div className="mb-6"><ErrorBanner message={apiError} /></div>}
 
         {/* Loading skeleton */}
         {loading && (
@@ -117,16 +126,13 @@ export default function App() {
         {/* Temp cards */}
         {!loading && (
           <>
+            <LiveSummary zones={zoneData} stale={telemetryStale} />
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
               {ZONE_ORDER.map((zone) => (
                 <TempCard
                   key={zone}
                   zone={zone}
-                  data={data ? {
-                    current_temp_f: data[zone] ?? null,
-                    hvac_action: data[`${zone}_call`] ? "heating" : "idle",
-                    setpoint_f: data[`${zone}_setpoint`] ?? null,
-                  } : null}
+                  data={zoneData?.[zone] ?? null}
                 />
               ))}
               <OutdoorCard

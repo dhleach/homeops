@@ -12,6 +12,16 @@ describe("StatusBadge", () => {
     expect(screen.getByText("Idle")).toBeInTheDocument();
   });
 
+  it("renders 'Cooling' for cooling action", () => {
+    render(<StatusBadge action="cooling" />);
+    expect(screen.getByText("Cooling")).toBeInTheDocument();
+  });
+
+  it("renders 'Unavailable' for unavailable action", () => {
+    render(<StatusBadge action="unavailable" />);
+    expect(screen.getByText("Unavailable")).toBeInTheDocument();
+  });
+
   it("renders 'Unknown' when action is undefined", () => {
     render(<StatusBadge />);
     expect(screen.getByText("Unknown")).toBeInTheDocument();
@@ -30,5 +40,10 @@ describe("StatusBadge", () => {
   it("applies green styling for idle", () => {
     const { container } = render(<StatusBadge action="idle" />);
     expect(container.firstChild.className).toMatch(/green/);
+  });
+
+  it("applies blue styling for cooling", () => {
+    const { container } = render(<StatusBadge action="cooling" />);
+    expect(container.firstChild.className).toMatch(/sky/);
   });
 });

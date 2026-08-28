@@ -1,19 +1,21 @@
 import { StatusBadge } from "./StatusBadge.jsx";
-
-const ZONE_LABELS = {
-  floor_1: "Floor 1",
-  floor_2: "Floor 2",
-  floor_3: "Floor 3",
-};
+import { ZONE_LABELS, normalizeHvacAction } from "../hvac.js";
 
 /**
  * Card showing live temperature data for a single thermostat zone.
+ *
+ * Revision history:
+ *   2026-08-28  Render cooling directionally, surface unavailable/stale
+ *               telemetry explicitly, and retain the existing heating copy.
  */
 export function TempCard({ zone, data }) {
   const label = ZONE_LABELS[zone] ?? zone.replace(/_/g, " ");
   const temp = data?.current_temp_f;
   const setpoint = data?.setpoint_f;
-  const action = data?.hvac_action ?? "unknown";
+  const action = data?.stale
+    ? "unavailable"
+    : normalizeHvacAction(data?.hvac_action) ?? "unavailable";
+  const setpointLabel = action === "cooling" ? "Cooling to" : "Set to";
 
   return (
     <div className="flex flex-col gap-4 rounded-2xl border border-border bg-card p-6 transition-colors hover:bg-card-hover">
@@ -39,6 +41,12 @@ export function TempCard({ zone, data }) {
         )}
       </div>
 
+      {data?.stale && (
+        <p className="text-xs text-amber-300" role="status">
+          Last known reading — live state unavailable
+        </p>
+      )}
+
       {/* Setpoint */}
       {setpoint != null && (
         <div className="flex items-center gap-1.5 text-sm text-slate-500">
@@ -54,7 +62,7 @@ export function TempCard({ zone, data }) {
               clipRule="evenodd"
             />
           </svg>
-          Set to {setpoint}°F
+          {setpointLabel} {setpoint}°F
         </div>
       )}
     </div>
