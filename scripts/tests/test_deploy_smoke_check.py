@@ -1,6 +1,8 @@
 """Tests for the public HomeOps deployment smoke checks.
 
 Revision history:
+  2026-08-27  Added authenticated diagnostic probe coverage so the optional
+              release check verifies a non-empty, error-free complete answer.
   2026-08-18  Added healthy-stack and failure-path coverage for the release gate
               so public deployment checks cannot silently regress.
   2026-08-21  Added an OpenAPI auth/quota contract fixture so deployments cannot
@@ -120,6 +122,14 @@ def _fake_fetcher(responses: dict[str, SmokeResponse]):
     return fetch
 
 
+def _fake_poster(response: SmokeResponse, calls: list[tuple[str, dict, str, float]]):
+    def post(url: str, payload: dict, token: str, timeout: float) -> SmokeResponse:
+        calls.append((url, payload, token, timeout))
+        return response
+
+    return post
+
+
 def test_run_smoke_checks_passes_for_healthy_stack():
     results = run_smoke_checks(
         frontend_url="https://frontend",
@@ -154,6 +164,71 @@ def test_run_smoke_checks_can_skip_observability_checks():
 
     assert len(results) == 4
     assert all("grafana" not in result and "prometheus" not in result for result in results)
+
+
+def test_run_smoke_checks_can_probe_authenticated_diagnostic():
+    calls: list[tuple[str, dict, str, float]] = []
+    diagnostic_response = SmokeResponse(
+        200,
+        b'{"answer":"Conditions look healthy.","context_chars":321,"error":null}',
+        "https://api/api/diagnostic",
+    )
+
+    results = run_smoke_checks(
+        frontend_url="https://frontend",
+        api_url="https://api",
+        include_diagnostic=True,
+        diagnostic_token="probe-token",
+        diagnostic_question="Is the system healthy?",
+        poster=_fake_poster(diagnostic_response, calls),
+        fetcher=_fake_fetcher(_responses()),
+    )
+
+    assert len(results) == 7
+    assert results[4] == "api: authenticated diagnostic returned a complete answer"
+    assert calls == [
+        (
+            "https://api/api/diagnostic",
+            {"question": "Is the system healthy?"},
+            "probe-token",
+            15.0,
+        )
+    ]
+
+
+def test_run_smoke_checks_requires_token_for_authenticated_diagnostic():
+    calls: list[tuple[str, dict, str, float]] = []
+
+    with pytest.raises(SmokeCheckError, match="requires HOMEOPS_DIAGNOSTIC_TOKEN"):
+        run_smoke_checks(
+            frontend_url="https://frontend",
+            api_url="https://api",
+            include_diagnostic=True,
+            poster=_fake_poster(SmokeResponse(200, b"{}", "https://api/api/diagnostic"), calls),
+            fetcher=_fake_fetcher(_responses()),
+        )
+
+    assert calls == []
+
+
+def test_run_smoke_checks_rejects_incomplete_diagnostic_response():
+    calls: list[tuple[str, dict, str, float]] = []
+    diagnostic_response = SmokeResponse(
+        200,
+        b'{"answer":"","context_chars":321,'
+        b'"error":"Diagnostic response was incomplete; please retry."}',
+        "https://api/api/diagnostic",
+    )
+
+    with pytest.raises(SmokeCheckError, match="diagnostic returned an error"):
+        run_smoke_checks(
+            frontend_url="https://frontend",
+            api_url="https://api",
+            include_diagnostic=True,
+            diagnostic_token="probe-token",
+            poster=_fake_poster(diagnostic_response, calls),
+            fetcher=_fake_fetcher(_responses()),
+        )
 
 
 def test_run_smoke_checks_fails_when_bob_route_falls_back_to_homeops():

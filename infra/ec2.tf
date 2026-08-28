@@ -204,6 +204,16 @@ if [ -f /home/ubuntu/homeops/dashboard/docker-compose.yml ]; then
   # Pull backend secrets and non-secret auth/runtime settings from SSM. The
   # ignored file is mode 0600 so later owner-scoped deploys can recreate the
   # container without putting credentials in the repository or command line.
+  OPENAI_API_KEY=$(/usr/local/bin/aws ssm get-parameter \
+    --name "/homeops/${var.environment}/openai-api-key" \
+    --with-decryption \
+    --query 'Parameter.Value' \
+    --output text \
+    --region ${var.aws_region} 2>/dev/null)
+  if [ -z "$OPENAI_API_KEY" ]; then
+    echo "[WARN] OPENAI_API_KEY not found in SSM — backend will remain unavailable until configured. Add to SSM: /homeops/${var.environment}/openai-api-key" >> $LOG
+  fi
+
   GEMINI_API_KEY=$(/usr/local/bin/aws ssm get-parameter \
     --name "/homeops/${var.environment}/gemini-api-key" \
     --with-decryption \
@@ -224,7 +234,9 @@ if [ -f /home/ubuntu/homeops/dashboard/docker-compose.yml ]; then
 
   umask 077
   cat > .env << ENVEOF
+OPENAI_API_KEY=$OPENAI_API_KEY
 GEMINI_API_KEY=$GEMINI_API_KEY
+ASK_HOMEOPS_DIAGNOSTIC_PROVIDER=openai
 ASK_HOMEOPS_OIDC_ISSUER=$ASK_HOMEOPS_OIDC_ISSUER
 ASK_HOMEOPS_OIDC_AUDIENCE=$ASK_HOMEOPS_OIDC_AUDIENCE
 ASK_HOMEOPS_OIDC_AUDIENCE_CLAIM=$ASK_HOMEOPS_OIDC_AUDIENCE_CLAIM
