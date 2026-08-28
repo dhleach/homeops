@@ -23,7 +23,7 @@ jobs:
           ruff format --check --diff \
             services/observer/observer.py services/consumer/consumer.py services/consumer/constants.py \
             services/consumer/state.py services/consumer/processors.py services/consumer/alerts.py services/consumer/reporting.py \
-            services/consumer/tests/test_cooling_events.py \
+            services/consumer/tests/test_cooling_events.py services/consumer/tests/test_cooling_climate_events.py \
             services/consumer/tests/test_mitigation_events.py services/consumer/tests/test_mitigation_rollback.py \
             services/consumer/hvac_context.py services/consumer/proactive_insight.py \
             services/consumer/tests/test_proactive_insight.py services/insights/rules/config.py \
@@ -56,7 +56,7 @@ jobs:
           ruff check \
             services/observer/observer.py services/consumer/consumer.py services/consumer/constants.py \
             services/consumer/state.py services/consumer/processors.py services/consumer/alerts.py services/consumer/reporting.py \
-            services/consumer/tests/test_cooling_events.py \
+            services/consumer/tests/test_cooling_events.py services/consumer/tests/test_cooling_climate_events.py \
             services/consumer/tests/test_mitigation_events.py services/consumer/tests/test_mitigation_rollback.py \
             services/consumer/hvac_context.py services/consumer/proactive_insight.py \
             services/consumer/tests/test_proactive_insight.py services/insights/rules/config.py \

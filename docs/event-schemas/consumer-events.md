@@ -2,12 +2,12 @@
 
 This document is the reference for all consumer events emitted by
 `services/consumer/consumer.py` into `state/consumer/events.jsonl`. It covers the implemented
-consumer event schemas and three planned events (not yet implemented). Most events are derived from
+consumer event schemas. Most events are derived from
 `homeops.observer.state_changed.v1` records; mitigation decisions arrive as explicit
 Home Assistant event records. Together they represent higher-level state transitions
 (heating and cooling floor calls, furnace and inferred-AC sessions, thermostat changes,
-outdoor temperature readings, daily summaries, per-zone heating-cycle outcomes, and explicit
-mitigation decisions).
+outdoor temperature readings, daily summaries, per-zone heating- and cooling-cycle outcomes,
+and explicit mitigation decisions).
 Automatic mitigation rollback decisions are also preserved as explicit
 Home Assistant events before the consumer appends them and sends an operator
 alert.
@@ -564,12 +564,10 @@ UTC date is processed. Summarises each floor's heating call activity for the day
 
 ---
 
-## Planned Events (Not Yet Implemented)
+## Heating-cycle compatibility notes
 
-The three events below are designed but not yet implemented. They surface per-zone heating-cycle
-outcome quality — whether a zone reached its setpoint, how fast, and how much it overshot.
-They complement the existing furnace-level `heating_session_started/ended.v1` and zone-level
-`floor_call_started/ended.v1` events.
+The heating outcome schemas below are implemented and complement the existing furnace-level
+`heating_session_started/ended.v1` and zone-level `floor_call_started/ended.v1` events.
 
 The furnace is shared across all zones (floor_1, floor_2, floor_3). Zones call for heat via
 dampers; the furnace runs whenever any zone is calling. A **zone heating session** begins when
@@ -584,13 +582,20 @@ to existing `climate_state`):
 
 | State key | Type | Purpose |
 |---|---|---|
-| `session_start_temp[entity_id]` | float \| null | `current_temp` when `hvac_action` last became `"heating"`. |
-| `session_start_ts[entity_id]` | datetime \| null | Timestamp when `hvac_action` last became `"heating"`. |
-| `setpoint_reached_ts[entity_id]` | datetime \| null | Timestamp of first `current_temp >= setpoint` event during active session. |
-| `session_peak_temp[entity_id]` | float \| null | Running max `current_temp` since `hvac_action = "heating"`. Used for `peak_temp` and `closest_temp`. |
-| `session_other_zones[entity_id]` | list[string] | Snapshot of other calling zones at session start. |
+| `heating_start_temp` | float \| null | `current_temp` when `hvac_action` last became `"heating"`. |
+| `heating_start_ts` | datetime \| null | Timestamp when `hvac_action` last became `"heating"`. |
+| `setpoint_reached_ts` | datetime \| null | Timestamp of first `current_temp >= setpoint` event during active session. |
+| `session_temps` / `post_setpoint_temps` | list[float] | Heating readings used for closest/peak temperature outcomes. |
+| `heating_start_other_zones` | list[string] | Snapshot of other heating-call entities at session start. |
 
-All keys are reset to `null`/`[]` when `hvac_action` leaves `"heating"`.
+These heating keys are reset to `null`/`[]` when `hvac_action` leaves `"heating"`.
+
+Cooling uses a separate state machine and separate keys (`cooling_start_temp`,
+`cooling_start_setpoint`, `cooling_start_ts`, `cooling_setpoint_reached_ts`,
+`cooling_session_temps`, `cooling_post_setpoint_temps`, and
+`cooling_start_other_zones`). Cooling does not mutate heating state, and its
+directional comparator is the inverse: a zone reaches its captured target when
+`current_temp <= setpoint` after a previous reading above that target.
 
 ### Notes on Future Work
 
@@ -781,6 +786,224 @@ extreme cold that triggered an early shutoff.
   }
 }
 ```
+
+---
+
+## Event: `homeops.consumer.thermostat_cooling_session_started.v1`
+
+Fires when a climate entity's `hvac_action` transitions to `"cooling"`. This
+is a per-zone thermostat session boundary. It is distinct from
+`cooling_session_started.v1`, which is the whole-home inferred-AC session from
+the aggregate `binary_sensor.ac_cooling` helper.
+
+The session captures the starting setpoint. A later setpoint change still emits
+the shared `thermostat_setpoint_changed.v1` event, but does not retarget this
+active cooling session.
+
+### Field Table
+
+| Field | Type | Source | Rationale |
+|---|---|---|---|
+| `schema` | string | hardcoded | Event type identifier. |
+| `ts` | ISO 8601 string | observer event timestamp | Source timestamp retained for replay ordering. |
+| `data.entity_id` | string | `CLIMATE_ENTITIES` key | HA climate entity linkage. |
+| `data.zone` | string | `CLIMATE_ENTITIES[entity_id]` | Zone grouping key. |
+| `data.started_at` | ISO 8601 string \| null | observer event `ts` | Exact action-transition boundary. |
+| `data.mode` | string | hardcoded | Explicit directional mode; always `"cool"`. |
+| `data.hvac_mode` | string \| null | observer `new_state` | Top-level HA climate mode. |
+| `data.hvac_action` | string | climate `attributes["hvac_action"]` | Actual action; always `"cooling"` for this event. |
+| `data.setpoint` | float \| null | climate `attributes["temperature"]` | Target captured at session start. |
+| `data.current_temp` | float \| null | climate `attributes["current_temperature"]` | Baseline temperature for the session. |
+| `data.other_zones_calling` | list[string] | cooling-call state at session start | Captures concurrent cooling demand. |
+
+### JSON Example
+
+```json
+{
+  "schema": "homeops.consumer.thermostat_cooling_session_started.v1",
+  "source": "consumer.v1",
+  "ts": "2026-07-15T14:00:00.000000+00:00",
+  "data": {
+    "entity_id": "climate.floor_1_thermostat",
+    "zone": "floor_1",
+    "started_at": "2026-07-15T14:00:00.000000+00:00",
+    "mode": "cool",
+    "hvac_mode": "cool",
+    "hvac_action": "cooling",
+    "setpoint": 72.0,
+    "current_temp": 78.0,
+    "other_zones_calling": ["binary_sensor.floor_2_cooling_call"]
+  }
+}
+```
+
+---
+
+## Event: `homeops.consumer.thermostat_cooling_setpoint_reached.v1`
+
+Fires once when an active cooling session crosses its captured target
+downward: `current_temp <= cooling_start_setpoint` and the previous reading was
+above that target. A thermostat that is already at or below its target when
+cooling starts does not create a training crossing event.
+
+The payload uses the shared thermostat fields and adds an explicit directional
+`mode`. `data.setpoint` is the session-start target rather than a later
+thermostat setting.
+
+### Field Table
+
+| Field | Type | Source | Rationale |
+|---|---|---|---|
+| `schema` | string | hardcoded | Event type identifier. |
+| `ts` | ISO 8601 string | observer event timestamp | Source timestamp retained for replay ordering. |
+| `data.entity_id` | string | `CLIMATE_ENTITIES` key | HA climate entity linkage. |
+| `data.zone` | string | `CLIMATE_ENTITIES[entity_id]` | Zone grouping key. |
+| `data.ts` | ISO 8601 string \| null | observer event `ts` | Exact target-crossing boundary. |
+| `data.mode` | string | hardcoded | Explicit directional mode; always `"cool"`. |
+| `data.hvac_mode` | string \| null | observer `new_state` | Top-level HA climate mode. |
+| `data.hvac_action` | string \| null | climate `attributes["hvac_action"]` | Action on the source record; normally `"cooling"`, but it may already be non-cooling when target crossing and session end share one record. |
+| `data.setpoint` | float | persisted cooling session start | Target crossed by the downward comparator. |
+| `data.current_temp` | float | climate `attributes["current_temperature"]` | Temperature at the crossing. |
+
+---
+
+## Event: `homeops.consumer.zone_time_to_cool.v1`
+
+Fires alongside `thermostat_cooling_setpoint_reached.v1` when the consumer has
+a valid cooling-session start boundary. It is the cooling counterpart to
+`zone_time_to_temp.v1`: the target is the captured session-start setpoint, and
+all directional deltas are defined as positive cooling work.
+
+### Field Table
+
+| Field | Type | Source | Rationale |
+|---|---|---|---|
+| `schema` | string | hardcoded | Event type identifier. |
+| `ts` | ISO 8601 string | observer event timestamp | Source timestamp retained for replay ordering. |
+| `data.entity_id` | string | `CLIMATE_ENTITIES` key | HA climate entity linkage. |
+| `data.zone` | string | `CLIMATE_ENTITIES[entity_id]` | Zone grouping key. |
+| `data.mode` | string | hardcoded | Explicit directional mode; always `"cool"`. |
+| `data.start_temp` | float | `current_temp` at cooling-session start | Baseline temperature. |
+| `data.setpoint` | float | captured cooling session target | Target used for this session. |
+| `data.setpoint_delta` | float | `start_temp - setpoint` | Degrees the zone needed to cool. |
+| `data.duration_s` | int | target-crossing timestamp minus session-start timestamp | Primary time-to-cool KPI. |
+| `data.end_temp` | float | `current_temp` at target crossing | Temperature at the crossing. |
+| `data.degrees_cooled` | float | `start_temp - end_temp` | Observed directional temperature change. |
+| `data.degrees_per_min` | float | `degrees_cooled / (duration_s / 60)` | Normalized cooling rate. |
+| `data.outdoor_temp_f` | float \| null | latest outdoor reading | Environmental covariate. |
+| `data.other_zones_calling` | list[string] | cooling-call state at target crossing | Concurrent cooling demand at the measurement boundary. |
+
+### JSON Example
+
+```json
+{
+  "schema": "homeops.consumer.zone_time_to_cool.v1",
+  "source": "consumer.v1",
+  "ts": "2026-07-15T14:30:00.000000+00:00",
+  "data": {
+    "entity_id": "climate.floor_1_thermostat",
+    "zone": "floor_1",
+    "mode": "cool",
+    "start_temp": 78.0,
+    "setpoint": 72.0,
+    "setpoint_delta": 6.0,
+    "duration_s": 1800,
+    "end_temp": 72.0,
+    "degrees_cooled": 6.0,
+    "degrees_per_min": 0.2,
+    "outdoor_temp_f": 88.5,
+    "other_zones_calling": ["binary_sensor.floor_2_cooling_call"]
+  }
+}
+```
+
+---
+
+## Event: `homeops.consumer.zone_cooling_setpoint_miss.v1`
+
+Fires when a cooling session ends without a downward crossing, provided the
+zone started above its captured target and remained above it. This is the
+cooling counterpart to `zone_setpoint_miss.v1`.
+
+`closest_temp` is the lowest observed temperature during the session and
+`delta = closest_temp - setpoint`; therefore a genuine miss has a positive
+`delta`. If a target crossing was observed, or a fallback session sample shows
+that the target was reached, this event is suppressed.
+
+### Field Table
+
+| Field | Type | Source | Rationale |
+|---|---|---|---|
+| `schema` | string | hardcoded | Event type identifier. |
+| `ts` | ISO 8601 string | observer end-event timestamp | Source timestamp retained for replay ordering. |
+| `data.entity_id` | string | `CLIMATE_ENTITIES` key | HA climate entity linkage. |
+| `data.zone` | string | `CLIMATE_ENTITIES[entity_id]` | Zone grouping key. |
+| `data.mode` | string | hardcoded | Explicit directional mode; always `"cool"`. |
+| `data.start_temp` | float | `current_temp` at cooling-session start | Baseline temperature. |
+| `data.setpoint` | float | captured cooling session target | Target the zone failed to reach. |
+| `data.setpoint_delta` | float | `start_temp - setpoint` | Initial cooling work required. |
+| `data.duration_s` | int | action-end timestamp minus session-start timestamp | Length of the incomplete cooling attempt. |
+| `data.closest_temp` | float | minimum observed session temperature | Best approach to the target. |
+| `data.delta` | float | `closest_temp - setpoint` | Positive remaining gap for a miss. |
+| `data.outdoor_temp_f` | float \| null | latest outdoor reading | Environmental covariate. |
+| `data.other_zones_calling` | list[string] | cooling-call state at session start | Concurrent cooling demand. |
+| `data.likely_cause` | string | session state | `"thermostat_adjustment"` if the setpoint changed during cooling; otherwise `"unknown"`. |
+
+---
+
+## Event: `homeops.consumer.zone_cooling_undershoot.v1`
+
+Fires when a cooling session reached its target and then ended. This is the
+cooling counterpart to `zone_overshoot.v1`: it measures the post-target tail,
+not the initial time-to-cool. `trough_temp` is the lowest temperature observed
+after the crossing; it is `null` when only the crossing reading was available.
+
+### Field Table
+
+| Field | Type | Source | Rationale |
+|---|---|---|---|
+| `schema` | string | hardcoded | Event type identifier. |
+| `ts` | ISO 8601 string | observer end-event timestamp | Source timestamp retained for replay ordering. |
+| `data.entity_id` | string | `CLIMATE_ENTITIES` key | HA climate entity linkage. |
+| `data.zone` | string | `CLIMATE_ENTITIES[entity_id]` | Zone grouping key. |
+| `data.mode` | string | hardcoded | Explicit directional mode; always `"cool"`. |
+| `data.start_temp` | float \| null | `current_temp` at cooling-session start | Full-cycle baseline when available. |
+| `data.setpoint` | float \| null | captured cooling session target | Target used for the session. |
+| `data.setpoint_delta` | float \| null | `start_temp - setpoint` | Initial cooling work required. |
+| `data.end_temp` | float \| null | `current_temp` at action end | Final observed session temperature. |
+| `data.undershoot_s` | int | action-end timestamp minus target-crossing timestamp | Time the cooling action continued after satisfaction. |
+| `data.trough_temp` | float \| null | minimum post-target temperature | Best available post-target trough. |
+| `data.outdoor_temp_f` | float \| null | latest outdoor reading | Environmental covariate. |
+| `data.other_zones_calling` | list[string] | cooling-call state at session start | Concurrent cooling demand. |
+
+---
+
+## Event: `homeops.consumer.thermostat_cooling_session_ended.v1`
+
+Fires when a climate entity leaves `hvac_action == "cooling"`. The event is
+emitted after `zone_cooling_setpoint_miss.v1` or
+`zone_cooling_undershoot.v1`, when one applies, so consumers can process the
+outcome before the terminal boundary. It is the per-zone counterpart to the
+aggregate `cooling_session_ended.v1` event.
+
+### Field Table
+
+| Field | Type | Source | Rationale |
+|---|---|---|---|
+| `schema` | string | hardcoded | Event type identifier. |
+| `ts` | ISO 8601 string | observer event timestamp | Source timestamp retained for replay ordering. |
+| `data.entity_id` | string | `CLIMATE_ENTITIES` key | HA climate entity linkage. |
+| `data.zone` | string | `CLIMATE_ENTITIES[entity_id]` | Zone grouping key. |
+| `data.ended_at` | ISO 8601 string \| null | observer event `ts` | Exact action-end boundary. |
+| `data.mode` | string | hardcoded | Explicit directional mode; always `"cool"`. |
+| `data.hvac_mode` | string \| null | observer `new_state` | Top-level HA climate mode after the transition. |
+| `data.hvac_action` | string \| null | climate `attributes["hvac_action"]` | Action after the transition. |
+| `data.start_temp` | float \| null | persisted cooling session state | Cooling-session baseline. |
+| `data.setpoint` | float \| null | persisted cooling session state | Captured target, unaffected by later setpoint changes. |
+| `data.current_temp` | float \| null | climate `attributes["current_temperature"]` | Temperature at action end. |
+| `data.duration_s` | int \| null | action-end timestamp minus session-start timestamp | Total cooling action duration. |
+| `data.target_reached` | boolean | persisted crossing state | Whether the captured target was crossed. |
+| `data.other_zones_calling` | list[string] | cooling-call state at session start | Concurrent cooling demand snapshot. |
 
 ---
 

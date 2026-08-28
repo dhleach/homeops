@@ -4,7 +4,7 @@ The design policy for future short-cycle mitigation is documented in
 [docs/mitigation-policy.md](../../docs/mitigation-policy.md); it is not an
 active Home Assistant control path.
 
-The consumer is a Python daemon that tails the observer's JSONL event stream in real time and emits higher-level **derived events** — floor heating- and cooling-call sessions, whole-home heating and inferred-AC sessions, thermostat/climate state changes, per-zone heating performance metrics, mitigation decisions, automatic mitigation rollbacks, in-flight overheating warnings, and (when explicitly enabled) bounded LLM explanations for validated runtime anomalies. It is the second stage in the homeops data pipeline.
+The consumer is a Python daemon that tails the observer's JSONL event stream in real time and emits higher-level **derived events** — floor heating- and cooling-call sessions, whole-home heating and inferred-AC sessions, thermostat/climate state changes, per-zone heating and cooling performance metrics, mitigation decisions, automatic mitigation rollbacks, in-flight overheating warnings, and (when explicitly enabled) bounded LLM explanations for validated runtime anomalies. It is the second stage in the homeops data pipeline.
 
 For the host/network boundary around this service, see the repository-level
 [`docs/architecture.md`](../../docs/architecture.md) and
@@ -41,7 +41,7 @@ observer
                ──►  Telegram alerts  (warnings, anomaly insights, and rollback)
 ```
 
-The consumer reads the observer's raw `state_changed` events and explicit Home Assistant event records. It produces semantically richer records: when a floor starts or ends a heating or cooling call, when the furnace or inferred AC demand starts or ends a whole-home session, when a thermostat's setpoint, current temperature, or HVAC mode changes, when a zone reaches its setpoint (along with how long it took), when a zone overshoots or undershoots its setpoint after heating ends, when floor 2 has been calling for longer than the configured threshold (a sign that the furnace may overheat), when a staged mitigation decision was applied or skipped, when repeated short cycling causes the mitigation guard to roll back, and a daily summary of furnace runtime and outdoor temperatures. A validated floor-runtime anomaly can optionally trigger a separate plain-English explanation without allowing the model to control Home Assistant.
+The consumer reads the observer's raw `state_changed` events and explicit Home Assistant event records. It produces semantically richer records: when a floor starts or ends a heating or cooling call, when the furnace or inferred AC demand starts or ends a whole-home session, when a thermostat's setpoint, current temperature, or HVAC mode changes, when a zone reaches its directional heating or cooling target (along with how long it took), when a zone overshoots after heating or undershoots after cooling, when a heating or cooling call misses its target, when floor 2 has been calling for longer than the configured threshold (a sign that the furnace may overheat), when a staged mitigation decision was applied or skipped, when repeated short cycling causes the mitigation guard to roll back, and a daily summary of furnace runtime and outdoor temperatures. A validated floor-runtime anomaly can optionally trigger a separate plain-English explanation without allowing the model to control Home Assistant.
 
 ---
 
@@ -93,9 +93,9 @@ and translates `homeops.observer.event.v1` mitigation records by their
 | `binary_sensor.floor_3_cooling_call` | `cooling_call_started.v1`, `cooling_call_ended.v1` |
 | `binary_sensor.ac_cooling` | `cooling_session_started.v1`, `cooling_session_ended.v1` |
 | `sensor.outdoor_temperature` | `outdoor_temp_updated.v1` |
-| `climate.floor_1_thermostat` | `thermostat_setpoint_changed.v1`, `thermostat_current_temp_updated.v1`, `thermostat_mode_changed.v1`, `thermostat_setpoint_reached.v1`, `zone_time_to_temp.v1`, `zone_overshoot.v1`, `zone_setpoint_miss.v1`, `zone_slow_to_heat_warning.v1` |
-| `climate.floor_2_thermostat` | `thermostat_setpoint_changed.v1`, `thermostat_current_temp_updated.v1`, `thermostat_mode_changed.v1`, `thermostat_setpoint_reached.v1`, `zone_time_to_temp.v1`, `zone_overshoot.v1`, `zone_setpoint_miss.v1`, `zone_slow_to_heat_warning.v1` |
-| `climate.floor_3_thermostat` | `thermostat_setpoint_changed.v1`, `thermostat_current_temp_updated.v1`, `thermostat_mode_changed.v1`, `thermostat_setpoint_reached.v1`, `zone_time_to_temp.v1`, `zone_overshoot.v1`, `zone_setpoint_miss.v1`, `zone_slow_to_heat_warning.v1` |
+| `climate.floor_1_thermostat` | `thermostat_setpoint_changed.v1`, `thermostat_current_temp_updated.v1`, `thermostat_mode_changed.v1`, `thermostat_setpoint_reached.v1`, `zone_time_to_temp.v1`, `zone_overshoot.v1`, `zone_setpoint_miss.v1`, `zone_slow_to_heat_warning.v1`, `thermostat_cooling_session_started.v1`, `thermostat_cooling_session_ended.v1`, `thermostat_cooling_setpoint_reached.v1`, `zone_time_to_cool.v1`, `zone_cooling_setpoint_miss.v1`, `zone_cooling_undershoot.v1` |
+| `climate.floor_2_thermostat` | `thermostat_setpoint_changed.v1`, `thermostat_current_temp_updated.v1`, `thermostat_mode_changed.v1`, `thermostat_setpoint_reached.v1`, `zone_time_to_temp.v1`, `zone_overshoot.v1`, `zone_setpoint_miss.v1`, `zone_slow_to_heat_warning.v1`, `thermostat_cooling_session_started.v1`, `thermostat_cooling_session_ended.v1`, `thermostat_cooling_setpoint_reached.v1`, `zone_time_to_cool.v1`, `zone_cooling_setpoint_miss.v1`, `zone_cooling_undershoot.v1` |
+| `climate.floor_3_thermostat` | `thermostat_setpoint_changed.v1`, `thermostat_current_temp_updated.v1`, `thermostat_mode_changed.v1`, `thermostat_setpoint_reached.v1`, `zone_time_to_temp.v1`, `zone_overshoot.v1`, `zone_setpoint_miss.v1`, `zone_slow_to_heat_warning.v1`, `thermostat_cooling_session_started.v1`, `thermostat_cooling_session_ended.v1`, `thermostat_cooling_setpoint_reached.v1`, `zone_time_to_cool.v1`, `zone_cooling_setpoint_miss.v1`, `zone_cooling_undershoot.v1` |
 | `homeops.observer.event.v1` (`event_type=homeops.mitigation.zone_stagger_applied.v1`) | `homeops.mitigation.zone_stagger_applied.v1` |
 | `homeops.observer.event.v1` (`event_type=homeops.mitigation.rollback.v1`) | `homeops.mitigation.rollback.v1` plus an urgent Telegram alert when configured |
 
@@ -114,9 +114,9 @@ Every derived event is:
 
 > **Full authoritative schema reference:** [`docs/event-schemas/consumer-events.md`](../../docs/event-schemas/consumer-events.md)
 >
-> That document contains complete field tables with source/rationale columns, design notes, and planned (not-yet-implemented) events. The sections below are the working reference for the currently implemented event types.
+> That document contains complete field tables with source/rationale columns and design notes. The sections below are the working reference for the currently implemented event types.
 
-The consumer emits 32 derived event types. All share a common envelope. The
+The consumer emits 38 derived event types. All share a common envelope. The
 authoritative list is maintained in `docs/event-schemas/consumer-events.md`; the
 working sections below cover the most frequently inspected event payloads.
 
@@ -722,6 +722,157 @@ Emitted when a heating session ends (`hvac_action` leaves `"heating"`) and setpo
     "peak_temp": 69.5,
     "outdoor_temp_f": 31.0,
     "other_zones_calling": []
+  }
+}
+```
+
+---
+
+### Thermostat cooling session and outcome events
+
+Cooling thermostat events are the additive counterparts to the heating session
+and performance events. A per-zone cooling session begins when
+`hvac_action` transitions to `"cooling"` and ends when it leaves that value.
+The session captures the setpoint at start; later setpoint changes are emitted
+through the existing shared thermostat events and do not retarget the active
+session. Cooling reaches its target when `current_temp <=` that captured
+setpoint after the previous reading was above it.
+
+These per-zone events are distinct from `cooling_session_started.v1` and
+`cooling_session_ended.v1`, which describe the whole-home
+`binary_sensor.ac_cooling` helper. The heating event names and comparators are
+unchanged.
+
+#### `homeops.consumer.thermostat_cooling_session_started.v1`
+
+Emitted on a climate entity's transition to `hvac_action == "cooling"`.
+
+| Field | Type | Description |
+|---|---|---|
+| `data.entity_id` | string | Climate entity ID |
+| `data.zone` | string | Zone identifier |
+| `data.started_at` | string (ISO 8601 UTC) \| null | Original observer timestamp of the action transition |
+| `data.mode` | string | Always `"cool"` |
+| `data.hvac_mode` | string \| null | Top-level HA climate mode |
+| `data.hvac_action` | string | Always `"cooling"` |
+| `data.setpoint` | float \| null | Setpoint captured at cooling-session start |
+| `data.current_temp` | float \| null | Temperature captured at cooling-session start |
+| `data.other_zones_calling` | array[string] | Other cooling-call helper entities active at session start |
+
+#### `homeops.consumer.thermostat_cooling_setpoint_reached.v1`
+
+Emitted once when the active cooling session crosses its captured target
+downward: the current reading is at or below the target and the previous
+reading was above it. It uses the shared thermostat payload plus `mode: "cool"`
+and the session-start target in `data.setpoint`.
+
+#### `homeops.consumer.zone_time_to_cool.v1`
+
+Emitted alongside the cooling setpoint-reached event when a valid session-start
+temperature and timestamp are available. `setpoint_delta` and
+`degrees_cooled` are positive when the zone had to cool, and
+`other_zones_calling` reflects the cooling-call helpers active at the crossing.
+
+| Field | Type | Description |
+|---|---|---|
+| `data.entity_id` | string | Climate entity ID |
+| `data.zone` | string | Zone identifier |
+| `data.mode` | string | Always `"cool"` |
+| `data.start_temp` | float | Temperature at cooling-session start |
+| `data.setpoint` | float | Captured cooling target |
+| `data.setpoint_delta` | float | `start_temp - setpoint` |
+| `data.duration_s` | integer | Seconds from cooling-session start to target crossing |
+| `data.end_temp` | float | Temperature at target crossing |
+| `data.degrees_cooled` | float | `start_temp - end_temp` |
+| `data.degrees_per_min` | float | `degrees_cooled / (duration_s / 60)` |
+| `data.outdoor_temp_f` | float \| null | Last known outdoor temperature |
+| `data.other_zones_calling` | array[string] | Other cooling-call helpers active at target crossing |
+
+#### `homeops.consumer.zone_cooling_setpoint_miss.v1`
+
+Emitted when cooling ends without a downward target crossing, provided the zone
+started above its captured target and remained above it. `closest_temp` is the
+lowest observed temperature during the session and `delta` is the positive
+remaining gap (`closest_temp - setpoint`).
+
+| Field | Type | Description |
+|---|---|---|
+| `data.entity_id` | string | Climate entity ID |
+| `data.zone` | string | Zone identifier |
+| `data.mode` | string | Always `"cool"` |
+| `data.start_temp` | float | Temperature at cooling-session start |
+| `data.setpoint` | float | Captured cooling target |
+| `data.setpoint_delta` | float | `start_temp - setpoint` |
+| `data.duration_s` | integer | Seconds from cooling-session start to action end |
+| `data.closest_temp` | float | Lowest temperature observed during the session |
+| `data.delta` | float | `closest_temp - setpoint`; positive for a miss |
+| `data.outdoor_temp_f` | float \| null | Last known outdoor temperature |
+| `data.other_zones_calling` | array[string] | Other cooling-call helpers active at session start |
+| `data.likely_cause` | string | `"thermostat_adjustment"` when the setpoint changed during cooling; otherwise `"unknown"` |
+
+#### `homeops.consumer.zone_cooling_undershoot.v1`
+
+Emitted when a cooling session reached its target and then ended. It measures
+the post-target tail: `undershoot_s` is the time from target crossing to action
+end, and `trough_temp` is the lowest post-target reading. `trough_temp` is
+`null` when only the crossing reading was available.
+
+| Field | Type | Description |
+|---|---|---|
+| `data.entity_id` | string | Climate entity ID |
+| `data.zone` | string | Zone identifier |
+| `data.mode` | string | Always `"cool"` |
+| `data.start_temp` | float \| null | Temperature at cooling-session start |
+| `data.setpoint` | float \| null | Captured cooling target |
+| `data.setpoint_delta` | float \| null | `start_temp - setpoint` |
+| `data.end_temp` | float \| null | Temperature at action end |
+| `data.undershoot_s` | integer | Seconds from target crossing to action end |
+| `data.trough_temp` | float \| null | Lowest post-target temperature observed |
+| `data.outdoor_temp_f` | float \| null | Last known outdoor temperature |
+| `data.other_zones_calling` | array[string] | Other cooling-call helpers active at session start |
+
+#### `homeops.consumer.thermostat_cooling_session_ended.v1`
+
+Emitted when a climate entity leaves `hvac_action == "cooling"`. The payload
+contains the captured session target, the end reading, total duration, and a
+`target_reached` boolean. It is emitted after the miss/undershoot outcome when
+one applies.
+
+| Field | Type | Description |
+|---|---|---|
+| `data.entity_id` | string | Climate entity ID |
+| `data.zone` | string | Zone identifier |
+| `data.ended_at` | string (ISO 8601 UTC) \| null | Original observer timestamp of the action transition |
+| `data.mode` | string | Always `"cool"` |
+| `data.hvac_mode` | string \| null | Top-level HA climate mode after the transition |
+| `data.hvac_action` | string \| null | Action after the transition |
+| `data.start_temp` | float \| null | Temperature at cooling-session start |
+| `data.setpoint` | float \| null | Captured cooling target |
+| `data.current_temp` | float \| null | Temperature at action end |
+| `data.duration_s` | integer \| null | Seconds from session start to action end |
+| `data.target_reached` | boolean | Whether the captured target was crossed |
+| `data.other_zones_calling` | array[string] | Other cooling-call helpers active at session start |
+
+**Example — target crossing and time-to-cool:**
+
+```json
+{
+  "schema": "homeops.consumer.zone_time_to_cool.v1",
+  "source": "consumer.v1",
+  "ts": "2026-07-15T14:30:00.000000+00:00",
+  "data": {
+    "entity_id": "climate.floor_1_thermostat",
+    "zone": "floor_1",
+    "mode": "cool",
+    "start_temp": 78.0,
+    "setpoint": 72.0,
+    "setpoint_delta": 6.0,
+    "duration_s": 1800,
+    "end_temp": 72.0,
+    "degrees_cooled": 6.0,
+    "degrees_per_min": 0.2,
+    "outdoor_temp_f": 88.5,
+    "other_zones_calling": ["binary_sensor.floor_2_cooling_call"]
   }
 }
 ```

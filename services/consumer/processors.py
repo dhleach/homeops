@@ -1,6 +1,10 @@
 """Event processors for floor, furnace, climate, and outdoor temperature events.
 
 Revision history:
+  2026-08-28  Add an additive thermostat cooling session/outcome path with
+              directional target semantics, one-time target crossing, and
+              separate persisted state; leave all heating event names, fields,
+              and comparators unchanged.
   2026-08-27  Add isolated cooling-call and aggregate cooling-session processors
               with sibling event schemas, preserving the heating processors and
               their payload contracts unchanged.
@@ -455,13 +459,17 @@ def process_climate_event(
     processing_ts: str | None = None,
     slow_to_heat_thresholds_s: dict[str, float] | None = None,
     slow_to_heat_enabled: bool = True,
+    cooling_floor_on_since: dict[str, datetime | None] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """
     Process a climate entity state_changed event.
 
-    Emits up to 3 events when setpoint, current_temp, or hvac mode/action changes.
-    Also emits zone_time_to_temp.v1 when setpoint is crossed during a tracked heating session,
-    and zone_overshoot.v1 when a heating session ends after setpoint was reached.
+    Emits shared thermostat change events when setpoint, current_temp, or HVAC
+    mode/action changes.  It also emits the heating performance events when
+    their existing heating boundaries are met, plus additive cooling
+    session/performance events when ``hvac_action`` is ``"cooling"``. Heating
+    state and event contracts are intentionally kept separate from the cooling
+    state machine.
 
     climate_state is a dict keyed by entity_id with previous known values.
     new_state is the top-level HA state (e.g. "heat", "off", "cool") used as hvac_mode.
@@ -469,6 +477,9 @@ def process_climate_event(
     daily_state is passed through from main() for outdoor_temp_f lookup.
     slow_to_heat_thresholds_s and slow_to_heat_enabled override the default
     thresholds for the service configuration.
+    cooling_floor_on_since is the independent cooling-call map used for the
+    cooling session-start snapshot; heating call entities are never reused for
+    cooling outcomes.
 
     Returns (events, updated_climate_state).
     """
@@ -483,6 +494,8 @@ def process_climate_event(
         floor_on_since = {}
     if daily_state is None:
         daily_state = {}
+    if cooling_floor_on_since is None:
+        cooling_floor_on_since = {}
 
     _evt_ts = processing_ts or utc_ts()
 
@@ -526,6 +539,20 @@ def process_climate_event(
     session_temps: list[float] = list(prev.get("session_temps") or [])
     slow_to_heat_sent: bool = prev.get("slow_to_heat_sent", False)
 
+    # Cooling session state is deliberately parallel to, and independent from,
+    # the established heating fields above.  The starting setpoint is captured
+    # because a later thermostat adjustment must not change the target for the
+    # already-running cooling session.
+    cooling_start_temp: float | None = prev.get("cooling_start_temp")
+    cooling_start_setpoint: float | None = prev.get("cooling_start_setpoint")
+    cooling_start_ts: datetime | None = prev.get("cooling_start_ts")
+    cooling_setpoint_reached_ts: datetime | None = prev.get("cooling_setpoint_reached_ts")
+    cooling_setpoint_reached_temp: float | None = prev.get("cooling_setpoint_reached_temp")
+    cooling_post_setpoint_temps: list[float] = list(prev.get("cooling_post_setpoint_temps") or [])
+    cooling_session_temps: list[float] = list(prev.get("cooling_session_temps") or [])
+    cooling_start_other_zones: list[str] | None = prev.get("cooling_start_other_zones")
+    setpoint_changed_during_cooling: bool = prev.get("setpoint_changed_during_cooling", False)
+
     # Detect heating session start: hvac_action transitions TO "heating".
     if prev_hvac_action != "heating" and hvac_action == "heating":
         heating_start_temp = current_temp
@@ -541,6 +568,46 @@ def process_climate_event(
             k for k, v in floor_on_since.items() if v is not None and k != this_floor_entity
         ]
 
+    # Detect a per-zone cooling session start.  The aggregate AC helper has its
+    # own whole-home event path; these events describe the thermostat/climate
+    # action for one zone and are therefore intentionally distinct.
+    if prev_hvac_action != "cooling" and hvac_action == "cooling":
+        cooling_start_temp = current_temp
+        cooling_start_setpoint = setpoint
+        cooling_start_ts = ts
+        cooling_setpoint_reached_ts = None
+        cooling_setpoint_reached_temp = None
+        cooling_post_setpoint_temps = []
+        cooling_session_temps = []
+        setpoint_changed_during_cooling = False
+        this_cooling_floor_entity = next(
+            (eid for eid, floor_name in _COOLING_FLOOR_ENTITIES.items() if floor_name == zone),
+            None,
+        )
+        cooling_start_other_zones = [
+            eid
+            for eid, started in cooling_floor_on_since.items()
+            if started is not None and eid != this_cooling_floor_entity
+        ]
+        events.append(
+            {
+                "schema": "homeops.consumer.thermostat_cooling_session_started.v1",
+                "source": "consumer.v1",
+                "ts": _evt_ts,
+                "data": {
+                    "entity_id": entity_id,
+                    "zone": zone,
+                    "started_at": ts_str,
+                    "mode": "cool",
+                    "hvac_mode": hvac_mode,
+                    "hvac_action": hvac_action,
+                    "setpoint": setpoint,
+                    "current_temp": current_temp,
+                    "other_zones_calling": cooling_start_other_zones or [],
+                },
+            }
+        )
+
     if setpoint is not None and setpoint != prev.get("setpoint"):
         events.append(
             {
@@ -552,6 +619,8 @@ def process_climate_event(
         )
         if prev_hvac_action == "heating" and hvac_action == "heating":
             setpoint_changed_during_heating = True
+        if prev_hvac_action == "cooling" and hvac_action == "cooling":
+            setpoint_changed_during_cooling = True
 
     if current_temp is not None and current_temp != prev.get("current_temp"):
         events.append(
@@ -565,6 +634,8 @@ def process_climate_event(
         # Track all temp readings during heating for closest_temp computation.
         if hvac_action == "heating":
             session_temps.append(current_temp)
+        if hvac_action == "cooling":
+            cooling_session_temps.append(current_temp)
 
     if (hvac_mode is not None and hvac_mode != prev.get("hvac_mode")) or (
         hvac_action is not None and hvac_action != prev.get("hvac_action")
@@ -579,6 +650,8 @@ def process_climate_event(
         )
         if prev_hvac_action == "heating" and hvac_action == "heating":
             setpoint_changed_during_heating = True
+        if prev_hvac_action == "cooling" and hvac_action == "cooling":
+            setpoint_changed_during_cooling = True
 
     # Setpoint reached: prev was heating and temp just crossed setpoint from below.
     setpoint_just_reached = False
@@ -721,6 +794,211 @@ def process_climate_event(
         setpoint_changed_during_heating = False
         slow_to_heat_sent = False
 
+    # Cooling reaches its session-start target from above.  This is a separate
+    # event and comparator from the historical heating setpoint-reached path:
+    # cooling is satisfied at or below the captured target, not at or above the
+    # current thermostat setpoint.
+    cooling_setpoint_just_reached = False
+    cooling_target = cooling_start_setpoint
+    if (
+        prev_hvac_action == "cooling"
+        and cooling_setpoint_reached_ts is None
+        and current_temp is not None
+        and cooling_target is not None
+        and current_temp <= cooling_target
+        and (prev_current_temp is None or prev_current_temp > cooling_target)
+    ):
+        cooling_common = dict(common)
+        cooling_common["mode"] = "cool"
+        cooling_common["setpoint"] = cooling_target
+        events.append(
+            {
+                "schema": "homeops.consumer.thermostat_cooling_setpoint_reached.v1",
+                "source": "consumer.v1",
+                "ts": _evt_ts,
+                "data": cooling_common,
+            }
+        )
+
+        # A missing start boundary can still produce the directional crossing
+        # event, but it cannot produce a valid time-to-cool measurement.
+        if (
+            cooling_start_ts is not None
+            and cooling_start_temp is not None
+            and cooling_start_temp > cooling_target
+        ):
+            duration_s = int((ts - cooling_start_ts).total_seconds()) if ts else 0
+            degrees_cooled = cooling_start_temp - current_temp
+            degrees_per_min = (
+                round(degrees_cooled / (duration_s / 60), 3) if duration_s > 0 else 0.0
+            )
+            this_cooling_floor_entity = next(
+                (eid for eid, floor_name in _COOLING_FLOOR_ENTITIES.items() if floor_name == zone),
+                None,
+            )
+            other_zones_calling = [
+                eid
+                for eid, started in cooling_floor_on_since.items()
+                if started is not None and eid != this_cooling_floor_entity
+            ]
+            events.append(
+                {
+                    "schema": "homeops.consumer.zone_time_to_cool.v1",
+                    "source": "consumer.v1",
+                    "ts": _evt_ts,
+                    "data": {
+                        "entity_id": entity_id,
+                        "zone": zone,
+                        "mode": "cool",
+                        "start_temp": cooling_start_temp,
+                        "setpoint": cooling_target,
+                        "setpoint_delta": cooling_start_temp - cooling_target,
+                        "duration_s": duration_s,
+                        "end_temp": current_temp,
+                        "degrees_cooled": degrees_cooled,
+                        "degrees_per_min": degrees_per_min,
+                        "outdoor_temp_f": daily_state.get("last_outdoor_temp_f"),
+                        "other_zones_calling": other_zones_calling,
+                    },
+                }
+            )
+
+        cooling_setpoint_reached_ts = ts
+        cooling_setpoint_reached_temp = current_temp
+        cooling_post_setpoint_temps.append(current_temp)
+        cooling_setpoint_just_reached = True
+
+    # Keep the post-target window separate from heating's peak-temperature
+    # state.  Include an action-ending reading so the cooling trough reflects
+    # the last observed temperature before the session closed.
+    if (
+        not cooling_setpoint_just_reached
+        and prev.get("cooling_setpoint_reached_ts") is not None
+        and prev_hvac_action == "cooling"
+        and current_temp is not None
+        and current_temp != prev_current_temp
+    ):
+        cooling_post_setpoint_temps.append(current_temp)
+
+    # End the per-zone cooling session on the first action transition away from
+    # cooling.  Thermal outcomes are emitted before the session-end event so a
+    # replay consumer sees the target/miss evidence before the boundary record.
+    if prev_hvac_action == "cooling" and hvac_action != "cooling":
+        cooling_end_setpoint = cooling_start_setpoint
+        duration_s = (
+            int((ts - cooling_start_ts).total_seconds())
+            if ts is not None and cooling_start_ts is not None
+            else None
+        )
+
+        if cooling_setpoint_reached_ts is not None:
+            if current_temp is not None and (
+                not cooling_post_setpoint_temps or cooling_post_setpoint_temps[-1] != current_temp
+            ):
+                cooling_post_setpoint_temps.append(current_temp)
+            trough_temp = (
+                min(cooling_post_setpoint_temps) if len(cooling_post_setpoint_temps) > 1 else None
+            )
+            undershoot_s = (
+                int((ts - cooling_setpoint_reached_ts).total_seconds()) if ts is not None else 0
+            )
+            events.append(
+                {
+                    "schema": "homeops.consumer.zone_cooling_undershoot.v1",
+                    "source": "consumer.v1",
+                    "ts": _evt_ts,
+                    "data": {
+                        "entity_id": entity_id,
+                        "zone": zone,
+                        "mode": "cool",
+                        "start_temp": cooling_start_temp,
+                        "setpoint": cooling_end_setpoint,
+                        "setpoint_delta": (
+                            cooling_start_temp - cooling_end_setpoint
+                            if cooling_start_temp is not None and cooling_end_setpoint is not None
+                            else None
+                        ),
+                        "end_temp": current_temp,
+                        "undershoot_s": undershoot_s,
+                        "trough_temp": trough_temp,
+                        "outdoor_temp_f": daily_state.get("last_outdoor_temp_f"),
+                        "other_zones_calling": cooling_start_other_zones or [],
+                    },
+                }
+            )
+        elif (
+            cooling_end_setpoint is not None
+            and cooling_start_temp is not None
+            and cooling_start_temp > cooling_end_setpoint
+        ):
+            cooling_samples = list(cooling_session_temps)
+            if current_temp is not None and (
+                not cooling_samples or cooling_samples[-1] != current_temp
+            ):
+                cooling_samples.append(current_temp)
+            closest_temp = min(cooling_samples) if cooling_samples else cooling_start_temp
+            setpoint_delta = cooling_start_temp - cooling_end_setpoint
+            # If the fallback sample reached the target, the crossing event was
+            # likely missed; do not emit a contradictory miss.
+            if closest_temp > cooling_end_setpoint:
+                events.append(
+                    {
+                        "schema": "homeops.consumer.zone_cooling_setpoint_miss.v1",
+                        "source": "consumer.v1",
+                        "ts": _evt_ts,
+                        "data": {
+                            "entity_id": entity_id,
+                            "zone": zone,
+                            "mode": "cool",
+                            "start_temp": cooling_start_temp,
+                            "setpoint": cooling_end_setpoint,
+                            "setpoint_delta": setpoint_delta,
+                            "duration_s": duration_s if duration_s is not None else 0,
+                            "closest_temp": closest_temp,
+                            "delta": closest_temp - cooling_end_setpoint,
+                            "outdoor_temp_f": daily_state.get("last_outdoor_temp_f"),
+                            "other_zones_calling": cooling_start_other_zones or [],
+                            "likely_cause": (
+                                "thermostat_adjustment"
+                                if setpoint_changed_during_cooling
+                                else "unknown"
+                            ),
+                        },
+                    }
+                )
+
+        events.append(
+            {
+                "schema": "homeops.consumer.thermostat_cooling_session_ended.v1",
+                "source": "consumer.v1",
+                "ts": _evt_ts,
+                "data": {
+                    "entity_id": entity_id,
+                    "zone": zone,
+                    "ended_at": ts_str,
+                    "mode": "cool",
+                    "hvac_mode": hvac_mode,
+                    "hvac_action": hvac_action,
+                    "start_temp": cooling_start_temp,
+                    "setpoint": cooling_end_setpoint,
+                    "current_temp": current_temp,
+                    "duration_s": duration_s,
+                    "target_reached": cooling_setpoint_reached_ts is not None,
+                    "other_zones_calling": cooling_start_other_zones or [],
+                },
+            }
+        )
+
+        cooling_start_temp = None
+        cooling_start_setpoint = None
+        cooling_start_ts = None
+        cooling_setpoint_reached_ts = None
+        cooling_setpoint_reached_temp = None
+        cooling_post_setpoint_temps = []
+        cooling_session_temps = []
+        cooling_start_other_zones = None
+        setpoint_changed_during_cooling = False
+
     # Slow-to-heat check: zone has been calling longer than threshold without reaching setpoint.
     if (
         hvac_action == "heating"
@@ -778,6 +1056,15 @@ def process_climate_event(
         "heating_start_other_zones": heating_start_other_zones,
         "setpoint_changed_during_heating": setpoint_changed_during_heating,
         "slow_to_heat_sent": slow_to_heat_sent,
+        "cooling_start_temp": cooling_start_temp,
+        "cooling_start_setpoint": cooling_start_setpoint,
+        "cooling_start_ts": cooling_start_ts,
+        "cooling_setpoint_reached_ts": cooling_setpoint_reached_ts,
+        "cooling_setpoint_reached_temp": cooling_setpoint_reached_temp,
+        "cooling_post_setpoint_temps": cooling_post_setpoint_temps,
+        "cooling_session_temps": cooling_session_temps,
+        "cooling_start_other_zones": cooling_start_other_zones,
+        "setpoint_changed_during_cooling": setpoint_changed_during_cooling,
     }
 
     return events, updated_state

@@ -1,6 +1,9 @@
 """State persistence and initialization for the HomeOps consumer service.
 
 Revision history:
+  2026-08-28  Serialize the independent per-zone cooling climate session
+              timestamps so target outcomes survive consumer restarts and
+              playback without changing heating state fields.
   2026-08-27  Persist and bootstrap cooling floor-call and aggregate AC session
               state in separate fields so the established heating state format
               and restart behavior remain compatible.
@@ -128,6 +131,8 @@ def _save_state(
         s = dict(es)
         s["heating_start_ts"] = _dt(s.get("heating_start_ts"))
         s["setpoint_reached_ts"] = _dt(s.get("setpoint_reached_ts"))
+        s["cooling_start_ts"] = _dt(s.get("cooling_start_ts"))
+        s["cooling_setpoint_reached_ts"] = _dt(s.get("cooling_setpoint_reached_ts"))
         serialized_cs[eid] = s
 
     payload: dict[str, Any] = {
