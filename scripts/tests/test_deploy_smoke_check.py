@@ -1,6 +1,8 @@
 """Tests for the public HomeOps deployment smoke checks.
 
 Revision history:
+  2026-08-28  Extended the healthy telemetry fixture for the additive cooling
+              and per-zone action fields required by the public release gate.
   2026-08-27  Added authenticated diagnostic probe coverage so the optional
               release check verifies a non-empty, error-free complete answer.
   2026-08-18  Added healthy-stack and failure-path coverage for the release gate
@@ -29,6 +31,13 @@ def _responses() -> dict[str, SmokeResponse]:
         "floor_1_call": False,
         "floor_2_call": False,
         "floor_3_call": False,
+        "ac_cooling_active": False,
+        "floor_1_cooling_call": False,
+        "floor_2_cooling_call": False,
+        "floor_3_cooling_call": False,
+        "floor_1_hvac_action": "idle",
+        "floor_2_hvac_action": "idle",
+        "floor_3_hvac_action": "idle",
         "floor_1_setpoint": 68.0,
         "floor_2_setpoint": 68.0,
         "floor_3_setpoint": 68.0,

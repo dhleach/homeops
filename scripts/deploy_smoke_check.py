@@ -2,6 +2,9 @@
 """Verify the public HomeOps deployment surfaces after a release.
 
 Revision history:
+  2026-08-28  Required the additive cooling-call, inferred-AC, and per-zone
+              HVAC-action fields so production verification covers the full
+              mode-aware current-telemetry contract.
   2026-08-27  Added an opt-in authenticated diagnostic probe so a release can
               verify that the protected Ask HomeOps path returns a complete
               answer, not merely that its public OpenAPI contract is present.
@@ -259,6 +262,13 @@ def _check_api(base_url: str, fetcher: Fetcher, timeout: float) -> list[str]:
         "floor_1_call",
         "floor_2_call",
         "floor_3_call",
+        "ac_cooling_active",
+        "floor_1_cooling_call",
+        "floor_2_cooling_call",
+        "floor_3_cooling_call",
+        "floor_1_hvac_action",
+        "floor_2_hvac_action",
+        "floor_3_hvac_action",
         "floor_1_setpoint",
         "floor_2_setpoint",
         "floor_3_setpoint",

@@ -10,7 +10,7 @@ interface at `https://api.homeops.now`.
 | Endpoint | Purpose |
 |---|---|
 | `GET /health` | Process liveness; returns `{"status":"ok"}` |
-| `GET /api/current-temps` | Current floor/outdoor temperatures, setpoints, calls, furnace state, and freshness timestamp |
+| `GET /api/current-temps` | Current floor/outdoor temperatures, setpoints, heating/cooling calls, inferred AC state, per-zone action, and freshness timestamp |
 | `POST /api/diagnostic` | Authenticated GPT-5.6 Luna-backed HVAC diagnostic using live Prometheus context |
 | `GET /metrics` | Internal diagnostic abuse/cost metrics for EC2-local Prometheus; not a public route |
 | `GET /openapi.json` | Generated API contract |
@@ -68,7 +68,12 @@ the optional provider-specific `OPENAI_INPUT_COST_USD_PER_MILLION_TOKENS`,
 `GEMINI_OUTPUT_COST_USD_PER_MILLION_TOKENS` overrides.
 
 `/api/current-temps` returns a structured response with nullable telemetry
-fields. A non-null `error` means Prometheus was unreachable; the deployment
+fields. The legacy `floor_N_call` and `furnace_active` fields remain heating-only;
+additive `floor_N_cooling_call`, `ac_cooling_active`, and
+`floor_N_hvac_action` fields expose thermostat-derived cooling without claiming
+compressor feedback. Each action is `heating`, `cooling`, or `idle`; it is
+`null` when either paired call gauge is unavailable or the gauges contradict
+each other. A non-null `error` means Prometheus was unreachable; the deployment
 smoke gate treats that as unhealthy. CORS is owned by
 `dashboard/nginx/api.homeops.now.conf`; do not add FastAPI middleware that
 creates duplicate `Access-Control-Allow-Origin` headers.
