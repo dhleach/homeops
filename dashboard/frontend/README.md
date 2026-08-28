@@ -9,6 +9,12 @@ React + Vite + Tailwind single-page dashboard for `homeops.now`.
   `floor_1/2/3_cooling_call`, `ac_cooling_active`, and
   `floor_1/2/3_hvac_action` (`heating`, `cooling`, `idle`, or `null` when
   unavailable); cooling state is thermostat-derived, not compressor feedback.
+- Zone cards and the live summary consume `floor_1/2/3_hvac_action` as the
+  authoritative mode. They show distinct heating, cooling, idle, and
+  unavailable states; they never infer heating from the legacy `*_call`
+  booleans. Cooling targets use directional `Cooling to ...` copy, while the
+  existing heating presentation remains unchanged. Failed or stale snapshots
+  are labeled as unavailable rather than showing an active mode.
 - Embeds the four provisioned Grafana dashboards from
   `VITE_GRAFANA_URL` (default: `https://api.homeops.now/grafana`).
 - Sends homeowner diagnostic questions to `VITE_API_URL/api/diagnostic`; the

@@ -52,6 +52,26 @@ describe("TempCard", () => {
     expect(screen.getByText("Heating")).toBeInTheDocument();
   });
 
+  it("renders cooling badge and directional target when hvac_action is cooling", () => {
+    render(<TempCard zone="floor_1" data={{ ...FLOOR1_DATA, hvac_action: "cooling" }} />);
+    expect(screen.getByText("Cooling")).toBeInTheDocument();
+    expect(screen.getByText("Cooling to 68°F")).toBeInTheDocument();
+  });
+
+  it("renders unavailable instead of an active mode when hvac_action is missing", () => {
+    render(<TempCard zone="floor_1" data={{ ...FLOOR1_DATA, hvac_action: null }} />);
+    expect(screen.getByText("Unavailable")).toBeInTheDocument();
+    expect(screen.queryByText("Heating")).not.toBeInTheDocument();
+    expect(screen.queryByText("Cooling")).not.toBeInTheDocument();
+  });
+
+  it("labels stale readings without claiming a current mode", () => {
+    render(<TempCard zone="floor_1" data={{ ...FLOOR1_DATA, hvac_action: "cooling", stale: true }} />);
+    expect(screen.getByText("Last known reading — live state unavailable")).toBeInTheDocument();
+    expect(screen.getByText("Unavailable")).toBeInTheDocument();
+    expect(screen.queryByText("Cooling to 68°F")).not.toBeInTheDocument();
+  });
+
   it("does not render setpoint when data is null", () => {
     render(<TempCard zone="floor_1" data={null} />);
     expect(screen.queryByText(/Set to/)).not.toBeInTheDocument();
