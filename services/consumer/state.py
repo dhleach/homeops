@@ -1,6 +1,8 @@
 """State persistence and initialization for the HomeOps consumer service.
 
 Revision history:
+  2026-08-28  Add cooling runtime/session counters to the daily state shape and
+              backfill them when loading older state files for safe rollout.
   2026-08-28  Serialize the independent per-zone cooling climate session
               timestamps so target outcomes survive consumer restarts and
               playback without changing heating state fields.
@@ -19,6 +21,7 @@ from typing import Any
 from dateutil.parser import isoparse
 
 from constants import (
+    _COOLING_FLOOR_ENTITIES,
     _FLOOR_ENTITIES,
     AC_COOLING_ENTITY,
     CLIMATE_ENTITIES,
@@ -87,6 +90,11 @@ def _empty_daily_state() -> dict[str, Any]:
         "floor_runtime_s": {},
         "per_floor_session_count": {eid: 0 for eid in _FLOOR_ENTITIES},
         "per_floor_max_call_s": {eid: None for eid in _FLOOR_ENTITIES},
+        "cooling_runtime_s": 0,
+        "cooling_session_count": 0,
+        "cooling_floor_runtime_s": {},
+        "per_floor_cooling_session_count": {eid: 0 for eid in _COOLING_FLOOR_ENTITIES},
+        "per_floor_max_cooling_call_s": {eid: None for eid in _COOLING_FLOOR_ENTITIES},
         "outdoor_temps": [],
         "last_outdoor_temp_f": None,
         "last_outdoor_temp_recorded_at": None,
@@ -101,6 +109,36 @@ def _empty_daily_state() -> dict[str, Any]:
         },
         "floor_2_telegram_suppressed_count": 0,
     }
+
+
+def ensure_daily_state(daily_state: dict[str, Any] | None) -> dict[str, Any]:
+    """Add missing daily-state keys when resuming a pre-cooling state file.
+
+    State files are intentionally forward-compatible: a consumer upgrade must
+    not discard heating counters just because the file predates the cooling
+    rollout.  The defaults are built fresh for each call so callers can safely
+    mutate the returned maps.
+    """
+    if not daily_state:
+        return _empty_daily_state()
+
+    state = dict(daily_state)
+    defaults = _empty_daily_state()
+    for key, default in defaults.items():
+        if key not in state:
+            state[key] = default
+
+    for key, entities, empty_value in (
+        ("per_floor_session_count", _FLOOR_ENTITIES, 0),
+        ("per_floor_max_call_s", _FLOOR_ENTITIES, None),
+        ("per_floor_cooling_session_count", _COOLING_FLOOR_ENTITIES, 0),
+        ("per_floor_max_cooling_call_s", _COOLING_FLOOR_ENTITIES, None),
+    ):
+        values = state.setdefault(key, {})
+        for entity_id in entities:
+            values.setdefault(entity_id, empty_value)
+
+    return state
 
 
 def _save_state(
@@ -237,6 +275,7 @@ __all__ = [
     "last_furnace_on_since",
     "last_ac_cooling_on_since",
     "_empty_daily_state",
+    "ensure_daily_state",
     "_save_state",
     "_load_state",
     "_load_last_consumed_ts",

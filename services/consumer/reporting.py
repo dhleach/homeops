@@ -1,10 +1,15 @@
-"""Daily summary generation and formatting for the HomeOps consumer service."""
+"""Daily summary generation and formatting for the HomeOps consumer service.
+
+Revision history:
+  2026-08-28  Add additive whole-home and per-floor cooling runtime/session
+              fields to the existing daily summaries and Telegram report.
+"""
 
 from __future__ import annotations
 
 from typing import Any
 
-from constants import _FLOOR_ENTITIES, CLIMATE_ENTITIES
+from constants import _COOLING_FLOOR_ENTITIES, _FLOOR_ENTITIES, CLIMATE_ENTITIES
 from utils import utc_ts
 
 
@@ -16,6 +21,10 @@ def emit_daily_summary(daily_state: dict[str, Any], date_str: str) -> dict[str, 
       - session_count: int
       - floor_runtime_s: dict {entity_id: int seconds}
       - per_floor_session_count: dict {entity_id: int}
+      - cooling_runtime_s: int (inferred whole-home AC runtime)
+      - cooling_session_count: int
+      - cooling_floor_runtime_s: dict {entity_id: int seconds}
+      - per_floor_cooling_session_count: dict {entity_id: int}
       - outdoor_temps: list of float
       - warnings_triggered: dict {warning_type: int}
     Returns the event dict.
@@ -34,6 +43,16 @@ def emit_daily_summary(daily_state: dict[str, Any], date_str: str) -> dict[str, 
         per_floor_session_count[floor_name] = daily_state.get("per_floor_session_count", {}).get(
             entity_id, 0
         )
+
+    per_floor_cooling_runtime_s: dict[str, int] = {}
+    per_floor_cooling_session_count: dict[str, int] = {}
+    for entity_id, floor_name in _COOLING_FLOOR_ENTITIES.items():
+        per_floor_cooling_runtime_s[floor_name] = daily_state.get(
+            "cooling_floor_runtime_s", {}
+        ).get(entity_id, 0)
+        per_floor_cooling_session_count[floor_name] = daily_state.get(
+            "per_floor_cooling_session_count", {}
+        ).get(entity_id, 0)
 
     per_floor_setpoint_samples: dict[str, list] = (
         daily_state.get("per_floor_setpoint_samples") or {}
@@ -67,11 +86,15 @@ def emit_daily_summary(daily_state: dict[str, Any], date_str: str) -> dict[str, 
             "date": date_str,
             "total_furnace_runtime_s": daily_state.get("furnace_runtime_s", 0),
             "session_count": daily_state.get("session_count", 0),
+            "total_cooling_runtime_s": daily_state.get("cooling_runtime_s", 0),
+            "cooling_session_count": daily_state.get("cooling_session_count", 0),
             "per_floor_runtime_s": per_floor_runtime_s,
             "outdoor_temp_min_f": outdoor_temp_min_f,
             "outdoor_temp_max_f": outdoor_temp_max_f,
             "outdoor_temp_avg_f": outdoor_temp_avg_f,
             "per_floor_session_count": per_floor_session_count,
+            "per_floor_cooling_runtime_s": per_floor_cooling_runtime_s,
+            "per_floor_cooling_session_count": per_floor_cooling_session_count,
             "per_floor_avg_setpoint_f": per_floor_avg_setpoint_f,
             "warnings_triggered": warnings_triggered,
         },
@@ -91,6 +114,10 @@ def emit_floor_daily_summaries(daily_state: dict[str, Any], date_str: str) -> li
     - total_runtime_s: sum of all call durations in seconds
     - avg_duration_s: mean call duration (null if no calls)
     - max_duration_s: longest single call duration (null if no calls)
+    - cooling_total_calls: number of completed floor cooling calls for the day
+    - cooling_total_runtime_s: sum of completed floor cooling-call durations
+    - cooling_avg_duration_s: mean cooling-call duration (null if no calls)
+    - cooling_max_duration_s: longest single cooling-call duration (null if no calls)
     - outdoor_temp_avg_f: day's average outdoor temperature (from daily_state; null if no readings)
 
     Returns a list of 3 event dicts (floor_1, floor_2, floor_3), even for floors with zero calls.
@@ -101,6 +128,9 @@ def emit_floor_daily_summaries(daily_state: dict[str, Any], date_str: str) -> li
     )
 
     events: list[dict[str, Any]] = []
+    cooling_entity_by_floor = {
+        floor_name: entity_id for entity_id, floor_name in _COOLING_FLOOR_ENTITIES.items()
+    }
     for entity_id, floor_name in _FLOOR_ENTITIES.items():
         total_calls: int = daily_state.get("per_floor_session_count", {}).get(entity_id, 0)
         total_runtime_s: int = daily_state.get("floor_runtime_s", {}).get(entity_id, 0)
@@ -108,6 +138,22 @@ def emit_floor_daily_summaries(daily_state: dict[str, Any], date_str: str) -> li
             round(total_runtime_s / total_calls, 1) if total_calls > 0 else None
         )
         max_duration_s: int | None = daily_state.get("per_floor_max_call_s", {}).get(entity_id)
+
+        cooling_entity_id = cooling_entity_by_floor[floor_name]
+        cooling_total_calls: int = daily_state.get("per_floor_cooling_session_count", {}).get(
+            cooling_entity_id, 0
+        )
+        cooling_total_runtime_s: int = daily_state.get("cooling_floor_runtime_s", {}).get(
+            cooling_entity_id, 0
+        )
+        cooling_avg_duration_s: float | None = (
+            round(cooling_total_runtime_s / cooling_total_calls, 1)
+            if cooling_total_calls > 0
+            else None
+        )
+        cooling_max_duration_s: int | None = daily_state.get(
+            "per_floor_max_cooling_call_s", {}
+        ).get(cooling_entity_id)
 
         events.append(
             {
@@ -121,6 +167,10 @@ def emit_floor_daily_summaries(daily_state: dict[str, Any], date_str: str) -> li
                     "total_runtime_s": total_runtime_s,
                     "avg_duration_s": avg_duration_s,
                     "max_duration_s": max_duration_s,
+                    "cooling_total_calls": cooling_total_calls,
+                    "cooling_total_runtime_s": cooling_total_runtime_s,
+                    "cooling_avg_duration_s": cooling_avg_duration_s,
+                    "cooling_max_duration_s": cooling_max_duration_s,
                     "outdoor_temp_avg_f": outdoor_temp_avg_f,
                 },
             }
@@ -180,6 +230,28 @@ def format_daily_summary_message(data: dict[str, Any]) -> str:
             lines.append(f"  • {floor_label}: {n} sessions, {avg_m}m avg{suffix}")
         else:
             lines.append(f"  • {floor_label}: 0 sessions")
+
+    cooling_runtime_s = data.get("total_cooling_runtime_s")
+    cooling_sessions = data.get("cooling_session_count")
+    if cooling_runtime_s is not None or cooling_sessions is not None:
+        lines.append("")
+        cooling_runtime_s = cooling_runtime_s or 0
+        cooling_sessions = cooling_sessions or 0
+        lines.append(
+            f"❄️ Cooling: {cooling_sessions} inferred AC sessions, "
+            f"{cooling_runtime_s // 3600}h {(cooling_runtime_s % 3600) // 60}m total"
+        )
+        cooling_per_floor_runtime: dict[str, int] = data.get("per_floor_cooling_runtime_s", {})
+        cooling_per_floor_sessions: dict[str, int] = data.get("per_floor_cooling_session_count", {})
+        for floor_key, floor_label in floor_display_order:
+            calls = cooling_per_floor_sessions.get(floor_key, 0)
+            runtime_s = cooling_per_floor_runtime.get(floor_key, 0)
+            if calls > 0:
+                avg_m = (runtime_s // calls) // 60
+                lines.append(f"  • {floor_label} cooling: {calls} calls, {avg_m}m avg")
+            else:
+                lines.append(f"  • {floor_label} cooling: 0 calls")
+        lines.append("  (inferred thermostat demand; not compressor telemetry)")
 
     lines.append("")
 

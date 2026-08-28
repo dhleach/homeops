@@ -15,6 +15,9 @@ Business logic lives in focused modules:
   - rules/config.py  validated rules.yaml loading and enabled/threshold settings
 
 Revision history:
+  2026-08-28  Accumulate cooling-call and inferred AC session runtime/count
+              state in live and playback paths, and restore its gauges across
+              restart without changing heating accounting.
   2026-08-28  Route thermostat cooling session and directional thermal outcome
               events through live/playback paths and restore their timestamps
               across restart without changing heating routing or state.
@@ -96,6 +99,7 @@ from state import (
     _load_state,
     _parse_dt,
     _save_state,
+    ensure_daily_state,
     last_ac_cooling_on_since,
     last_furnace_on_since,
 )
@@ -128,6 +132,71 @@ _RESTART_CLEAR_SCHEMAS = frozenset(
 def _minutes_to_seconds(values: dict[str, int | float]) -> dict[str, float]:
     """Convert per-zone minute settings from rules.yaml to seconds."""
     return {zone: float(minutes) * 60 for zone, minutes in values.items()}
+
+
+def _record_cooling_derived_event(daily_state: dict[str, Any], derived: dict[str, Any]) -> None:
+    """Accumulate completed cooling calls and inferred AC sessions for today."""
+    schema = derived.get("schema")
+    data = derived.get("data") or {}
+
+    if schema == "homeops.consumer.cooling_call_ended.v1":
+        entity_id = data.get("entity_id")
+        if not entity_id:
+            return
+        daily_state.setdefault("cooling_floor_runtime_s", {})
+        daily_state.setdefault("per_floor_cooling_session_count", {})
+        daily_state.setdefault("per_floor_max_cooling_call_s", {})
+        daily_state["per_floor_cooling_session_count"][entity_id] = (
+            daily_state["per_floor_cooling_session_count"].get(entity_id, 0) + 1
+        )
+        duration_s = data.get("duration_s")
+        if duration_s is not None:
+            daily_state["cooling_floor_runtime_s"][entity_id] = (
+                daily_state["cooling_floor_runtime_s"].get(entity_id, 0) + duration_s
+            )
+            previous_max = daily_state["per_floor_max_cooling_call_s"].get(entity_id)
+            if previous_max is None or duration_s > previous_max:
+                daily_state["per_floor_max_cooling_call_s"][entity_id] = duration_s
+
+    elif schema == "homeops.consumer.cooling_session_ended.v1":
+        daily_state["cooling_session_count"] = daily_state.get("cooling_session_count", 0) + 1
+        duration_s = data.get("duration_s")
+        if duration_s is not None:
+            daily_state["cooling_runtime_s"] = daily_state.get("cooling_runtime_s", 0) + duration_s
+
+
+def _restore_cooling_metrics(
+    metrics: HvacMetrics | None,
+    daily_state: dict[str, Any],
+    cooling_floor_on_since: dict[str, datetime | None],
+    ac_cooling_on_since: datetime | None,
+) -> None:
+    """Restore cooling gauges from daily state and active-session timestamps."""
+    if metrics is None:
+        return
+
+    per_floor_runtime_s = {
+        _COOLING_FLOOR_ENTITIES[entity_id]: runtime_s
+        for entity_id, runtime_s in daily_state.get("cooling_floor_runtime_s", {}).items()
+        if entity_id in _COOLING_FLOOR_ENTITIES
+    }
+    per_floor_call_count = {
+        _COOLING_FLOOR_ENTITIES[entity_id]: count
+        for entity_id, count in daily_state.get("per_floor_cooling_session_count", {}).items()
+        if entity_id in _COOLING_FLOOR_ENTITIES
+    }
+    metrics.restore_daily_cooling_state(
+        runtime_s=daily_state.get("cooling_runtime_s", 0),
+        session_count=daily_state.get("cooling_session_count", 0),
+        per_floor_runtime_s=per_floor_runtime_s,
+        per_floor_call_count=per_floor_call_count,
+    )
+    metrics.set_ac_cooling_active(ac_cooling_on_since is not None)
+    for entity_id in _COOLING_FLOOR_ENTITIES:
+        floor = _COOLING_FLOOR_ENTITIES[entity_id]
+        metrics.set_cooling_floor_call_active(
+            floor, cooling_floor_on_since.get(entity_id) is not None
+        )
 
 
 def _floor_runtime_anomaly_rule(history: list[dict[str, Any]], rules_config: RulesConfig) -> Any:
@@ -429,6 +498,8 @@ def _playback_phase(
     """
     from dateutil.parser import isoparse as _isoparse
 
+    daily_state = ensure_daily_state(daily_state)
+
     _LOG = "[PLAYBACK]"
     last_consumed_observer_ts: str | None = last_consumed_ts
     cooling_floor_on_since = dict(
@@ -656,6 +727,7 @@ def _playback_phase(
                 )
                 for derived in derived_events:
                     fresh_restart = _emit_derived(derived, derived_log, fresh_restart)
+                    _record_cooling_derived_event(daily_state, derived)
                 _save_playback_state()
                 state_saved = True
 
@@ -820,6 +892,7 @@ def _playback_phase(
                 )
                 for derived in derived_events:
                     fresh_restart = _emit_derived(derived, derived_log, fresh_restart)
+                    _record_cooling_derived_event(daily_state, derived)
                 _save_playback_state()
                 state_saved = True
 
@@ -995,7 +1068,7 @@ def main() -> None:
             s["cooling_start_ts"] = _parse_dt(s.get("cooling_start_ts"))
             s["cooling_setpoint_reached_ts"] = _parse_dt(s.get("cooling_setpoint_reached_ts"))
             climate_state[eid] = s
-        daily_state = saved.get("daily_state") or _empty_daily_state()
+        daily_state = ensure_daily_state(saved.get("daily_state"))
         logger.info(f"Resumed from state file (saved_at={saved.get('saved_at')})")
         # Warm up Prometheus metrics from persisted state so gauges show real
         # values immediately on restart — before any new events arrive.
@@ -1035,6 +1108,13 @@ def main() -> None:
         if seeded_temp is not None:
             daily_state["last_outdoor_temp_f"] = seeded_temp
             logger.info(f"Seeded last_outdoor_temp_f={seeded_temp} from saved state")
+
+    _restore_cooling_metrics(
+        _metrics,
+        daily_state,
+        cooling_floor_on_since,
+        ac_cooling_on_since,
+    )
 
     current_date = datetime.now(UTC).strftime("%Y-%m-%d")
     last_snapshot_ts: datetime | None = None
@@ -1114,6 +1194,12 @@ def main() -> None:
             if eid in _FLOOR_ENTITIES
         }
         _metrics.restore_daily_runtimes(_per_floor)
+        _restore_cooling_metrics(
+            _metrics,
+            daily_state,
+            cooling_floor_on_since,
+            ac_cooling_on_since,
+        )
         logger.info("[LIVE] Entering live tail mode")
     else:
         logger.info("[LIVE] Cold-start — no playback state found")
@@ -1309,6 +1395,7 @@ def main() -> None:
                 )
                 for derived in derived_events:
                     fresh_restart = _emit_derived(derived, derived_log, fresh_restart)
+                    _record_cooling_derived_event(daily_state, derived)
                 _save_runtime_state(
                     last_consumed_observer_ts=last_consumed_observer_ts,
                     floor_2_telegram_last_sent_ts=floor_2_telegram_last_sent_ts,
@@ -1556,6 +1643,7 @@ def main() -> None:
                 )
                 for derived in derived_events:
                     fresh_restart = _emit_derived(derived, derived_log, fresh_restart)
+                    _record_cooling_derived_event(daily_state, derived)
                 _save_runtime_state(
                     last_consumed_observer_ts=last_consumed_observer_ts,
                     floor_2_telegram_last_sent_ts=floor_2_telegram_last_sent_ts,
