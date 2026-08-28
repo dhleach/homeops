@@ -1,6 +1,11 @@
 """
 Prometheus metrics server for the HomeOps consumer service.
 
+Revision history:
+  2026-08-28  Add additive cooling demand/session gauges and daily counters so
+              the cooling event stream is queryable without changing heating
+              metric names, labels, or values.
+
 Exposes live HVAC telemetry at GET /metrics (port 8001) in Prometheus exposition format.
 Used as the data pipeline source for the homeops.now public dashboard:
   Pi consumer /metrics → Prometheus scrape → remote_write to EC2 → Grafana
@@ -9,11 +14,19 @@ Gauges
 ------
 furnace_heating_active              1 if furnace currently on, 0 if idle
 heating_session_duration_seconds    duration of most recent completed heating session
+ac_cooling_active                   1 if inferred whole-home AC demand is active
+cooling_session_duration_seconds    duration of most recent completed inferred AC session
+cooling_runtime_today_seconds       accumulated inferred AC runtime today in seconds
+cooling_session_count_today         completed inferred AC sessions today
 floor_temperature_fahrenheit        latest thermostat current temp per floor (label: floor)
 outdoor_temperature_fahrenheit      latest outdoor temperature reading
 floor_call_active                   1 if floor currently calling for heat (label: floor)
 zone_runtime_today_seconds          accumulated floor heating runtime today in seconds
                                     (label: floor)
+cooling_floor_call_active           1 if floor thermostat is calling for cooling (label: floor)
+cooling_zone_runtime_today_seconds  accumulated floor cooling-call runtime today in seconds
+                                    (label: floor)
+cooling_zone_call_count_today       completed floor cooling calls today (label: floor)
 floor_runtime_anomaly_total         cumulative count of floor_runtime_anomaly.v1 events
                                     (label: floor)
 
@@ -59,6 +72,26 @@ class HvacMetrics:
             "Duration in seconds of the most recently completed heating session",
             registry=self._registry,
         )
+        self.ac_cooling_active = Gauge(
+            "ac_cooling_active",
+            "1 if inferred whole-home AC demand is active, 0 if idle",
+            registry=self._registry,
+        )
+        self.cooling_session_duration_seconds = Gauge(
+            "cooling_session_duration_seconds",
+            "Duration in seconds of the most recently completed inferred AC session",
+            registry=self._registry,
+        )
+        self.cooling_runtime_today_seconds = Gauge(
+            "cooling_runtime_today_seconds",
+            "Accumulated inferred whole-home AC runtime today in seconds",
+            registry=self._registry,
+        )
+        self.cooling_session_count_today = Gauge(
+            "cooling_session_count_today",
+            "Number of completed inferred whole-home AC sessions today",
+            registry=self._registry,
+        )
         self.floor_temperature_fahrenheit = Gauge(
             "floor_temperature_fahrenheit",
             "Latest thermostat current temperature reading per floor (°F)",
@@ -82,6 +115,24 @@ class HvacMetrics:
             ["floor"],
             registry=self._registry,
         )
+        self.cooling_floor_call_active = Gauge(
+            "cooling_floor_call_active",
+            "1 if the floor is currently calling for cooling, 0 otherwise",
+            ["floor"],
+            registry=self._registry,
+        )
+        self.cooling_zone_runtime_today_seconds = Gauge(
+            "cooling_zone_runtime_today_seconds",
+            "Accumulated floor cooling-call runtime today in seconds",
+            ["floor"],
+            registry=self._registry,
+        )
+        self.cooling_zone_call_count_today = Gauge(
+            "cooling_zone_call_count_today",
+            "Number of completed floor cooling calls today",
+            ["floor"],
+            registry=self._registry,
+        )
         self.floor_runtime_anomaly_total = Counter(
             "floor_runtime_anomaly_total",
             "Cumulative count of floor_runtime_anomaly.v1 events emitted",
@@ -100,6 +151,9 @@ class HvacMetrics:
             self.floor_temperature_fahrenheit.labels(floor=floor).set(0)
             self.floor_call_active.labels(floor=floor).set(0)
             self.zone_runtime_today_seconds.labels(floor=floor).set(0)
+            self.cooling_floor_call_active.labels(floor=floor).set(0)
+            self.cooling_zone_runtime_today_seconds.labels(floor=floor).set(0)
+            self.cooling_zone_call_count_today.labels(floor=floor).set(0)
             self.floor_setpoint_fahrenheit.labels(floor=floor).set(0)
 
     def start(self) -> None:
@@ -122,9 +176,29 @@ class HvacMetrics:
     def set_furnace_active(self, active: bool) -> None:
         self.furnace_heating_active.set(1 if active else 0)
 
+    def set_ac_cooling_active(self, active: bool) -> None:
+        """Set inferred whole-home cooling demand state."""
+        self.ac_cooling_active.set(1 if active else 0)
+
     def set_heating_session_duration(self, duration_s: int | float | None) -> None:
         if duration_s is not None:
             self.heating_session_duration_seconds.set(float(duration_s))
+
+    def set_cooling_session_duration(self, duration_s: int | float | None) -> None:
+        if duration_s is not None:
+            self.cooling_session_duration_seconds.set(float(duration_s))
+
+    def add_cooling_session_runtime(self, duration_s: int | float) -> None:
+        """Increment today's accumulated inferred whole-home cooling runtime."""
+        self.cooling_runtime_today_seconds.set(
+            self.cooling_runtime_today_seconds._value.get() + float(duration_s)
+        )
+
+    def set_cooling_session_count(self, count: int | float) -> None:
+        self.cooling_session_count_today.set(float(count))
+
+    def increment_cooling_session_count(self) -> None:
+        self.cooling_session_count_today.set(self.cooling_session_count_today._value.get() + 1)
 
     def set_floor_temperature(self, floor: str, temp_f: float) -> None:
         self.floor_temperature_fahrenheit.labels(floor=floor).set(temp_f)
@@ -138,15 +212,31 @@ class HvacMetrics:
     def set_floor_call_active(self, floor: str, active: bool) -> None:
         self.floor_call_active.labels(floor=floor).set(1 if active else 0)
 
+    def set_cooling_floor_call_active(self, floor: str, active: bool) -> None:
+        self.cooling_floor_call_active.labels(floor=floor).set(1 if active else 0)
+
     def add_floor_runtime(self, floor: str, duration_s: int | float) -> None:
         """Increment today's accumulated runtime for the given floor."""
         current = self.zone_runtime_today_seconds.labels(floor=floor)
         current.set(current._value.get() + float(duration_s))
 
+    def add_cooling_floor_runtime(self, floor: str, duration_s: int | float) -> None:
+        """Increment today's accumulated cooling-call runtime for the given floor."""
+        current = self.cooling_zone_runtime_today_seconds.labels(floor=floor)
+        current.set(current._value.get() + float(duration_s))
+
+    def increment_cooling_floor_call_count(self, floor: str) -> None:
+        current = self.cooling_zone_call_count_today.labels(floor=floor)
+        current.set(current._value.get() + 1)
+
     def reset_daily_runtimes(self) -> None:
-        """Reset all zone_runtime_today_seconds to 0 at day rollover."""
+        """Reset heating and cooling daily runtime/count gauges at day rollover."""
+        self.cooling_runtime_today_seconds.set(0)
+        self.cooling_session_count_today.set(0)
         for floor in _FLOORS:
             self.zone_runtime_today_seconds.labels(floor=floor).set(0)
+            self.cooling_zone_runtime_today_seconds.labels(floor=floor).set(0)
+            self.cooling_zone_call_count_today.labels(floor=floor).set(0)
 
     def restore_daily_runtimes(self, per_floor_runtime_s: dict[str, float]) -> None:
         """
@@ -157,6 +247,25 @@ class HvacMetrics:
         """
         for floor, runtime_s in per_floor_runtime_s.items():
             self.zone_runtime_today_seconds.labels(floor=floor).set(float(runtime_s))
+
+    def restore_daily_cooling_state(
+        self,
+        *,
+        runtime_s: int | float = 0,
+        session_count: int | float = 0,
+        per_floor_runtime_s: dict[str, float] | None = None,
+        per_floor_call_count: dict[str, int | float] | None = None,
+    ) -> None:
+        """Restore cooling daily gauges from persisted consumer state."""
+        self.cooling_runtime_today_seconds.set(float(runtime_s))
+        self.cooling_session_count_today.set(float(session_count))
+        for floor in _FLOORS:
+            self.cooling_zone_runtime_today_seconds.labels(floor=floor).set(
+                float((per_floor_runtime_s or {}).get(floor, 0))
+            )
+            self.cooling_zone_call_count_today.labels(floor=floor).set(
+                float((per_floor_call_count or {}).get(floor, 0))
+            )
 
     def inc_floor_runtime_anomaly(self, floor: str) -> None:
         self.floor_runtime_anomaly_total.labels(floor=floor).inc()
@@ -173,6 +282,17 @@ class HvacMetrics:
         elif schema == "homeops.consumer.heating_session_ended.v1":
             self.set_furnace_active(False)
             self.set_heating_session_duration(data.get("duration_s"))
+
+        elif schema == "homeops.consumer.cooling_session_started.v1":
+            self.set_ac_cooling_active(True)
+
+        elif schema == "homeops.consumer.cooling_session_ended.v1":
+            self.set_ac_cooling_active(False)
+            self.set_cooling_session_duration(data.get("duration_s"))
+            self.increment_cooling_session_count()
+            duration_s = data.get("duration_s")
+            if duration_s is not None:
+                self.add_cooling_session_runtime(duration_s)
 
         elif schema == "homeops.consumer.thermostat_current_temp_updated.v1":
             # Event data uses "zone" and "current_temp" (not "floor"/"temperature_f")
@@ -209,6 +329,20 @@ class HvacMetrics:
                 if duration_s is not None:
                     self.add_floor_runtime(floor, duration_s)
 
+        elif schema == "homeops.consumer.cooling_call_started.v1":
+            floor = data.get("floor")
+            if floor:
+                self.set_cooling_floor_call_active(floor, True)
+
+        elif schema == "homeops.consumer.cooling_call_ended.v1":
+            floor = data.get("floor")
+            duration_s = data.get("duration_s")
+            if floor:
+                self.set_cooling_floor_call_active(floor, False)
+                self.increment_cooling_floor_call_count(floor)
+                if duration_s is not None:
+                    self.add_cooling_floor_runtime(floor, duration_s)
+
         elif schema == "homeops.consumer.floor_runtime_anomaly.v1":
             floor = data.get("floor")
             if floor:
@@ -220,3 +354,11 @@ class HvacMetrics:
             total_runtime_s = data.get("total_runtime_s")
             if floor and total_runtime_s is not None:
                 self.zone_runtime_today_seconds.labels(floor=floor).set(float(total_runtime_s))
+            cooling_runtime_s = data.get("cooling_total_runtime_s")
+            if floor and cooling_runtime_s is not None:
+                self.cooling_zone_runtime_today_seconds.labels(floor=floor).set(
+                    float(cooling_runtime_s)
+                )
+            cooling_calls = data.get("cooling_total_calls")
+            if floor and cooling_calls is not None:
+                self.cooling_zone_call_count_today.labels(floor=floor).set(float(cooling_calls))

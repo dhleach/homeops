@@ -479,11 +479,15 @@ accumulated in `daily_state`.
 | `date` | string (`YYYY-MM-DD`) | `current_date` at rollover | The date being summarised (the day that just ended). |
 | `total_furnace_runtime_s` | int | Sum of `duration_s` from all `heating_session_ended.v1` events on this date | Total furnace on-time for the day in seconds. |
 | `session_count` | int | Count of `heating_session_ended.v1` events on this date | Number of complete furnace runs recorded. |
+| `total_cooling_runtime_s` | int | Sum of `duration_s` from all inferred `cooling_session_ended.v1` events on this date | Total whole-home thermostat-derived cooling-demand runtime in seconds; not compressor runtime. |
+| `cooling_session_count` | int | Count of `cooling_session_ended.v1` events on this date | Number of complete inferred whole-home cooling-demand sessions recorded. |
 | `per_floor_runtime_s` | object | `{floor_name: int}` for `floor_1`, `floor_2`, `floor_3` | Total call duration per zone in seconds, keyed by floor name. Zones with no calls have a value of `0`. |
+| `per_floor_cooling_runtime_s` | object | `{floor_name: int}` from `cooling_call_ended.v1` durations | Total thermostat-derived cooling-call duration per zone in seconds. Zones with no calls have a value of `0`. |
 | `outdoor_temp_min_f` | float \| null | `min(outdoor_temps)` across all `outdoor_temp_updated.v1` events on this date | Coldest outdoor reading of the day. `null` if no outdoor temperature readings were received. |
 | `outdoor_temp_max_f` | float \| null | `max(outdoor_temps)` | Warmest outdoor reading of the day. `null` if no readings received. |
 | `outdoor_temp_avg_f` | float \| null | `mean(outdoor_temps)`, rounded to 1 decimal place | Average outdoor temperature for the day. `null` if no readings received. |
 | `per_floor_session_count` | object | `{floor_name: int}` for `floor_1`, `floor_2`, `floor_3` | Count of completed floor heating sessions per zone for the day. Zones with no sessions have a value of `0`. |
+| `per_floor_cooling_session_count` | object | `{floor_name: int}` for `floor_1`, `floor_2`, `floor_3` | Count of completed floor cooling calls per zone for the day. Unknown durations still count as sessions; runtime remains uncounted. |
 | `warnings_triggered` | object | `{warning_type: int}` | Counts of each warning type fired during the day. Keys: `floor_2_long_call`, `floor_no_response`, `zone_slow_to_heat`, `observer_silence`, `setpoint_miss`. All zero on quiet days. |
 
 ### JSON Example
@@ -497,10 +501,17 @@ accumulated in `daily_state`.
     "date": "2026-01-15",
     "total_furnace_runtime_s": 18420,
     "session_count": 7,
+    "total_cooling_runtime_s": 7200,
+    "cooling_session_count": 3,
     "per_floor_runtime_s": {
       "floor_1": 12600,
       "floor_2": 9000,
       "floor_3": 5400
+    },
+    "per_floor_cooling_runtime_s": {
+      "floor_1": 2400,
+      "floor_2": 3600,
+      "floor_3": 1200
     },
     "outdoor_temp_min_f": 22.1,
     "outdoor_temp_max_f": 38.6,
@@ -508,6 +519,11 @@ accumulated in `daily_state`.
     "per_floor_session_count": {
       "floor_1": 4,
       "floor_2": 2,
+      "floor_3": 1
+    },
+    "per_floor_cooling_session_count": {
+      "floor_1": 1,
+      "floor_2": 1,
       "floor_3": 1
     },
     "warnings_triggered": {
@@ -527,7 +543,8 @@ accumulated in `daily_state`.
 
 Fires three times per calendar day rollover (once per floor: `floor_1`, `floor_2`, `floor_3`),
 emitted immediately after `furnace_daily_summary.v1` when the first observer event with a new
-UTC date is processed. Summarises each floor's heating call activity for the day.
+UTC date is processed. Summarises each floor's heating and thermostat-derived cooling-call
+activity for the day.
 
 ### Field Table
 
@@ -541,6 +558,10 @@ UTC date is processed. Summarises each floor's heating call activity for the day
 | `total_runtime_s` | int | Sum of `duration_s` from `floor_call_ended.v1` events for this floor | Total zone on-time in seconds. |
 | `avg_duration_s` | float \| null | `total_runtime_s / total_calls`, rounded to 1 dp | Mean call duration. `null` if no completed calls. |
 | `max_duration_s` | int \| null | Max `duration_s` across all calls for this floor on this date | Longest single call. `null` if no completed calls; useful for detecting sustained floor-2 calls. |
+| `cooling_total_calls` | int | Count of `cooling_call_ended.v1` events for this floor on this date | Number of completed thermostat-derived cooling calls. |
+| `cooling_total_runtime_s` | int | Sum of `duration_s` from cooling calls for this floor | Total thermostat-derived cooling-call duration in seconds. |
+| `cooling_avg_duration_s` | float \| null | `cooling_total_runtime_s / cooling_total_calls`, rounded to 1 dp | Mean cooling-call duration. `null` if no completed calls. |
+| `cooling_max_duration_s` | int \| null | Max cooling-call duration for this floor on this date | Longest single thermostat-derived cooling call; `null` if no completed calls. |
 | `outdoor_temp_avg_f` | float \| null | `mean(outdoor_temps)` from `daily_state`, rounded to 1 dp | Average outdoor temperature for the day, shared across all three floor events. `null` if no outdoor readings. |
 
 ### JSON Example
@@ -557,6 +578,10 @@ UTC date is processed. Summarises each floor's heating call activity for the day
     "total_runtime_s": 7200,
     "avg_duration_s": 2400.0,
     "max_duration_s": 2900,
+    "cooling_total_calls": 2,
+    "cooling_total_runtime_s": 3600,
+    "cooling_avg_duration_s": 1800.0,
+    "cooling_max_duration_s": 2100,
     "outdoor_temp_avg_f": 30.4
   }
 }

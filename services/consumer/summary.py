@@ -2,6 +2,10 @@
 """
 HomeOps summary CLI.
 
+Revision history:
+  2026-08-28  Include cooling-call and inferred AC session events when the
+              day report is reconstructed from raw derived events.
+
 Usage examples
 --------------
 Show day summary for a specific date:
@@ -110,8 +114,9 @@ def compute_day_from_raw(events_file: str, target_date: str) -> dict:
     """
     Compute a day summary dict from raw events when no furnace_daily_summary.v1 exists.
 
-    Reads heating_session_ended.v1, floor_call_ended.v1, and outdoor_temp_updated.v1
-    events whose ``ts`` falls on target_date (UTC).  Returns a dict matching the
+    Reads heating/cooling session and floor-call end events plus
+    outdoor_temp_updated.v1 events whose ``ts`` falls on target_date (UTC).
+    Returns a dict matching the
     furnace_daily_summary.v1 data shape so it can be passed to format_daily_summary_message().
     """
 
@@ -148,6 +153,11 @@ def compute_day_from_raw(events_file: str, target_date: str) -> dict:
                     if dur is not None:
                         daily["furnace_runtime_s"] += dur
                     daily["session_count"] += 1
+                elif schema == "homeops.consumer.cooling_session_ended.v1":
+                    dur = d.get("duration_s")
+                    if dur is not None:
+                        daily["cooling_runtime_s"] += dur
+                    daily["cooling_session_count"] += 1
                 elif schema == "homeops.consumer.floor_call_ended.v1":
                     eid = d.get("entity_id", "")
                     dur = d.get("duration_s")
@@ -156,6 +166,19 @@ def compute_day_from_raw(events_file: str, target_date: str) -> dict:
                     daily["per_floor_session_count"][eid] = (
                         daily["per_floor_session_count"].get(eid, 0) + 1
                     )
+                elif schema == "homeops.consumer.cooling_call_ended.v1":
+                    eid = d.get("entity_id", "")
+                    dur = d.get("duration_s")
+                    daily["per_floor_cooling_session_count"][eid] = (
+                        daily["per_floor_cooling_session_count"].get(eid, 0) + 1
+                    )
+                    if dur is not None:
+                        daily["cooling_floor_runtime_s"][eid] = (
+                            daily["cooling_floor_runtime_s"].get(eid, 0) + dur
+                        )
+                        previous_max = daily["per_floor_max_cooling_call_s"].get(eid)
+                        if previous_max is None or dur > previous_max:
+                            daily["per_floor_max_cooling_call_s"][eid] = dur
                 elif schema == "homeops.consumer.outdoor_temp_updated.v1":
                     temp = d.get("temperature_f")
                     if temp is not None:

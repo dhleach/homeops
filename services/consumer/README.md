@@ -41,7 +41,7 @@ observer
                ──►  Telegram alerts  (warnings, anomaly insights, and rollback)
 ```
 
-The consumer reads the observer's raw `state_changed` events and explicit Home Assistant event records. It produces semantically richer records: when a floor starts or ends a heating or cooling call, when the furnace or inferred AC demand starts or ends a whole-home session, when a thermostat's setpoint, current temperature, or HVAC mode changes, when a zone reaches its directional heating or cooling target (along with how long it took), when a zone overshoots after heating or undershoots after cooling, when a heating or cooling call misses its target, when floor 2 has been calling for longer than the configured threshold (a sign that the furnace may overheat), when a staged mitigation decision was applied or skipped, when repeated short cycling causes the mitigation guard to roll back, and a daily summary of furnace runtime and outdoor temperatures. A validated floor-runtime anomaly can optionally trigger a separate plain-English explanation without allowing the model to control Home Assistant.
+The consumer reads the observer's raw `state_changed` events and explicit Home Assistant event records. It produces semantically richer records: when a floor starts or ends a heating or cooling call, when the furnace or inferred AC demand starts or ends a whole-home session, when a thermostat's setpoint, current temperature, or HVAC mode changes, when a zone reaches its directional heating or cooling target (along with how long it took), when a zone overshoots after heating or undershoots after cooling, when a heating or cooling call misses its target, when floor 2 has been calling for longer than the configured threshold (a sign that the furnace may overheat), when a staged mitigation decision was applied or skipped, when repeated short cycling causes the mitigation guard to roll back, and a daily summary of heating/cooling runtime and outdoor temperatures. A validated floor-runtime anomaly can optionally trigger a separate plain-English explanation without allowing the model to control Home Assistant.
 
 ---
 
@@ -57,11 +57,11 @@ The consumer is split across ten focused modules:
 | `consumer.py` | Lean entry point: tail loop, event routing, signal handling, daily rollover |
 | `constants.py` | Entity ID maps, env-var defaults, shared configuration constants |
 | `utils.py` | `utc_ts`, `follow` (select-based tail generator), `append_jsonl`, `_parse_dt`, `_get_version` |
-| `state.py` | `last_furnace_on_since` / `last_ac_cooling_on_since` bootstrap scans, `_load_state` / `_save_state` persistence, `_empty_daily_state` initialiser |
+| `state.py` | `last_furnace_on_since` / `last_ac_cooling_on_since` bootstrap scans, `_load_state` / `_save_state` persistence, `_empty_daily_state` initialiser, and forward-compatible daily-state backfill |
 | `processors.py` | `process_floor_event`, `process_cooling_floor_event`, `process_furnace_event`, `process_cooling_session_event`, `process_climate_event`, `process_outdoor_temp_event`, `process_mitigation_event`, `process_mitigation_rollback_event` — pure event-to-derived-event transforms |
 | `alerts.py` | `check_floor_2_warning`, `check_floor_2_escalation`, `check_observer_silence`, `write_zone_temp_snapshot` — in-flight periodic checks |
-| `reporting.py` | `emit_daily_summary`, `format_daily_summary_message` — end-of-day summary generation and Telegram formatting |
-| `metrics.py` | `HvacMetrics` — Prometheus gauge definitions, update helpers, and HTTP server (port 8001); foundation for the homeops.now public dashboard data pipeline |
+| `reporting.py` | `emit_daily_summary`, `emit_floor_daily_summaries`, `format_daily_summary_message` — end-of-day heating/cooling summary generation and Telegram formatting |
+| `metrics.py` | `HvacMetrics` — Prometheus heating/cooling gauge definitions, update helpers, and HTTP server (port 8001); foundation for the homeops.now public dashboard data pipeline |
 | `hvac_context.py` | HVAC context summarizer — reads `state.json` + `events.jsonl` and outputs a structured plain-text summary of current conditions, zone runtimes, recent sessions, and warnings for LLM input; lookback and daily-summary dates share an explicit UTC reference time |
 | `proactive_insight.py` | Provider-neutral anomaly explanation coordinator — validates/allowlists triggers, bounds context/output/provider calls, delivers through Telegram, and persists successful insight IDs for replay deduplication |
 
@@ -99,7 +99,7 @@ and translates `homeops.observer.event.v1` mitigation records by their
 | `homeops.observer.event.v1` (`event_type=homeops.mitigation.zone_stagger_applied.v1`) | `homeops.mitigation.zone_stagger_applied.v1` |
 | `homeops.observer.event.v1` (`event_type=homeops.mitigation.rollback.v1`) | `homeops.mitigation.rollback.v1` plus an urgent Telegram alert when configured |
 
-Additionally, `furnace_daily_summary.v1` is emitted once per UTC calendar day at the first event after midnight, followed immediately by three `floor_daily_summary.v1` events (one per floor).
+Additionally, `furnace_daily_summary.v1` is emitted once per UTC calendar day at the first event after midnight, followed immediately by three `floor_daily_summary.v1` events (one per floor). Both summary schemas retain their heating fields and add cooling runtime/count fields; cooling values represent inferred thermostat demand, not compressor telemetry.
 
 ### Derived event emission
 
@@ -881,14 +881,18 @@ one applies.
 
 ### `homeops.consumer.furnace_daily_summary.v1`
 
-Emitted once per UTC calendar day at the first observer event with a new date (i.e. just after midnight UTC). Summarises the previous day's accumulated furnace and floor runtime.
+Emitted once per UTC calendar day at the first observer event with a new date (i.e. just after midnight UTC). Summarises the previous day's accumulated heating and inferred cooling runtime.
 
 | Field | Type | Description |
 |---|---|---|
 | `data.date` | string (`YYYY-MM-DD`) | The day being summarised (the day that just ended) |
 | `data.total_furnace_runtime_s` | integer | Total furnace on-time for the day in seconds |
 | `data.session_count` | integer | Number of complete furnace runs recorded |
+| `data.total_cooling_runtime_s` | integer | Total inferred whole-home AC-demand runtime for the day in seconds |
+| `data.cooling_session_count` | integer | Number of complete inferred whole-home cooling sessions recorded |
 | `data.per_floor_runtime_s` | object | `{"floor_1": int, "floor_2": int, "floor_3": int}` — total floor call duration per zone in seconds; zones with no calls have value `0` |
+| `data.per_floor_cooling_runtime_s` | object | `{"floor_1": int, "floor_2": int, "floor_3": int}` — total cooling-call duration per zone in seconds; zones with no calls have value `0` |
+| `data.per_floor_cooling_session_count` | object | Completed cooling-call count per zone; zones with no calls have value `0` |
 | `data.outdoor_temp_min_f` | float \| null | Coldest outdoor reading of the day; `null` if no readings received |
 | `data.outdoor_temp_max_f` | float \| null | Warmest outdoor reading of the day; `null` if no readings received |
 
@@ -903,10 +907,22 @@ Emitted once per UTC calendar day at the first observer event with a new date (i
     "date": "2026-03-19",
     "total_furnace_runtime_s": 18420,
     "session_count": 7,
+    "total_cooling_runtime_s": 7200,
+    "cooling_session_count": 3,
     "per_floor_runtime_s": {
       "floor_1": 12600,
       "floor_2": 9000,
       "floor_3": 5400
+    },
+    "per_floor_cooling_runtime_s": {
+      "floor_1": 2400,
+      "floor_2": 3600,
+      "floor_3": 1200
+    },
+    "per_floor_cooling_session_count": {
+      "floor_1": 1,
+      "floor_2": 1,
+      "floor_3": 1
     },
     "outdoor_temp_min_f": 22.1,
     "outdoor_temp_max_f": 38.6
@@ -918,7 +934,7 @@ Emitted once per UTC calendar day at the first observer event with a new date (i
 
 ### `homeops.consumer.floor_daily_summary.v1`
 
-Emitted three times per UTC calendar day rollover (once per floor: `floor_1`, `floor_2`, `floor_3`), immediately after `furnace_daily_summary.v1`. Summarises each floor's heating call activity for the previous day.
+Emitted three times per UTC calendar day rollover (once per floor: `floor_1`, `floor_2`, `floor_3`), immediately after `furnace_daily_summary.v1`. Summarises each floor's heating and cooling-call activity for the previous day.
 
 | Field | Type | Description |
 |---|---|---|
@@ -928,6 +944,10 @@ Emitted three times per UTC calendar day rollover (once per floor: `floor_1`, `f
 | `data.total_runtime_s` | integer | Sum of all call durations in seconds |
 | `data.avg_duration_s` | float \| null | Mean call duration in seconds; `null` if no calls |
 | `data.max_duration_s` | integer \| null | Longest single call duration in seconds; `null` if no calls |
+| `data.cooling_total_calls` | integer | Number of completed cooling calls for this floor |
+| `data.cooling_total_runtime_s` | integer | Sum of completed cooling-call durations in seconds |
+| `data.cooling_avg_duration_s` | float \| null | Mean cooling-call duration in seconds; `null` if no calls |
+| `data.cooling_max_duration_s` | integer \| null | Longest single cooling-call duration in seconds; `null` if no calls |
 | `data.outdoor_temp_avg_f` | float \| null | Average outdoor temperature for the day; `null` if no readings received |
 
 **Example:**
@@ -944,6 +964,10 @@ Emitted three times per UTC calendar day rollover (once per floor: `floor_1`, `f
     "total_runtime_s": 7200,
     "avg_duration_s": 2400.0,
     "max_duration_s": 2900,
+    "cooling_total_calls": 2,
+    "cooling_total_runtime_s": 3600,
+    "cooling_avg_duration_s": 1800.0,
+    "cooling_max_duration_s": 2100,
     "outdoor_temp_avg_f": 30.4
   }
 }
@@ -1041,6 +1065,12 @@ start was observed in the current run.
 
 Floor call start times are **not** bootstrapped — if the consumer restarts mid-call, `duration_s` for that call will be `null` in the `floor_call_ended` event.
 
+When a recent state file is available, the consumer restores the cooling daily
+runtime/count gauges and the active cooling-call/aggregate gauges before
+playback. Playback then replays only the observer events after the saved
+cursor; the final gauge values are reconciled from the persisted daily state,
+so a restart cannot fabricate or double-count cooling sessions.
+
 ---
 
 ## Prometheus Metrics (`/metrics`)
@@ -1055,10 +1085,17 @@ public Internet endpoint. This is the data pipeline source for the
 |---|---|---|---|
 | `furnace_heating_active` | Gauge | — | 1 if furnace is currently in a heating session, 0 if idle |
 | `heating_session_duration_seconds` | Gauge | — | Duration of the most recently completed heating session |
+| `ac_cooling_active` | Gauge | — | 1 if inferred whole-home AC demand is active, 0 if idle; not compressor feedback |
+| `cooling_session_duration_seconds` | Gauge | — | Duration of the most recently completed inferred whole-home cooling session |
+| `cooling_runtime_today_seconds` | Gauge | — | Accumulated inferred whole-home cooling runtime today (seconds) |
+| `cooling_session_count_today` | Gauge | — | Number of completed inferred whole-home cooling sessions today |
 | `floor_temperature_fahrenheit` | Gauge | `floor` | Latest thermostat current temperature per floor (°F) |
 | `outdoor_temperature_fahrenheit` | Gauge | — | Latest outdoor temperature reading (°F) |
 | `floor_call_active` | Gauge | `floor` | 1 if the floor is currently calling for heat |
 | `zone_runtime_today_seconds` | Gauge | `floor` | Accumulated floor heating call runtime today (seconds) |
+| `cooling_floor_call_active` | Gauge | `floor` | 1 if the floor is currently calling for cooling |
+| `cooling_zone_runtime_today_seconds` | Gauge | `floor` | Accumulated floor cooling-call runtime today (seconds) |
+| `cooling_zone_call_count_today` | Gauge | `floor` | Number of completed floor cooling calls today |
 | `floor_runtime_anomaly_total` | Counter | `floor` | Cumulative count of `floor_runtime_anomaly.v1` events |
 
 Configure the port via `METRICS_PORT` env var (default: `8001`).
