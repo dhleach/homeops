@@ -2,6 +2,10 @@
 """Verify the public HomeOps deployment surfaces after a release.
 
 Revision history:
+  2026-08-28  Validate the provisioned Grafana dashboard API exposes the new
+              cooling panels, so a healthy Grafana process cannot mask stale
+              heating-only dashboard files after deployment; retry while the
+              file provider refreshes its mounted JSON.
   2026-08-28  Required the additive cooling-call, inferred-AC, and per-zone
               HVAC-action fields so production verification covers the full
               mode-aware current-telemetry contract.
@@ -25,6 +29,7 @@ import argparse
 import json
 import os
 import sys
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from urllib.error import HTTPError, URLError
@@ -34,6 +39,41 @@ DEFAULT_FRONTEND_URL = "https://homeops.now"
 DEFAULT_API_URL = "https://api.homeops.now"
 DEFAULT_BOB_EVALUATION_PATH = "/bob/evals/"
 DEFAULT_DIAGNOSTIC_QUESTION = "Are the current HVAC conditions healthy?"
+PROVISIONED_DASHBOARD_EXPECTATIONS = {
+    "homeops-zones": {
+        "titles": (
+            "Inferred AC Status",
+            "Cooling Zone Call Status",
+            "Cooling Call + Inferred AC Activity (time series)",
+            "Cooling Runtime Today (seconds, cumulative)",
+        ),
+        "metrics": (
+            "ac_cooling_active",
+            "cooling_floor_call_active",
+            "cooling_zone_runtime_today_seconds",
+        ),
+    },
+    "homeops-daily": {
+        "titles": (
+            "Inferred AC Runtime Today",
+            "Cooling Sessions Today",
+            "Last Cooling Session Duration",
+            "Cooling Runtime Today by Zone (cumulative)",
+            "Heating vs Cooling Session Duration History",
+            "Cooling Call Count Today by Zone",
+        ),
+        "metrics": (
+            "cooling_runtime_today_seconds",
+            "cooling_session_count_today",
+            "cooling_session_duration_seconds",
+            "cooling_zone_runtime_today_seconds",
+            "cooling_zone_call_count_today",
+            "heating_session_duration_seconds",
+        ),
+    },
+}
+DEFAULT_DASHBOARD_REFRESH_ATTEMPTS = 20
+DEFAULT_DASHBOARD_REFRESH_DELAY_SECONDS = 2.0
 _MAX_BODY_BYTES = 1_000_000
 
 
@@ -326,12 +366,69 @@ def _check_diagnostic(
     return "api: authenticated diagnostic returned a complete answer"
 
 
-def _check_observability(base_url: str, fetcher: Fetcher, timeout: float) -> list[str]:
+def _check_observability(
+    base_url: str,
+    fetcher: Fetcher,
+    timeout: float,
+    dashboard_refresh_attempts: int,
+    dashboard_refresh_delay_seconds: float,
+) -> list[str]:
     grafana_response = fetcher(_join(base_url, "/grafana/api/health"), timeout)
     _require_status(grafana_response)
     grafana = _json(grafana_response)
     if not isinstance(grafana, dict) or grafana.get("database") != "ok":
         raise SmokeCheckError(f"{grafana_response.url}: Grafana database is not healthy")
+
+    for uid, expectation in PROVISIONED_DASHBOARD_EXPECTATIONS.items():
+        last_error: SmokeCheckError | None = None
+        for attempt in range(dashboard_refresh_attempts):
+            try:
+                dashboard_response = fetcher(
+                    _join(base_url, f"/grafana/api/dashboards/uid/{uid}"), timeout
+                )
+                _require_status(dashboard_response)
+                payload = _json(dashboard_response)
+                dashboard = payload.get("dashboard") if isinstance(payload, dict) else None
+                if not isinstance(dashboard, dict):
+                    raise SmokeCheckError(
+                        f"{dashboard_response.url}: provisioned dashboard "
+                        "payload is missing dashboard"
+                    )
+                panels = dashboard.get("panels")
+                if not isinstance(panels, list):
+                    raise SmokeCheckError(f"{dashboard_response.url}: dashboard panels are missing")
+                titles = {panel.get("title") for panel in panels if isinstance(panel, dict)}
+                missing_titles = [title for title in expectation["titles"] if title not in titles]
+                if missing_titles:
+                    raise SmokeCheckError(
+                        f"{dashboard_response.url}: dashboard is missing panels: "
+                        f"{', '.join(missing_titles)}"
+                    )
+                expressions = [
+                    target.get("expr", "")
+                    for panel in panels
+                    if isinstance(panel, dict)
+                    for target in panel.get("targets", [])
+                    if isinstance(target, dict)
+                ]
+                missing_metrics = [
+                    metric
+                    for metric in expectation["metrics"]
+                    if not any(metric in expression for expression in expressions)
+                ]
+                if missing_metrics:
+                    raise SmokeCheckError(
+                        f"{dashboard_response.url}: dashboard is missing metric queries: "
+                        f"{', '.join(missing_metrics)}"
+                    )
+                break
+            except SmokeCheckError as exc:
+                last_error = exc
+                if attempt + 1 < dashboard_refresh_attempts:
+                    time.sleep(dashboard_refresh_delay_seconds)
+        else:
+            if last_error is not None:
+                raise last_error
 
     prometheus_response = fetcher(_join(base_url, "/prometheus/-/healthy"), timeout)
     _require_status(prometheus_response)
@@ -339,7 +436,7 @@ def _check_observability(base_url: str, fetcher: Fetcher, timeout: float) -> lis
         raise SmokeCheckError(f"{prometheus_response.url}: Prometheus did not report healthy")
 
     return [
-        "grafana: database health is ok",
+        "grafana: database health and provisioned cooling panels are healthy",
         "prometheus: readiness endpoint reports healthy",
     ]
 
@@ -355,6 +452,8 @@ def run_smoke_checks(
     diagnostic_token: str | None = None,
     diagnostic_question: str = DEFAULT_DIAGNOSTIC_QUESTION,
     poster: DiagnosticPoster = post_json,
+    dashboard_refresh_attempts: int = DEFAULT_DASHBOARD_REFRESH_ATTEMPTS,
+    dashboard_refresh_delay_seconds: float = DEFAULT_DASHBOARD_REFRESH_DELAY_SECONDS,
 ) -> list[str]:
     """Run all release checks in sequence and return human-readable results."""
     results = [_check_frontend(frontend_url, fetcher, timeout)]
@@ -372,7 +471,15 @@ def run_smoke_checks(
             )
         )
     if include_observability:
-        results.extend(_check_observability(api_url, fetcher, timeout))
+        results.extend(
+            _check_observability(
+                api_url,
+                fetcher,
+                timeout,
+                dashboard_refresh_attempts,
+                dashboard_refresh_delay_seconds,
+            )
+        )
     return results
 
 

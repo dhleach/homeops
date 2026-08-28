@@ -1,6 +1,9 @@
 """Tests for the public HomeOps deployment smoke checks.
 
 Revision history:
+  2026-08-28  Added provisioned-dashboard fixtures and stale-dashboard failure
+              coverage so the release gate checks Grafana content, not only
+              Grafana process health.
   2026-08-28  Extended the healthy telemetry fixture for the additive cooling
               and per-zone action fields required by the public release gate.
   2026-08-27  Added authenticated diagnostic probe coverage so the optional
@@ -71,6 +74,17 @@ def _responses() -> dict[str, SmokeResponse]:
             "raw_prompts_published": False,
         },
     }
+
+    def dashboard_payload(titles: list[str], metrics: list[str]) -> bytes:
+        panels = [
+            {"title": title, "targets": [{"expr": metric}]}
+            for title, metric in zip(titles, metrics, strict=False)
+        ]
+        return json.dumps({"dashboard": {"panels": panels}}).encode()
+
+    def zone_metric(metric: str) -> str:
+        return f'{metric}{{floor=~"floor_[123]", job="homeops-consumer"}}'
+
     return {
         "https://frontend/": SmokeResponse(
             200, b'<title>HomeOps</title><div id="root"></div>', "https://frontend/"
@@ -116,6 +130,46 @@ def _responses() -> dict[str, SmokeResponse]:
         ),
         "https://api/grafana/api/health": SmokeResponse(
             200, b'{"database":"ok"}', "https://api/grafana/api/health"
+        ),
+        "https://api/grafana/api/dashboards/uid/homeops-zones": SmokeResponse(
+            200,
+            dashboard_payload(
+                [
+                    "Inferred AC Status",
+                    "Cooling Zone Call Status",
+                    "Cooling Call + Inferred AC Activity (time series)",
+                    "Cooling Runtime Today (seconds, cumulative)",
+                ],
+                [
+                    'ac_cooling_active{job="homeops-consumer"}',
+                    zone_metric("cooling_floor_call_active"),
+                    zone_metric("cooling_floor_call_active"),
+                    zone_metric("cooling_zone_runtime_today_seconds"),
+                ],
+            ),
+            "https://api/grafana/api/dashboards/uid/homeops-zones",
+        ),
+        "https://api/grafana/api/dashboards/uid/homeops-daily": SmokeResponse(
+            200,
+            dashboard_payload(
+                [
+                    "Inferred AC Runtime Today",
+                    "Cooling Sessions Today",
+                    "Last Cooling Session Duration",
+                    "Cooling Runtime Today by Zone (cumulative)",
+                    "Heating vs Cooling Session Duration History",
+                    "Cooling Call Count Today by Zone",
+                ],
+                [
+                    'cooling_runtime_today_seconds{job="homeops-consumer"}',
+                    'cooling_session_count_today{job="homeops-consumer"}',
+                    'cooling_session_duration_seconds{job="homeops-consumer"}',
+                    zone_metric("cooling_zone_runtime_today_seconds"),
+                    'heating_session_duration_seconds{job="homeops-consumer"}',
+                    zone_metric("cooling_zone_call_count_today"),
+                ],
+            ),
+            "https://api/grafana/api/dashboards/uid/homeops-daily",
         ),
         "https://api/prometheus/-/healthy": SmokeResponse(
             200, b"Prometheus Server is Healthy.", "https://api/prometheus/-/healthy"
@@ -173,6 +227,23 @@ def test_run_smoke_checks_can_skip_observability_checks():
 
     assert len(results) == 4
     assert all("grafana" not in result and "prometheus" not in result for result in results)
+
+
+def test_run_smoke_checks_rejects_stale_grafana_dashboard_content():
+    responses = _responses()
+    responses["https://api/grafana/api/dashboards/uid/homeops-zones"] = SmokeResponse(
+        200,
+        json.dumps({"dashboard": {"panels": []}}).encode(),
+        "https://api/grafana/api/dashboards/uid/homeops-zones",
+    )
+
+    with pytest.raises(SmokeCheckError, match="dashboard is missing panels"):
+        run_smoke_checks(
+            frontend_url="https://frontend",
+            api_url="https://api",
+            dashboard_refresh_attempts=1,
+            fetcher=_fake_fetcher(responses),
+        )
 
 
 def test_run_smoke_checks_can_probe_authenticated_diagnostic():

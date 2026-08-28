@@ -4,7 +4,7 @@
   "annotations": {
     "list": []
   },
-  "description": "Zone call activity, today's runtime accumulation, and furnace status",
+  "description": "Heating and inferred cooling call activity, today's runtime accumulation, and furnace status. Cooling demand is thermostat-derived, not compressor telemetry.",
   "editable": false,
   "graphTooltip": 1,
   "id": null,
@@ -517,13 +517,283 @@
       ],
       "title": "Floor 3 Runtime Today",
       "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "description": "Thermostat-derived whole-home cooling demand; this is not compressor telemetry.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "fixedColor": "#5794F2",
+            "mode": "fixed"
+          },
+          "mappings": [
+            {
+              "options": {
+                "0": {
+                  "color": "green",
+                  "text": "IDLE"
+                },
+                "1": {
+                  "color": "blue",
+                  "text": "COOLING"
+                }
+              },
+              "type": "value"
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "blue",
+                "value": 1
+              }
+            ]
+          }
+        }
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 26
+      },
+      "id": 8,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "textMode": "value"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "ac_cooling_active{job=\"homeops-consumer\"}",
+          "legendFormat": "Inferred AC",
+          "refId": "A"
+        }
+      ],
+      "title": "Inferred AC Status",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "description": "Per-floor thermostat cooling calls; active demand is inferred and is not compressor telemetry.",
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            {
+              "options": {
+                "0": {
+                  "color": "green",
+                  "text": "IDLE"
+                },
+                "1": {
+                  "color": "blue",
+                  "text": "COOLING"
+                }
+              },
+              "type": "value"
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "blue",
+                "value": 1
+              }
+            ]
+          }
+        }
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 18,
+        "x": 6,
+        "y": 26
+      },
+      "id": 9,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "textMode": "value_and_name"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "cooling_floor_call_active{floor=~\"floor_[123]\", job=\"homeops-consumer\"}",
+          "legendFormat": "{{floor}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Cooling Zone Call Status",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "description": "Live thermostat cooling calls and inferred whole-home AC demand; this is not compressor telemetry.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "fillOpacity": 10,
+            "lineWidth": 2
+          },
+          "mappings": [
+            {
+              "options": {
+                "0": {
+                  "text": "Idle"
+                },
+                "1": {
+                  "text": "Active"
+                }
+              },
+              "type": "value"
+            }
+          ],
+          "unit": "short"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 30
+      },
+      "id": 10,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "cooling_floor_call_active{floor=~\"floor_[123]\", job=\"homeops-consumer\"}",
+          "legendFormat": "{{floor}} cooling call",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "ac_cooling_active{job=\"homeops-consumer\"}",
+          "legendFormat": "inferred AC demand",
+          "refId": "B"
+        }
+      ],
+      "title": "Cooling Call + Inferred AC Activity (time series)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "description": "Accumulated per-floor thermostat cooling-call runtime for the current day; demand is inferred, not compressor telemetry.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "fillOpacity": 15,
+            "lineWidth": 2
+          },
+          "min": 0,
+          "unit": "s"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 38
+      },
+      "id": 11,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "cooling_zone_runtime_today_seconds{floor=~\"floor_[123]\", job=\"homeops-consumer\"}",
+          "legendFormat": "{{floor}} cooling runtime",
+          "refId": "A"
+        }
+      ],
+      "title": "Cooling Runtime Today (seconds, cumulative)",
+      "type": "timeseries"
     }
   ],
   "refresh": "30s",
   "schemaVersion": 39,
   "tags": [
     "homeops",
-    "zones"
+    "zones",
+    "cooling"
   ],
   "templating": {
     "list": [
@@ -545,7 +815,7 @@
   },
   "timepicker": {},
   "timezone": "America/New_York",
-  "title": "Zone Runtimes + Furnace Status",
+  "title": "Zone Runtimes + Heating/Cooling Status",
   "uid": "homeops-zones",
-  "version": 1
+  "version": 2
 }
