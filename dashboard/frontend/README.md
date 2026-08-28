@@ -16,6 +16,15 @@ bucket, invalidated through CloudFront, and verified with the public release
 smoke checks. The deployment and route map is in
 [`docs/deployment.md`](../../docs/deployment.md).
 
+The recruiter-facing Bob evaluation dashboard is published at
+[`/bob/evals/`](https://homeops.now/bob/evals/). It is a reviewed static
+snapshot under `public/bob/evals/`, copied from the canonical
+`openclaw-config/dashboard/evaluation/` bundle at the recorded source commit.
+The deterministic report is authoritative; the adjacent scripted live-trial
+fixture is explicitly optional and non-gating. Refreshing this snapshot
+requires a review of the source repository and its redaction/public-safety
+tests before copying the bundle.
+
 ## Local development
 
 ```bash

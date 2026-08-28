@@ -22,11 +22,27 @@ concurrency group. A push to `master` runs:
      `http://127.0.0.1:8000/health`, and checks Nginx syntax. If the backend
      never becomes ready, it prints the container state and recent backend logs.
 4. `scripts/deploy_smoke_check.py` verifies the public frontend, API,
-   telemetry, Grafana, and Prometheus interfaces.
+   telemetry, Grafana, and Prometheus interfaces. Pass
+   `--check-bob-evaluation` after the CloudFront route is provisioned to also
+   verify `/bob/evals/` and both redacted evaluation artifacts.
 
 The separate frontend workflow runs `npm ci`, builds with
 `VITE_API_URL=https://api.homeops.now`, syncs the private S3 bucket, invalidates
 CloudFront, and runs the same public smoke checks.
+
+The Bob evaluator is delivered by that existing S3/CloudFront frontend
+deployment. Because Terraform changes are intentionally applied separately
+from the application workflows, publish it in this order: merge the frontend
+snapshot and [`infra/cloudfront.tf`](../infra/cloudfront.tf) change, apply the
+reviewed CloudFront plan, then run:
+
+```bash
+python3 scripts/deploy_smoke_check.py --check-bob-evaluation
+```
+
+The route check is opt-in until the CloudFront exception has propagated; this
+keeps the existing frontend/backend release workflows from reporting a false
+failure during that two-system rollout window.
 
 ### Terraform drift guard
 

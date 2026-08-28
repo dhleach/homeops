@@ -1,0 +1,383 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "case": {
+    "coverage": [
+      "whitelist_claim_race",
+      "at_most_once"
+    ],
+    "evidence_path": "cases/openclaw-regression-whitelist-claim-race.json",
+    "family": "whitelist_delivery",
+    "fixed": {
+      "assertions": [
+        {
+          "evidence_count": 0,
+          "id": "trace_schema",
+          "passed": true,
+          "reason_code": "passed",
+          "severity": "critical",
+          "status": "passed"
+        },
+        {
+          "evidence_count": 1,
+          "id": "route_correctness",
+          "passed": true,
+          "reason_code": "passed",
+          "severity": "critical",
+          "status": "passed"
+        },
+        {
+          "evidence_count": 0,
+          "id": "tool_contract",
+          "passed": true,
+          "reason_code": "passed",
+          "severity": "critical",
+          "status": "passed"
+        },
+        {
+          "evidence_count": 0,
+          "id": "final_state",
+          "passed": true,
+          "reason_code": "passed",
+          "severity": "critical",
+          "status": "passed"
+        },
+        {
+          "evidence_count": 0,
+          "id": "provenance",
+          "passed": true,
+          "reason_code": "passed",
+          "severity": "critical",
+          "status": "passed"
+        },
+        {
+          "evidence_count": 0,
+          "id": "threading",
+          "passed": true,
+          "reason_code": "passed",
+          "severity": "critical",
+          "status": "passed"
+        },
+        {
+          "evidence_count": 0,
+          "id": "retries",
+          "passed": true,
+          "reason_code": "passed",
+          "severity": "critical",
+          "status": "passed"
+        },
+        {
+          "evidence_count": 0,
+          "id": "event_identity",
+          "passed": true,
+          "reason_code": "passed",
+          "severity": "critical",
+          "status": "passed"
+        },
+        {
+          "evidence_count": 0,
+          "id": "forbidden_external_actions",
+          "passed": true,
+          "reason_code": "passed",
+          "severity": "critical",
+          "status": "passed"
+        },
+        {
+          "evidence_count": 0,
+          "id": "secret_leakage",
+          "passed": true,
+          "reason_code": "passed",
+          "severity": "critical",
+          "status": "passed"
+        },
+        {
+          "evidence_count": 0,
+          "id": "at_most_once_effects",
+          "passed": true,
+          "reason_code": "passed",
+          "severity": "critical",
+          "status": "passed"
+        }
+      ],
+      "grade_status": "passed",
+      "metrics": {
+        "cost_usd": 0.0,
+        "input_tokens": 0.0,
+        "latency_ms": 9,
+        "output_tokens": 0.0,
+        "retries": 0,
+        "tool_calls": 5,
+        "total_tokens": 0.0,
+        "turns": 0
+      },
+      "release_gate": {
+        "critical_failures": 0,
+        "critical_skipped": 0,
+        "status": "passed"
+      },
+      "run_status": "ok",
+      "status": "passed",
+      "summary": {
+        "critical": 11,
+        "failed": 0,
+        "info": 0,
+        "noncritical": 0,
+        "passed": 11,
+        "skipped": 0,
+        "total": 11
+      },
+      "timeline": [
+        {
+          "event_type": "tool_call",
+          "kind_class": "write",
+          "operation": "queue.whitelist.enqueue",
+          "sequence": 1,
+          "service": "queue.whitelist",
+          "status": "ok"
+        },
+        {
+          "event_type": "state_transition",
+          "operation": "queue.whitelist.enqueue",
+          "sequence": 2,
+          "service": "queue.whitelist"
+        },
+        {
+          "event_type": "tool_call",
+          "kind_class": "write",
+          "operation": "queue.whitelist.claim",
+          "sequence": 3,
+          "service": "queue.whitelist",
+          "status": "ok"
+        },
+        {
+          "event_type": "state_transition",
+          "operation": "queue.whitelist.claim",
+          "sequence": 4,
+          "service": "queue.whitelist"
+        },
+        {
+          "event_type": "tool_call",
+          "kind_class": "write",
+          "operation": "gmail.send_message",
+          "sequence": 5,
+          "service": "gmail",
+          "status": "ok"
+        },
+        {
+          "event_type": "state_transition",
+          "operation": "gmail.send_message",
+          "sequence": 6,
+          "service": "gmail"
+        },
+        {
+          "event_type": "tool_call",
+          "kind_class": "write",
+          "operation": "queue.whitelist.acknowledge",
+          "sequence": 7,
+          "service": "queue.whitelist",
+          "status": "ok"
+        },
+        {
+          "event_type": "state_transition",
+          "operation": "queue.whitelist.acknowledge",
+          "sequence": 8,
+          "service": "queue.whitelist"
+        },
+        {
+          "event_type": "tool_call",
+          "kind_class": "write",
+          "operation": "queue.whitelist.claim",
+          "sequence": 9,
+          "service": "queue.whitelist",
+          "status": "ok"
+        }
+      ],
+      "trace_id": "openclaw-regression-whitelist-claim-race:fixed"
+    },
+    "id": "openclaw-regression-whitelist-claim-race",
+    "seeded": {
+      "assertions": [
+        {
+          "evidence_count": 0,
+          "id": "trace_schema",
+          "passed": true,
+          "reason_code": "passed",
+          "severity": "critical",
+          "status": "passed"
+        },
+        {
+          "evidence_count": 1,
+          "id": "route_correctness",
+          "passed": true,
+          "reason_code": "passed",
+          "severity": "critical",
+          "status": "passed"
+        },
+        {
+          "evidence_count": 0,
+          "id": "tool_contract",
+          "passed": true,
+          "reason_code": "passed",
+          "severity": "critical",
+          "status": "passed"
+        },
+        {
+          "evidence_count": 6,
+          "id": "final_state",
+          "passed": false,
+          "reason_code": "final_state_mismatch",
+          "severity": "critical",
+          "status": "failed"
+        },
+        {
+          "evidence_count": 0,
+          "id": "provenance",
+          "passed": true,
+          "reason_code": "passed",
+          "severity": "critical",
+          "status": "passed"
+        },
+        {
+          "evidence_count": 0,
+          "id": "threading",
+          "passed": true,
+          "reason_code": "passed",
+          "severity": "critical",
+          "status": "passed"
+        },
+        {
+          "evidence_count": 0,
+          "id": "retries",
+          "passed": true,
+          "reason_code": "passed",
+          "severity": "critical",
+          "status": "passed"
+        },
+        {
+          "evidence_count": 0,
+          "id": "event_identity",
+          "passed": true,
+          "reason_code": "passed",
+          "severity": "critical",
+          "status": "passed"
+        },
+        {
+          "evidence_count": 0,
+          "id": "forbidden_external_actions",
+          "passed": true,
+          "reason_code": "passed",
+          "severity": "critical",
+          "status": "passed"
+        },
+        {
+          "evidence_count": 0,
+          "id": "secret_leakage",
+          "passed": true,
+          "reason_code": "passed",
+          "severity": "critical",
+          "status": "passed"
+        },
+        {
+          "evidence_count": 1,
+          "id": "at_most_once_effects",
+          "passed": false,
+          "reason_code": "duplicate_external_effect",
+          "severity": "critical",
+          "status": "failed"
+        }
+      ],
+      "expected_failure": {
+        "assertion_id": "at_most_once_effects",
+        "reason_code": "duplicate_external_effect"
+      },
+      "grade_status": "failed",
+      "metrics": {
+        "cost_usd": 0.0,
+        "input_tokens": 0.0,
+        "latency_ms": 6,
+        "output_tokens": 0.0,
+        "retries": 0,
+        "tool_calls": 3,
+        "total_tokens": 0.0,
+        "turns": 0
+      },
+      "observed_failure": {
+        "evidence_count": 1,
+        "id": "at_most_once_effects",
+        "passed": false,
+        "reason_code": "duplicate_external_effect",
+        "status": "failed"
+      },
+      "release_gate": {
+        "critical_failures": 2,
+        "critical_skipped": 0,
+        "status": "failed"
+      },
+      "run_status": "ok",
+      "status": "caught",
+      "summary": {
+        "critical": 11,
+        "failed": 2,
+        "info": 0,
+        "noncritical": 0,
+        "passed": 9,
+        "skipped": 0,
+        "total": 11
+      },
+      "timeline": [
+        {
+          "event_type": "tool_call",
+          "kind_class": "write",
+          "operation": "queue.whitelist.enqueue",
+          "sequence": 1,
+          "service": "queue.whitelist",
+          "status": "ok"
+        },
+        {
+          "event_type": "state_transition",
+          "operation": "queue.whitelist.enqueue",
+          "sequence": 2,
+          "service": "queue.whitelist"
+        },
+        {
+          "event_type": "tool_call",
+          "kind_class": "write",
+          "operation": "gmail.send_message",
+          "sequence": 3,
+          "service": "gmail",
+          "status": "ok"
+        },
+        {
+          "event_type": "state_transition",
+          "operation": "gmail.send_message",
+          "sequence": 4,
+          "service": "gmail"
+        },
+        {
+          "event_type": "tool_call",
+          "kind_class": "write",
+          "operation": "gmail.send_message",
+          "sequence": 5,
+          "service": "gmail",
+          "status": "ok"
+        },
+        {
+          "event_type": "state_transition",
+          "operation": "gmail.send_message",
+          "sequence": 6,
+          "service": "gmail"
+        }
+      ],
+      "trace_id": "openclaw-regression-whitelist-claim-race:seeded"
+    },
+    "source_refs": [
+      "ERR-20260819-014"
+    ],
+    "status": "passed",
+    "trace_refs": {
+      "fixed": "cases/openclaw-regression-whitelist-claim-race.json#fixed",
+      "seeded": "cases/openclaw-regression-whitelist-claim-race.json#seeded"
+    }
+  },
+  "report_id": "evaluation-report:openclaw-historical-regressions:v1",
+  "schema_version": "evaluation-case-evidence.v1"
+}

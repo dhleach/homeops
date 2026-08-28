@@ -78,6 +78,20 @@ resource "aws_cloudfront_function" "spa_router" {
     async function handler(event) {
       var request = event.request;
       var uri = request.uri;
+      // The evaluator is a static directory published beside the React app.
+      // Keep the short recruiter-facing URL stable while allowing its JSON and
+      // case-evidence files to pass through normally by extension.
+      if (uri === '/bob/evals') {
+        return {
+          statusCode: 301,
+          statusDescription: 'Moved Permanently',
+          headers: { location: { value: '/bob/evals/' } }
+        };
+      }
+      if (uri === '/bob/evals/') {
+        request.uri = '/bob/evals/index.html';
+        return request;
+      }
       // Pass through requests with a file extension (JS, CSS, images, etc.)
       if (!uri.match(/\.[a-zA-Z0-9]+$/)) {
         request.uri = '/index.html';

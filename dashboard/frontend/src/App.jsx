@@ -2,6 +2,8 @@
  * Revision history:
  *   2026-08-21  Connected the Cognito OIDC session to the dashboard header and
  *               Ask HomeOps diagnostic widget.
+ *   2026-08-27  Added the recruiter-facing Bob evaluation route so the public
+ *               HomeOps surface links to the reviewed release-gate evidence.
  */
 
 import { useTemps } from "./hooks/useTemps.js";
@@ -55,6 +57,12 @@ export default function App() {
                 {auth.authenticated ? "Sign out" : "Sign in"}
               </button>
             )}
+            <a
+              href="/bob/evals/"
+              className="hidden rounded-xl border border-slate-600/60 px-4 py-2 text-sm font-medium text-slate-300 transition-colors hover:border-blue-500/50 hover:text-blue-300 sm:block"
+            >
+              Bob / evals ↗
+            </a>
             <a
               href={GRAFANA_URL}
               target="_blank"

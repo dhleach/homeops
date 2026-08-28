@@ -39,7 +39,8 @@ jobs:
             scripts/zone_heat_loss.py scripts/runtime_per_degree.py scripts/time_to_temp.py \
             scripts/thermal_query.py scripts/scheduling_query.py \
             scripts/mitigation_e2e.py \
-            scripts/tests/test_deploy_smoke_check.py scripts/tests/test_test_counts.py \
+            scripts/tests/test_deploy_smoke_check.py scripts/tests/test_bob_evaluation_publication.py \
+            scripts/tests/test_test_counts.py \
             scripts/tests/test_validate_anomalies.py scripts/tests/test_analyze_multi_zone_impact.py \
             scripts/tests/test_floor_hourly_heatmap.py scripts/tests/test_data_model_docs.py \
             scripts/tests/test_homeassistant_automation.py \
@@ -70,7 +71,8 @@ jobs:
             scripts/zone_heat_loss.py scripts/runtime_per_degree.py scripts/time_to_temp.py \
             scripts/thermal_query.py scripts/scheduling_query.py \
             scripts/mitigation_e2e.py \
-            scripts/tests/test_deploy_smoke_check.py scripts/tests/test_test_counts.py \
+            scripts/tests/test_deploy_smoke_check.py scripts/tests/test_bob_evaluation_publication.py \
+            scripts/tests/test_test_counts.py \
             scripts/tests/test_validate_anomalies.py scripts/tests/test_analyze_multi_zone_impact.py \
             scripts/tests/test_floor_hourly_heatmap.py scripts/tests/test_data_model_docs.py \
             scripts/tests/test_homeassistant_automation.py \
