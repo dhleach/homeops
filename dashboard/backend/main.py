@@ -8,6 +8,9 @@ provider-call and per-user/IP backstops, and exposes internal-only
 Prometheus metrics.
 
 Revision history:
+  2026-08-28  Added cooling-aware Ask HomeOps context and prompt guidance so
+              inferred thermostat demand, mixed modes, and unavailable cooling
+              telemetry are described without claiming compressor telemetry.
   2026-08-28  Added backward-compatible cooling-call, inferred-AC, and per-zone
               HVAC-action fields to the current-telemetry API, deriving action
               conservatively from the additive Prometheus call gauges.
@@ -441,18 +444,24 @@ FLOORS = ["floor_1", "floor_2", "floor_3"]
 
 SYSTEM_PROMPT = (
     "You are an HVAC diagnostic assistant for a real home monitoring system in Pittsburgh, PA. "
-    "This monitoring system currently tracks HEATING only — furnace and zone heat calls. "
-    "Cooling/AC is not yet instrumented, so you will never see cooling data. "
+    "This monitoring system tracks thermostat-derived HEATING and COOLING demand for three zones. "
+    "furnace_active means the heating burner is active. ac_cooling_active and the per-floor "
+    "cooling calls are inferred from thermostat state, not direct compressor telemetry. "
+    "A non-null per-floor hvac_action is authoritative: heating means a heat call, cooling means "
+    "a cooling call, and idle means neither call is active. A null action means the paired call "
+    "telemetry is unavailable or contradictory; never relabel it as idle. The supplied telemetry "
+    "does not expose a separate thermostat hvac_mode, so do not invent one for an idle zone. "
     "The furnace heats the home when a floor's temperature drops below its setpoint. "
-    "When floors are AT or ABOVE their setpoint, the system is correctly idle — "
-    "no heating is needed and the furnace should be off. This is healthy, not a problem. "
-    "Do NOT suggest the system should be cooling or comment on the absence of cooling data. "
+    "When a zone is idle at or above its heating setpoint, that is normally healthy. "
+    "Cooling on a warm day can be normal; describe it as inferred thermostat cooling demand. "
+    "Do NOT treat every active call as heating or claim cooling is categorically unavailable. "
+    "If cooling fields are unavailable, say that the cooling state cannot be determined; do not "
+    "guess that it is idle or claim the compressor is running. "
     "Do NOT flag above-setpoint temperatures as a problem — that is normal operation. "
-    "On warm days (outdoor temp above ~55°F), expect all zones idle and furnace off. "
-    "That is healthy. "
-    "Only flag as unusual: a zone calling for heat on a very warm day, floor 2 running more than "
-    "45 minutes continuously (overheating risk — floor 2 only has 3 vents), or the furnace running "
-    "when no zones are calling. "
+    "Only flag as unusual: a zone calling for heat on a very warm day, floor 2 calling for heat "
+    "for more than 45 minutes continuously (overheating risk — floor 2 only has 3 vents), or the "
+    "furnace running when no zones are calling for heat. Treat missing or contradictory telemetry "
+    "as a data-quality limitation, not proof of equipment failure. "
     "Always start with a clear verdict: 'Your system looks healthy' or 'Something worth checking'. "
     "Be specific about numbers. Keep response under 150 words. Write for a homeowner, "
     "not an HVAC tech. "
@@ -727,6 +736,41 @@ def _fmt_runtime(seconds: float | None) -> str:
     return f"{minutes}m {remaining_secs}s"
 
 
+def _fmt_demand(value: bool | None) -> str:
+    """Format nullable demand without silently treating missing data as idle."""
+    if value is None:
+        return "unavailable"
+    return "active" if value else "inactive"
+
+
+def _fmt_context_runtime(seconds: float | None) -> str:
+    """Format an optional runtime for context while naming missing data explicitly."""
+    return _fmt_runtime(seconds) if seconds is not None else "unavailable"
+
+
+def _fmt_zone_action(
+    floor: str,
+    floor_actions: dict[str, Literal["heating", "cooling", "idle"] | None],
+    floor_calls: dict[str, bool | None],
+    cooling_floor_calls: dict[str, bool | None],
+) -> str:
+    """Describe one zone's conservative heat/cool action and source gauges."""
+    heating_call = floor_calls.get(floor)
+    cooling_call = cooling_floor_calls.get(floor)
+    action = floor_actions.get(floor)
+    heat_state = _fmt_demand(heating_call)
+    cooling_state = _fmt_demand(cooling_call)
+
+    if action is not None:
+        return f"{action} (heating_call={heat_state}, cooling_call={cooling_state})"
+
+    if heating_call is True and cooling_call is True:
+        reason = "contradictory heat/cooling calls"
+    else:
+        reason = "missing heat/cooling call data"
+    return f"unavailable ({reason}; heating_call={heat_state}, cooling_call={cooling_state})"
+
+
 async def _build_hvac_context() -> str:
     """Build a structured plain-text context string from live Prometheus data."""
     ts = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -745,16 +789,41 @@ async def _build_hvac_context() -> str:
             furnace_raw = _first_value(furnace_result)
             furnace_active = bool(furnace_raw) if furnace_raw is not None else None
 
+            ac_cooling_result = await _query(client, "ac_cooling_active")
+            ac_cooling_active = _bool_value(ac_cooling_result)
+
             floor_calls: dict[str, bool | None] = {}
+            cooling_floor_calls: dict[str, bool | None] = {}
             for floor in FLOORS:
                 result = await _query(client, f'floor_call_active{{floor="{floor}"}}')
-                raw = _first_value(result)
-                floor_calls[floor] = bool(raw) if raw is not None else None
+                floor_calls[floor] = _bool_value(result)
+
+                result = await _query(
+                    client,
+                    f'cooling_floor_call_active{{floor="{floor}"}}',
+                )
+                cooling_floor_calls[floor] = _bool_value(result)
+
+            floor_actions = {
+                floor: _derive_hvac_action(floor_calls[floor], cooling_floor_calls[floor])
+                for floor in FLOORS
+            }
 
             floor_runtimes: dict[str, float | None] = {}
             for floor in FLOORS:
                 result = await _query(client, f'zone_runtime_today_seconds{{floor="{floor}"}}')
                 floor_runtimes[floor] = _first_value(result)
+
+            cooling_runtime_result = await _query(client, "cooling_runtime_today_seconds")
+            cooling_runtime = _first_value(cooling_runtime_result)
+
+            cooling_floor_runtimes: dict[str, float | None] = {}
+            for floor in FLOORS:
+                result = await _query(
+                    client,
+                    f'cooling_zone_runtime_today_seconds{{floor="{floor}"}}',
+                )
+                cooling_floor_runtimes[floor] = _first_value(result)
 
             floor_setpoints: dict[str, float | None] = {}
             for floor in FLOORS:
@@ -767,22 +836,26 @@ async def _build_hvac_context() -> str:
         floor_temps = {f: None for f in FLOORS}
         outdoor = None
         furnace_active = None
+        ac_cooling_active = None
         floor_calls = {f: None for f in FLOORS}
+        cooling_floor_calls = {f: None for f in FLOORS}
+        floor_actions = {f: None for f in FLOORS}
         floor_runtimes = {f: None for f in FLOORS}
+        cooling_runtime = None
+        cooling_floor_runtimes = {f: None for f in FLOORS}
         floor_setpoints = {f: None for f in FLOORS}
         prometheus_note = "\nNote: Prometheus telemetry unavailable.\n"
 
     def _temp_str(floor: str) -> str:
         t = floor_temps.get(floor)
         sp = floor_setpoints.get(floor)
-        call = floor_calls.get(floor)
         t_str = f"{t:.0f}\u00b0F" if t is not None else "\u2014"
         sp_str = f"{sp:.0f}\u00b0F" if sp is not None else "\u2014"
-        state = "calling for heat" if call else "idle"
-        return f"{t_str} (setpoint: {sp_str}) \u2014 {state}"
+        action = _fmt_zone_action(floor, floor_actions, floor_calls, cooling_floor_calls)
+        return f"{t_str} (setpoint: {sp_str}) \u2014 action: {action}"
 
     if furnace_active is None:
-        furnace_str = "\u2014"
+        furnace_str = "UNAVAILABLE"
     else:
         furnace_str = "ACTIVE" if furnace_active else "OFF"
     outdoor_str = f"{outdoor:.0f}\u00b0F" if outdoor is not None else "\u2014"
@@ -796,12 +869,20 @@ async def _build_hvac_context() -> str:
         f"  Floor 2: {_temp_str('floor_2')}",
         f"  Floor 3: {_temp_str('floor_3')}",
         f"  Outdoor: {outdoor_str}",
-        f"  Furnace: {furnace_str}",
+        f"  Furnace: {furnace_str} (heating equipment)",
+        "  AC demand (inferred thermostat cooling demand; not compressor telemetry): "
+        f"{_fmt_demand(ac_cooling_active).upper()}",
         "",
         "TODAY'S ZONE RUNTIMES",
         f"  Floor 1: {_fmt_runtime(floor_runtimes.get('floor_1'))}",
         f"  Floor 2: {_fmt_runtime(floor_runtimes.get('floor_2'))}",
         f"  Floor 3: {_fmt_runtime(floor_runtimes.get('floor_3'))}",
+        "",
+        "TODAY'S COOLING RUNTIMES (inferred thermostat demand; not compressor runtime)",
+        f"  Whole-home AC demand: {_fmt_context_runtime(cooling_runtime)}",
+        f"  Floor 1: {_fmt_context_runtime(cooling_floor_runtimes.get('floor_1'))}",
+        f"  Floor 2: {_fmt_context_runtime(cooling_floor_runtimes.get('floor_2'))}",
+        f"  Floor 3: {_fmt_context_runtime(cooling_floor_runtimes.get('floor_3'))}",
     ]
     return "\n".join(lines)
 

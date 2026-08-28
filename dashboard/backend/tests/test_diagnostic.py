@@ -1,6 +1,8 @@
 """Tests for POST /api/diagnostic and related helpers.
 
 Revision history:
+  2026-08-28  Added cooling-context, mixed-mode, missing-data, and prompt
+              contract coverage for Ask HomeOps.
   2026-08-27  Added OpenAI Responses API, Luna reasoning-budget, incomplete-
               response, and explicit Gemini rollback coverage.
   2026-08-21  Added adversarial prompt-injection, private-data, tool-use, policy,
@@ -72,9 +74,19 @@ def _prom_side_effect(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json=_prom_response(42.0))
     if "furnace_heating_active" in query:
         return httpx.Response(200, json=_prom_response(1))
+    if "ac_cooling_active" in query:
+        return httpx.Response(200, json=_prom_response(1))
+    if "cooling_floor_call_active" in query:
+        if "floor_1" in query:
+            return httpx.Response(200, json=_prom_response(1))
+        return httpx.Response(200, json=_prom_response(0))
     if "floor_call_active" in query:
         if "floor_2" in query:
             return httpx.Response(200, json=_prom_response(1))
+        return httpx.Response(200, json=_prom_response(0))
+    if "cooling_zone_runtime_today_seconds" in query:
+        if "floor_1" in query:
+            return httpx.Response(200, json=_prom_response(900))  # 15m
         return httpx.Response(200, json=_prom_response(0))
     if "zone_runtime_today_seconds" in query:
         if "floor_1" in query:
@@ -83,6 +95,8 @@ def _prom_side_effect(request: httpx.Request) -> httpx.Response:
             return httpx.Response(200, json=_prom_response(4320))  # 1h 12m
         if "floor_3" in query:
             return httpx.Response(200, json=_prom_response(480))  # 8m 0s
+    if "cooling_runtime_today_seconds" in query:
+        return httpx.Response(200, json=_prom_response(1200))  # 20m
     if "floor_setpoint_fahrenheit" in query:
         if "floor_1" in query:
             return httpx.Response(200, json=_prom_response(70.0))
@@ -91,6 +105,24 @@ def _prom_side_effect(request: httpx.Request) -> httpx.Response:
         if "floor_3" in query:
             return httpx.Response(200, json=_prom_response(68.0))
     return httpx.Response(200, json=_prom_empty())
+
+
+def _prom_without_cooling(request: httpx.Request) -> httpx.Response:
+    """Return the normal fixture while simulating a pre-cooling deployment."""
+    query = request.url.params.get("query", "")
+    if "ac_cooling_active" in query or "cooling_" in query:
+        return httpx.Response(200, json=_prom_empty())
+    return _prom_side_effect(request)
+
+
+def _prom_with_conflicting_floor_1_calls(request: httpx.Request) -> httpx.Response:
+    """Return the normal fixture while making floor 1 call for heat and cooling."""
+    query = request.url.params.get("query", "")
+    if "cooling_floor_call_active" in query and "floor_1" in query:
+        return httpx.Response(200, json=_prom_response(1))
+    if "floor_call_active" in query and "floor_1" in query:
+        return httpx.Response(200, json=_prom_response(1))
+    return _prom_side_effect(request)
 
 
 # ---------------------------------------------------------------------------
@@ -115,6 +147,66 @@ async def test_build_hvac_context_returns_expected_sections(respx_mock):
     assert "Furnace:" in context
     assert "Outdoor:" in context
     assert "68°F" in context
+
+
+@pytest.mark.respx(base_url="http://localhost:9090")
+@pytest.mark.asyncio
+async def test_build_hvac_context_includes_cooling_and_mixed_mode_state(respx_mock):
+    """Context includes inferred AC demand and distinct per-zone actions."""
+    respx_mock.get("/api/v1/query").mock(side_effect=_prom_side_effect)
+
+    context = await _build_hvac_context()
+
+    assert (
+        "AC demand (inferred thermostat cooling demand; not compressor telemetry): ACTIVE"
+        in context
+    )
+    assert "Floor 1:" in context and "action: cooling" in context
+    assert "Floor 2:" in context and "action: heating" in context
+    assert "Floor 3:" in context and "action: idle" in context
+    assert "TODAY'S COOLING RUNTIMES" in context
+    assert "Whole-home AC demand: 20m 0s" in context
+    assert "Floor 1: 15m 0s" in context
+
+
+@pytest.mark.respx(base_url="http://localhost:9090")
+@pytest.mark.asyncio
+async def test_build_hvac_context_marks_missing_cooling_as_unavailable(respx_mock):
+    """Missing cooling gauges must not be silently presented as idle."""
+    respx_mock.get("/api/v1/query").mock(side_effect=_prom_without_cooling)
+
+    context = await _build_hvac_context()
+
+    assert (
+        "AC demand (inferred thermostat cooling demand; not compressor telemetry): UNAVAILABLE"
+        in context
+    )
+    assert "action: unavailable (missing heat/cooling call data" in context
+    assert "cooling_call=unavailable" in context
+    assert "TODAY'S COOLING RUNTIMES" in context
+    assert "Whole-home AC demand: unavailable" in context
+
+
+@pytest.mark.respx(base_url="http://localhost:9090")
+@pytest.mark.asyncio
+async def test_build_hvac_context_marks_conflicting_calls_as_unavailable(respx_mock):
+    """Simultaneous heat/cooling calls must not be collapsed into one action."""
+    respx_mock.get("/api/v1/query").mock(side_effect=_prom_with_conflicting_floor_1_calls)
+
+    context = await _build_hvac_context()
+
+    assert "action: unavailable (contradictory heat/cooling calls" in context
+
+
+def test_system_prompt_describes_cooling_as_inferred_read_only_telemetry():
+    """The fixed model instruction must describe the shipped cooling contract."""
+    prompt = SYSTEM_PROMPT.lower()
+
+    assert "thermostat-derived heating and cooling demand" in prompt
+    assert "not direct compressor telemetry" in prompt
+    assert "null action means" in prompt
+    assert "cooling/ac is not yet instrumented" not in prompt
+    assert "do not" in prompt and "claim cooling is categorically unavailable" in prompt
 
 
 @pytest.mark.respx(base_url="http://localhost:9090")
