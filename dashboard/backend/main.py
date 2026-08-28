@@ -8,6 +8,9 @@ provider-call and per-user/IP backstops, and exposes internal-only
 Prometheus metrics.
 
 Revision history:
+  2026-08-28  Added backward-compatible cooling-call, inferred-AC, and per-zone
+              HVAC-action fields to the current-telemetry API, deriving action
+              conservatively from the additive Prometheus call gauges.
   2026-08-27  Migrated the default Ask HomeOps provider to the direct OpenAI
               GPT-5.6 Luna API at medium reasoning effort, while retaining an
               explicit Gemini rollback adapter and safe incomplete-response handling.
@@ -37,6 +40,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from typing import Literal
 
 import httpx
 from fastapi import Depends, FastAPI, Request, Response
@@ -560,10 +564,12 @@ def require_diagnostic_principal(
 class CurrentTempsResponse(BaseModel):
     """Live HVAC telemetry snapshot.
 
-    All temperature fields are in °F. Boolean call/furnace fields indicate
-    whether that zone is actively calling for heat. ``null`` values mean
-    the metric was not yet available in Prometheus (e.g. sensor offline or
-    consumer just restarted).
+    All temperature fields are in °F. The legacy ``*_call`` fields and
+    ``furnace_active`` field retain their heating semantics. Cooling fields
+    are additive and represent thermostat-derived demand; they do not claim
+    direct compressor telemetry. ``hvac_action`` is derived from the paired
+    heating/cooling call gauges and is null when that state is unavailable or
+    contradictory.
     """
 
     floor_1: float | None = Field(None, description="Floor 1 current temperature (°F)")
@@ -576,6 +582,42 @@ class CurrentTempsResponse(BaseModel):
     floor_1_call: bool | None = Field(None, description="True when floor 1 is calling for heat")
     floor_2_call: bool | None = Field(None, description="True when floor 2 is calling for heat")
     floor_3_call: bool | None = Field(None, description="True when floor 3 is calling for heat")
+
+    ac_cooling_active: bool | None = Field(
+        None,
+        description="True when inferred whole-home AC demand is active; not compressor feedback",
+    )
+    floor_1_cooling_call: bool | None = Field(
+        None, description="True when floor 1 is calling for thermostat-derived cooling"
+    )
+    floor_2_cooling_call: bool | None = Field(
+        None, description="True when floor 2 is calling for thermostat-derived cooling"
+    )
+    floor_3_cooling_call: bool | None = Field(
+        None, description="True when floor 3 is calling for thermostat-derived cooling"
+    )
+
+    floor_1_hvac_action: Literal["heating", "cooling", "idle"] | None = Field(
+        None,
+        description=(
+            "Current floor 1 HVAC action derived from heating/cooling calls; "
+            "null when unavailable or contradictory"
+        ),
+    )
+    floor_2_hvac_action: Literal["heating", "cooling", "idle"] | None = Field(
+        None,
+        description=(
+            "Current floor 2 HVAC action derived from heating/cooling calls; "
+            "null when unavailable or contradictory"
+        ),
+    )
+    floor_3_hvac_action: Literal["heating", "cooling", "idle"] | None = Field(
+        None,
+        description=(
+            "Current floor 3 HVAC action derived from heating/cooling calls; "
+            "null when unavailable or contradictory"
+        ),
+    )
 
     floor_1_setpoint: float | None = Field(None, description="Floor 1 thermostat setpoint (°F)")
     floor_2_setpoint: float | None = Field(None, description="Floor 2 thermostat setpoint (°F)")
@@ -632,6 +674,33 @@ def _first_value(result: list) -> float | None:
         return float(result[0]["value"][1])
     except (KeyError, IndexError, ValueError, TypeError):
         return None
+
+
+def _bool_value(result: list) -> bool | None:
+    """Return a nullable boolean from the first Prometheus instant-query result."""
+    raw = _first_value(result)
+    return bool(raw) if raw is not None else None
+
+
+def _derive_hvac_action(
+    heating_call: bool | None,
+    cooling_call: bool | None,
+) -> Literal["heating", "cooling", "idle"] | None:
+    """Derive a safe per-zone action from the independent call gauges.
+
+    Both gauges must be known before declaring a zone idle. A simultaneous
+    heating and cooling call is treated as unavailable rather than silently
+    choosing one stale or contradictory signal.
+    """
+    if heating_call is None or cooling_call is None:
+        return None
+    if heating_call and cooling_call:
+        return None
+    if heating_call:
+        return "heating"
+    if cooling_call:
+        return "cooling"
+    return "idle"
 
 
 async def _query(client: httpx.AsyncClient, promql: str) -> list:
@@ -1036,11 +1105,12 @@ def metrics() -> Response:
 
 @app.get("/api/current-temps", response_model=CurrentTempsResponse)
 async def current_temps() -> CurrentTempsResponse:
-    """Return live HVAC temps and call/furnace state from Prometheus.
+    """Return live HVAC temps and heat/cool call state from Prometheus.
 
     All numeric fields are floats (°F); boolean fields indicate active
-    heating state. Returns null values + an ``error`` field when
-    Prometheus is unreachable.
+    heating or inferred cooling demand. Per-zone action is ``heating``,
+    ``cooling``, ``idle``, or null when the paired call state is unavailable.
+    Returns null values + an ``error`` field when Prometheus is unreachable.
     """
     ts = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -1064,15 +1134,30 @@ async def current_temps() -> CurrentTempsResponse:
             furnace_raw = _first_value(furnace_result)
             furnace_active = bool(furnace_raw) if furnace_raw is not None else None
 
-            # Per-floor call active
+            # Whole-home inferred cooling demand. This is thermostat-derived,
+            # not direct compressor telemetry.
+            ac_cooling_result = await _query(client, "ac_cooling_active")
+            ac_cooling_active = _bool_value(ac_cooling_result)
+
+            # Per-floor heating and cooling calls
             floor_calls: dict[str, bool | None] = {}
+            cooling_floor_calls: dict[str, bool | None] = {}
             for floor in FLOORS:
                 result = await _query(
                     client,
                     f'floor_call_active{{floor="{floor}"}}',
                 )
-                raw = _first_value(result)
-                floor_calls[floor] = bool(raw) if raw is not None else None
+                floor_calls[floor] = _bool_value(result)
+                result = await _query(
+                    client,
+                    f'cooling_floor_call_active{{floor="{floor}"}}',
+                )
+                cooling_floor_calls[floor] = _bool_value(result)
+
+            floor_actions = {
+                floor: _derive_hvac_action(floor_calls[floor], cooling_floor_calls[floor])
+                for floor in FLOORS
+            }
 
             # Per-floor setpoints
             floor_setpoints: dict[str, float | None] = {}
@@ -1093,6 +1178,13 @@ async def current_temps() -> CurrentTempsResponse:
             floor_1_call=None,
             floor_2_call=None,
             floor_3_call=None,
+            ac_cooling_active=None,
+            floor_1_cooling_call=None,
+            floor_2_cooling_call=None,
+            floor_3_cooling_call=None,
+            floor_1_hvac_action=None,
+            floor_2_hvac_action=None,
+            floor_3_hvac_action=None,
             floor_1_setpoint=None,
             floor_2_setpoint=None,
             floor_3_setpoint=None,
@@ -1109,6 +1201,13 @@ async def current_temps() -> CurrentTempsResponse:
         floor_1_call=floor_calls.get("floor_1"),
         floor_2_call=floor_calls.get("floor_2"),
         floor_3_call=floor_calls.get("floor_3"),
+        ac_cooling_active=ac_cooling_active,
+        floor_1_cooling_call=cooling_floor_calls.get("floor_1"),
+        floor_2_cooling_call=cooling_floor_calls.get("floor_2"),
+        floor_3_cooling_call=cooling_floor_calls.get("floor_3"),
+        floor_1_hvac_action=floor_actions.get("floor_1"),
+        floor_2_hvac_action=floor_actions.get("floor_2"),
+        floor_3_hvac_action=floor_actions.get("floor_3"),
         floor_1_setpoint=floor_setpoints.get("floor_1"),
         floor_2_setpoint=floor_setpoints.get("floor_2"),
         floor_3_setpoint=floor_setpoints.get("floor_3"),

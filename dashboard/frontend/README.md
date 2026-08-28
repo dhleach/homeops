@@ -5,6 +5,10 @@ React + Vite + Tailwind single-page dashboard for `homeops.now`.
 ## Interfaces
 
 - Reads live telemetry from `VITE_API_URL/api/current-temps`.
+- The response retains the legacy heating fields and additionally provides
+  `floor_1/2/3_cooling_call`, `ac_cooling_active`, and
+  `floor_1/2/3_hvac_action` (`heating`, `cooling`, `idle`, or `null` when
+  unavailable); cooling state is thermostat-derived, not compressor feedback.
 - Embeds the four provisioned Grafana dashboards from
   `VITE_GRAFANA_URL` (default: `https://api.homeops.now/grafana`).
 - Sends homeowner diagnostic questions to `VITE_API_URL/api/diagnostic`; the
