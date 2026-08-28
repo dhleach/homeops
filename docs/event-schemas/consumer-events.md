@@ -5,8 +5,9 @@ This document is the reference for all consumer events emitted by
 consumer event schemas and three planned events (not yet implemented). Most events are derived from
 `homeops.observer.state_changed.v1` records; mitigation decisions arrive as explicit
 Home Assistant event records. Together they represent higher-level state transitions
-(floor calls, furnace sessions, thermostat changes, outdoor temperature readings, daily
-summaries, per-zone heating-cycle outcomes, and explicit mitigation decisions).
+(heating and cooling floor calls, furnace and inferred-AC sessions, thermostat changes,
+outdoor temperature readings, daily summaries, per-zone heating-cycle outcomes, and explicit
+mitigation decisions).
 Automatic mitigation rollback decisions are also preserved as explicit
 Home Assistant events before the consumer appends them and sends an operator
 alert.
@@ -137,6 +138,134 @@ heating run).
     "entity_id": "binary_sensor.furnace_heating",
     "duration_s": 3168,
     "outdoor_temp_f": 28.4
+  }
+}
+```
+
+---
+
+## Event: `homeops.consumer.cooling_call_started.v1`
+
+Fires when a per-floor cooling-call helper transitions from `off` → `on`.
+The helper represents inferred thermostat demand; it is not direct compressor telemetry.
+
+### Field Table
+
+| Field | Type | Source | Rationale |
+|---|---|---|---|
+| `schema` | string | hardcoded | Event type identifier. |
+| `ts` | ISO 8601 string | `utc_ts()` at emission | Emission timestamp. |
+| `floor` | string | cooling entity map | Zone key (`floor_1`, `floor_2`, or `floor_3`). |
+| `started_at` | ISO 8601 string | `ts` field from the observer event | Timestamp of the HA state change. |
+| `entity_id` | string | cooling helper entity | Raw log linkage. |
+
+### JSON Example
+
+```json
+{
+  "schema": "homeops.consumer.cooling_call_started.v1",
+  "source": "consumer.v1",
+  "ts": "2026-07-15T14:00:00.221400+00:00",
+  "data": {
+    "floor": "floor_1",
+    "started_at": "2026-07-15T14:00:00.000000+00:00",
+    "entity_id": "binary_sensor.floor_1_cooling_call"
+  }
+}
+```
+
+---
+
+## Event: `homeops.consumer.cooling_call_ended.v1`
+
+Fires when a per-floor cooling-call helper transitions from `on` → `off`.
+
+### Field Table
+
+| Field | Type | Source | Rationale |
+|---|---|---|---|
+| `schema` | string | hardcoded | Event type identifier. |
+| `ts` | ISO 8601 string | `utc_ts()` at emission | Emission timestamp. |
+| `floor` | string | cooling entity map | Zone key. |
+| `ended_at` | ISO 8601 string | `ts` field from the observer event | Timestamp of the HA state change. |
+| `entity_id` | string | cooling helper entity | Raw log linkage. |
+| `duration_s` | int \| null | `(ts_ended - ts_started).total_seconds()` | Call duration; `null` if the matching start was not observed in this consumer run. |
+
+### JSON Example
+
+```json
+{
+  "schema": "homeops.consumer.cooling_call_ended.v1",
+  "source": "consumer.v1",
+  "ts": "2026-07-15T14:42:15.221400+00:00",
+  "data": {
+    "floor": "floor_1",
+    "ended_at": "2026-07-15T14:42:15.000000+00:00",
+    "entity_id": "binary_sensor.floor_1_cooling_call",
+    "duration_s": 2535
+  }
+}
+```
+
+---
+
+## Event: `homeops.consumer.cooling_session_started.v1`
+
+Fires when the aggregate `binary_sensor.ac_cooling` helper transitions from `off` → `on`.
+This is a whole-home inferred cooling-demand session, not proof that the compressor is running.
+
+### Field Table
+
+| Field | Type | Source | Rationale |
+|---|---|---|---|
+| `schema` | string | hardcoded | Event type identifier. |
+| `ts` | ISO 8601 string | `utc_ts()` at emission | Emission timestamp. |
+| `started_at` | ISO 8601 string | `ts` field from the observer event | Timestamp of the HA state change. |
+| `entity_id` | string | `"binary_sensor.ac_cooling"` | Raw log linkage. |
+
+### JSON Example
+
+```json
+{
+  "schema": "homeops.consumer.cooling_session_started.v1",
+  "source": "consumer.v1",
+  "ts": "2026-07-15T14:00:01.003100+00:00",
+  "data": {
+    "started_at": "2026-07-15T14:00:01.000000+00:00",
+    "entity_id": "binary_sensor.ac_cooling"
+  }
+}
+```
+
+---
+
+## Event: `homeops.consumer.cooling_session_ended.v1`
+
+Fires when the aggregate `binary_sensor.ac_cooling` helper transitions from `on` → `off`.
+
+### Field Table
+
+| Field | Type | Source | Rationale |
+|---|---|---|---|
+| `schema` | string | hardcoded | Event type identifier. |
+| `ts` | ISO 8601 string | `utc_ts()` at emission | Emission timestamp. |
+| `ended_at` | ISO 8601 string | `ts` field from the observer event | Timestamp of the HA state change. |
+| `entity_id` | string | `"binary_sensor.ac_cooling"` | Raw log linkage. |
+| `duration_s` | int \| null | `(ts_ended - ts_started).total_seconds()` | Session duration; `null` if the matching start was not observed in this consumer run. |
+| `outdoor_temp_f` | float \| null | `daily_state["last_outdoor_temp_f"]` at session end | Most recent outdoor temperature, when available. |
+
+### JSON Example
+
+```json
+{
+  "schema": "homeops.consumer.cooling_session_ended.v1",
+  "source": "consumer.v1",
+  "ts": "2026-07-15T14:42:16.114500+00:00",
+  "data": {
+    "ended_at": "2026-07-15T14:42:16.000000+00:00",
+    "entity_id": "binary_sensor.ac_cooling",
+    "duration_s": 2535,
+    "outdoor_temp_f": 88.5
   }
 }
 ```

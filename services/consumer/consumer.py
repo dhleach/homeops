@@ -7,6 +7,7 @@ Business logic lives in focused modules:
   - utils.py       utc_ts, follow, append_jsonl, _parse_dt, _get_version
   - state.py       _empty_daily_state, _save_state, _load_state, last_furnace_on_since
   - processors.py  process_floor_event, process_furnace_event, process_climate_event,
+                   process_cooling_floor_event, process_cooling_session_event,
                    process_outdoor_temp_event, process_mitigation_event
   - alerts.py      check_floor_2_warning, check_floor_2_escalation, check_observer_silence,
                    write_zone_temp_snapshot
@@ -14,6 +15,9 @@ Business logic lives in focused modules:
   - rules/config.py  validated rules.yaml loading and enabled/threshold settings
 
 Revision history:
+  2026-08-27  Route additive cooling helper transitions through live and
+              playback paths, persisting independent cooling state while
+              leaving heating routing, state, and event schemas unchanged.
   2026-08-26  Add the default-off proactive anomaly insight boundary after
               validated floor-runtime anomalies, keeping provider calls,
               Telegram delivery, and replay deduplication behind the bounded
@@ -60,8 +64,10 @@ from alerts import (
     write_zone_temp_snapshot,
 )
 from constants import (
+    _COOLING_FLOOR_ENTITIES,
     _FLOOR_ENTITIES,
     _ZONE_TO_CLIMATE_ENTITY,
+    AC_COOLING_ENTITY,
     CLIMATE_ENTITIES,
     SLOW_TO_HEAT_THRESHOLDS_S,
     ZONE_TEMP_SNAPSHOT_INTERVAL_S,
@@ -70,6 +76,8 @@ from processors import (
     MITIGATION_EVENT_TYPE,
     MITIGATION_ROLLBACK_EVENT_TYPE,
     process_climate_event,
+    process_cooling_floor_event,
+    process_cooling_session_event,
     process_floor_event,
     process_furnace_event,
     process_mitigation_event,
@@ -85,6 +93,7 @@ from state import (
     _load_state,
     _parse_dt,
     _save_state,
+    last_ac_cooling_on_since,
     last_furnace_on_since,
 )
 from telegram_commands import handle_telegram_commands
@@ -104,6 +113,7 @@ _RESTART_CLEAR_SCHEMAS = frozenset(
     {
         "homeops.consumer.zone_setpoint_miss.v1",
         "homeops.consumer.zone_time_to_temp.v1",
+        "homeops.consumer.cooling_session_ended.v1",
     }
 )
 
@@ -167,7 +177,7 @@ def _emit_derived(derived: dict[str, Any], derived_log: str, fresh_restart: bool
     if _metrics is not None:
         _metrics.update_from_event(derived.get("schema", ""), derived.get("data", {}))
     if fresh_restart and derived.get("schema") in _RESTART_CLEAR_SCHEMAS:
-        logger.info("Cleared fresh_restart after first full heating session")
+        logger.info("Cleared fresh_restart after first full heating or cooling session")
         return False
     return fresh_restart
 
@@ -394,6 +404,8 @@ def _playback_phase(
     telegram_bot_token: str = "",
     telegram_chat_id: str = "",
     proactive_insight: ProactiveInsightCoordinator | None = None,
+    cooling_floor_on_since: dict[str, datetime | None] | None = None,
+    ac_cooling_on_since: datetime | None = None,
 ) -> dict[str, Any]:
     """
     Replay missed observer events from *last_consumed_ts* to EOF.
@@ -405,17 +417,33 @@ def _playback_phase(
 
     Returns a dict of updated state keys:
         floor_on_since, furnace_on_since, climate_state, daily_state,
-        floor_2_warn_sent, fresh_restart, current_date,
-        last_consumed_observer_ts
+        cooling_floor_on_since, ac_cooling_on_since, floor_2_warn_sent,
+        fresh_restart, current_date, last_consumed_observer_ts
     """
     from dateutil.parser import isoparse as _isoparse
 
     _LOG = "[PLAYBACK]"
     last_consumed_observer_ts: str | None = last_consumed_ts
+    cooling_floor_on_since = dict(
+        cooling_floor_on_since
+        if cooling_floor_on_since is not None
+        else {entity_id: None for entity_id in _COOLING_FLOOR_ENTITIES}
+    )
     if rules_config is None:
         rules_config = load_rules_config()
     slow_to_heat_settings = rules_config.rule("slow_to_heat")
     slow_to_heat_thresholds_s = _minutes_to_seconds(slow_to_heat_settings["thresholds_minutes"])
+
+    def _save_playback_state() -> None:
+        _save_state(
+            floor_on_since,
+            furnace_on_since,
+            climate_state,
+            daily_state,
+            last_consumed_observer_ts=last_consumed_observer_ts,
+            cooling_floor_on_since=cooling_floor_on_since,
+            ac_cooling_on_since=ac_cooling_on_since,
+        )
 
     logger.info(f"{_LOG} Starting catch-up replay from ts={last_consumed_ts}")
 
@@ -426,6 +454,8 @@ def _playback_phase(
         return {
             "floor_on_since": floor_on_since,
             "furnace_on_since": furnace_on_since,
+            "cooling_floor_on_since": cooling_floor_on_since,
+            "ac_cooling_on_since": ac_cooling_on_since,
             "climate_state": climate_state,
             "daily_state": daily_state,
             "floor_2_warn_sent": floor_2_warn_sent,
@@ -479,13 +509,7 @@ def _playback_phase(
                     telegram_chat_id=telegram_chat_id,
                 )
                 if ts_str:
-                    _save_state(
-                        floor_on_since,
-                        furnace_on_since,
-                        climate_state,
-                        daily_state,
-                        last_consumed_observer_ts=last_consumed_observer_ts,
-                    )
+                    _save_playback_state()
                 event_count += 1
                 continue
 
@@ -608,13 +632,24 @@ def _playback_phase(
                         daily_state["per_floor_session_count"][eid] = (
                             daily_state["per_floor_session_count"].get(eid, 0) + 1
                         )
-                _save_state(
-                    floor_on_since,
-                    furnace_on_since,
-                    climate_state,
-                    daily_state,
-                    last_consumed_observer_ts=last_consumed_observer_ts,
+                _save_playback_state()
+                state_saved = True
+
+            # Cooling floor-call sessions use an independent state map and
+            # sibling schemas; heating floor-call behavior above is untouched.
+            if entity_id in _COOLING_FLOOR_ENTITIES:
+                derived_events, cooling_floor_on_since = process_cooling_floor_event(
+                    entity_id,
+                    old_state,
+                    new_state,
+                    ts,
+                    ts_str,
+                    cooling_floor_on_since,
+                    processing_ts=ts_str,
                 )
+                for derived in derived_events:
+                    fresh_restart = _emit_derived(derived, derived_log, fresh_restart)
+                _save_playback_state()
                 state_saved = True
 
             # Outdoor temperature
@@ -626,13 +661,7 @@ def _playback_phase(
                     daily_state["outdoor_temps"].append(derived["data"]["temperature_f"])
                     daily_state["last_outdoor_temp_f"] = derived["data"]["temperature_f"]
                     daily_state["last_outdoor_temp_recorded_at"] = utc_ts()
-                _save_state(
-                    floor_on_since,
-                    furnace_on_since,
-                    climate_state,
-                    daily_state,
-                    last_consumed_observer_ts=last_consumed_observer_ts,
-                )
+                _save_playback_state()
                 state_saved = True
 
             # Climate entities
@@ -683,13 +712,7 @@ def _playback_phase(
                 if sp is not None:
                     samples = daily_state.setdefault("per_floor_setpoint_samples", {})
                     samples.setdefault(entity_id, []).append(sp)
-                _save_state(
-                    floor_on_since,
-                    furnace_on_since,
-                    climate_state,
-                    daily_state,
-                    last_consumed_observer_ts=last_consumed_observer_ts,
-                )
+                _save_playback_state()
                 state_saved = True
 
             # Furnace events
@@ -771,24 +794,30 @@ def _playback_phase(
                                     _sc_evt["data"]
                                 ) + _event_ts_suffix(ts_str, datetime.now(UTC))
                                 _send_telegram(telegram_bot_token, telegram_chat_id, _sc_msg)
-                _save_state(
-                    floor_on_since,
-                    furnace_on_since,
-                    climate_state,
-                    daily_state,
-                    last_consumed_observer_ts=last_consumed_observer_ts,
+                _save_playback_state()
+                state_saved = True
+
+            # Whole-home inferred AC sessions are independent of furnace
+            # heating sessions and use the aggregate cooling helper entity.
+            if entity_id == AC_COOLING_ENTITY:
+                derived_events, ac_cooling_on_since = process_cooling_session_event(
+                    entity_id,
+                    old_state,
+                    new_state,
+                    ts,
+                    ts_str,
+                    ac_cooling_on_since,
+                    processing_ts=ts_str,
+                    last_outdoor_temp_f=daily_state.get("last_outdoor_temp_f"),
                 )
+                for derived in derived_events:
+                    fresh_restart = _emit_derived(derived, derived_log, fresh_restart)
+                _save_playback_state()
                 state_saved = True
 
             # Catch-all save for events that don't match any entity block.
             if not state_saved and ts_str:
-                _save_state(
-                    floor_on_since,
-                    furnace_on_since,
-                    climate_state,
-                    daily_state,
-                    last_consumed_observer_ts=last_consumed_observer_ts,
-                )
+                _save_playback_state()
 
             event_count += 1
 
@@ -797,6 +826,8 @@ def _playback_phase(
     return {
         "floor_on_since": floor_on_since,
         "furnace_on_since": furnace_on_since,
+        "cooling_floor_on_since": cooling_floor_on_since,
+        "ac_cooling_on_since": ac_cooling_on_since,
         "climate_state": climate_state,
         "daily_state": daily_state,
         "floor_2_warn_sent": floor_2_warn_sent,
@@ -828,7 +859,7 @@ def _register_sigterm_handler(*, state_file: Path | None = None) -> None:
 
 
 def main() -> None:
-    """Tail observer events and emit derived floor/furnace session events."""
+    """Tail observer events and emit derived floor/furnace/AC session events."""
     path = os.environ.get("EVENT_LOG", "state/observer/events.jsonl")
     derived_log = os.environ.get("DERIVED_EVENT_LOG", "state/consumer/events.jsonl")
     try:
@@ -899,6 +930,7 @@ def main() -> None:
     _register_sigterm_handler()
 
     floor_entities = _FLOOR_ENTITIES
+    cooling_floor_entities = _COOLING_FLOOR_ENTITIES
     floor_2_warn_sent = False  # reset each time floor 2 starts a new call
     last_observer_event_ts: datetime | None = None
     observer_silence_sent = False  # reset when a new event arrives after silence
@@ -940,7 +972,12 @@ def main() -> None:
         floor_on_since = {k: _parse_dt(v) for k, v in fos_raw.items()}
         for k in floor_entities:
             floor_on_since.setdefault(k, None)
+        cooling_fos_raw = saved.get("cooling_floor_on_since") or {}
+        cooling_floor_on_since = {k: _parse_dt(v) for k, v in cooling_fos_raw.items()}
+        for k in cooling_floor_entities:
+            cooling_floor_on_since.setdefault(k, None)
         furnace_on_since = _parse_dt(saved.get("furnace_on_since"))
+        ac_cooling_on_since = _parse_dt(saved.get("ac_cooling_on_since"))
         raw_cs = saved.get("climate_state") or {}
         climate_state: dict = {}
         for eid, es in raw_cs.items():
@@ -974,7 +1011,11 @@ def main() -> None:
         furnace_on_since = last_furnace_on_since(path)
         if furnace_on_since:
             logger.info(f"Bootstrapped furnace_on_since={furnace_on_since.isoformat()}")
+        ac_cooling_on_since = last_ac_cooling_on_since(path)
+        if ac_cooling_on_since:
+            logger.info(f"Bootstrapped ac_cooling_on_since={ac_cooling_on_since.isoformat()}")
         floor_on_since = {key: None for key in floor_entities.keys()}
+        cooling_floor_on_since = {key: None for key in cooling_floor_entities.keys()}
         climate_state = {}
         daily_state = _empty_daily_state()
         # Seed outdoor temp from saved state if the reading is fresh enough (≤3 h).
@@ -997,6 +1038,25 @@ def main() -> None:
         saved.get("floor_2_telegram_last_sent_ts") if saved is not None else None
     )
     floor_2_telegram_last_sent_ts: datetime | None = _parse_dt(_f2_ts_raw) if _f2_ts_raw else None
+
+    def _save_runtime_state(
+        *,
+        last_consumed_observer_ts: str | None = None,
+        telegram_last_update_id: int | None = None,
+        floor_2_telegram_last_sent_ts: datetime | None = None,
+    ) -> None:
+        """Persist heating and independent cooling runtime state together."""
+        _save_state(
+            floor_on_since,
+            furnace_on_since,
+            climate_state,
+            daily_state,
+            last_consumed_observer_ts=last_consumed_observer_ts,
+            telegram_last_update_id=telegram_last_update_id,
+            floor_2_telegram_last_sent_ts=floor_2_telegram_last_sent_ts,
+            cooling_floor_on_since=cooling_floor_on_since,
+            ac_cooling_on_since=ac_cooling_on_since,
+        )
 
     # Playback phase: catch up on missed observer events before entering live mode.
     playback_from_ts = _load_last_consumed_ts()
@@ -1021,9 +1081,13 @@ def main() -> None:
             telegram_bot_token=telegram_bot_token,
             telegram_chat_id=telegram_chat_id,
             proactive_insight=proactive_insight,
+            cooling_floor_on_since=cooling_floor_on_since,
+            ac_cooling_on_since=ac_cooling_on_since,
         )
         floor_on_since = _pb_result["floor_on_since"]
         furnace_on_since = _pb_result["furnace_on_since"]
+        cooling_floor_on_since = _pb_result["cooling_floor_on_since"]
+        ac_cooling_on_since = _pb_result["ac_cooling_on_since"]
         climate_state = _pb_result["climate_state"]
         daily_state = _pb_result["daily_state"]
         floor_2_warn_sent = _pb_result["floor_2_warn_sent"]
@@ -1081,11 +1145,7 @@ def main() -> None:
                     telegram_bot_token=telegram_bot_token,
                     telegram_chat_id=telegram_chat_id,
                 )
-                _save_state(
-                    floor_on_since,
-                    furnace_on_since,
-                    climate_state,
-                    daily_state,
+                _save_runtime_state(
                     last_consumed_observer_ts=last_consumed_observer_ts,
                     floor_2_telegram_last_sent_ts=floor_2_telegram_last_sent_ts,
                 )
@@ -1220,11 +1280,26 @@ def main() -> None:
                         daily_state["per_floor_session_count"][eid] = (
                             daily_state["per_floor_session_count"].get(eid, 0) + 1
                         )
-                _save_state(
-                    floor_on_since,
-                    furnace_on_since,
-                    climate_state,
-                    daily_state,
+                _save_runtime_state(
+                    last_consumed_observer_ts=last_consumed_observer_ts,
+                    floor_2_telegram_last_sent_ts=floor_2_telegram_last_sent_ts,
+                )
+
+            # Cooling floor-call sessions are additive siblings to the heating
+            # path above and never enter the heating warning/runtime state.
+            if entity_id in cooling_floor_entities:
+                derived_events, cooling_floor_on_since = process_cooling_floor_event(
+                    entity_id,
+                    old_state,
+                    new_state,
+                    ts,
+                    ts_str,
+                    cooling_floor_on_since,
+                    processing_ts=ts_str,
+                )
+                for derived in derived_events:
+                    fresh_restart = _emit_derived(derived, derived_log, fresh_restart)
+                _save_runtime_state(
                     last_consumed_observer_ts=last_consumed_observer_ts,
                     floor_2_telegram_last_sent_ts=floor_2_telegram_last_sent_ts,
                 )
@@ -1248,11 +1323,7 @@ def main() -> None:
                             f"outdoor_temperature non-numeric value {new_state!r}, skipping"
                         )
                 # Always save on outdoor_temp event — this is the 62-min heartbeat write.
-                _save_state(
-                    floor_on_since,
-                    furnace_on_since,
-                    climate_state,
-                    daily_state,
+                _save_runtime_state(
                     last_consumed_observer_ts=last_consumed_observer_ts,
                     floor_2_telegram_last_sent_ts=floor_2_telegram_last_sent_ts,
                 )
@@ -1324,11 +1395,7 @@ def main() -> None:
                 if sp is not None:
                     samples = daily_state.setdefault("per_floor_setpoint_samples", {})
                     samples.setdefault(entity_id, []).append(sp)
-                _save_state(
-                    floor_on_since,
-                    furnace_on_since,
-                    climate_state,
-                    daily_state,
+                _save_runtime_state(
                     last_consumed_observer_ts=last_consumed_observer_ts,
                     floor_2_telegram_last_sent_ts=floor_2_telegram_last_sent_ts,
                 )
@@ -1458,11 +1525,27 @@ def main() -> None:
                                     "TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID not set,"
                                     " skipping short-call alert"
                                 )
-                _save_state(
-                    floor_on_since,
-                    furnace_on_since,
-                    climate_state,
-                    daily_state,
+                _save_runtime_state(
+                    last_consumed_observer_ts=last_consumed_observer_ts,
+                    floor_2_telegram_last_sent_ts=floor_2_telegram_last_sent_ts,
+                )
+
+            # Whole-home inferred AC sessions use a separate start timestamp
+            # and sibling schemas; the furnace path remains heating-only.
+            if entity_id == AC_COOLING_ENTITY:
+                derived_events, ac_cooling_on_since = process_cooling_session_event(
+                    entity_id,
+                    old_state,
+                    new_state,
+                    ts,
+                    ts_str,
+                    ac_cooling_on_since,
+                    processing_ts=ts_str,
+                    last_outdoor_temp_f=daily_state.get("last_outdoor_temp_f"),
+                )
+                for derived in derived_events:
+                    fresh_restart = _emit_derived(derived, derived_log, fresh_restart)
+                _save_runtime_state(
                     last_consumed_observer_ts=last_consumed_observer_ts,
                     floor_2_telegram_last_sent_ts=floor_2_telegram_last_sent_ts,
                 )
@@ -1689,11 +1772,7 @@ def main() -> None:
                 )
                 if new_update_id != telegram_last_update_id:
                     telegram_last_update_id = new_update_id
-                    _save_state(
-                        floor_on_since,
-                        furnace_on_since,
-                        climate_state,
-                        daily_state,
+                    _save_runtime_state(
                         last_consumed_observer_ts=last_consumed_observer_ts,
                         telegram_last_update_id=telegram_last_update_id,
                         floor_2_telegram_last_sent_ts=floor_2_telegram_last_sent_ts,
@@ -1730,9 +1809,12 @@ __all__ = [
     "_load_state",
     "_parse_dt",
     "_save_state",
+    "last_ac_cooling_on_since",
     "last_furnace_on_since",
     # processors
     "process_climate_event",
+    "process_cooling_floor_event",
+    "process_cooling_session_event",
     "process_floor_event",
     "process_furnace_event",
     "process_mitigation_event",
