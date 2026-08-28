@@ -4,7 +4,7 @@ The design policy for future short-cycle mitigation is documented in
 [docs/mitigation-policy.md](../../docs/mitigation-policy.md); it is not an
 active Home Assistant control path.
 
-The consumer is a Python daemon that tails the observer's JSONL event stream in real time and emits higher-level **derived events** — floor heating-call sessions, whole-home heating sessions, thermostat/climate state changes, per-zone heating performance metrics, mitigation decisions, automatic mitigation rollbacks, in-flight overheating warnings, and (when explicitly enabled) bounded LLM explanations for validated runtime anomalies. It is the second stage in the homeops data pipeline.
+The consumer is a Python daemon that tails the observer's JSONL event stream in real time and emits higher-level **derived events** — floor heating- and cooling-call sessions, whole-home heating and inferred-AC sessions, thermostat/climate state changes, per-zone heating performance metrics, mitigation decisions, automatic mitigation rollbacks, in-flight overheating warnings, and (when explicitly enabled) bounded LLM explanations for validated runtime anomalies. It is the second stage in the homeops data pipeline.
 
 For the host/network boundary around this service, see the repository-level
 [`docs/architecture.md`](../../docs/architecture.md) and
@@ -41,7 +41,7 @@ observer
                ──►  Telegram alerts  (warnings, anomaly insights, and rollback)
 ```
 
-The consumer reads the observer's raw `state_changed` events and explicit Home Assistant event records. It produces semantically richer records: when a floor starts or ends a heating call, when the furnace starts or ends a heating session, when a thermostat's setpoint, current temperature, or HVAC mode changes, when a zone reaches its setpoint (along with how long it took), when a zone overshoots or undershoots its setpoint after heating ends, when floor 2 has been calling for longer than the configured threshold (a sign that the furnace may overheat), when a staged mitigation decision was applied or skipped, when repeated short cycling causes the mitigation guard to roll back, and a daily summary of furnace runtime and outdoor temperatures. A validated floor-runtime anomaly can optionally trigger a separate plain-English explanation without allowing the model to control Home Assistant.
+The consumer reads the observer's raw `state_changed` events and explicit Home Assistant event records. It produces semantically richer records: when a floor starts or ends a heating or cooling call, when the furnace or inferred AC demand starts or ends a whole-home session, when a thermostat's setpoint, current temperature, or HVAC mode changes, when a zone reaches its setpoint (along with how long it took), when a zone overshoots or undershoots its setpoint after heating ends, when floor 2 has been calling for longer than the configured threshold (a sign that the furnace may overheat), when a staged mitigation decision was applied or skipped, when repeated short cycling causes the mitigation guard to roll back, and a daily summary of furnace runtime and outdoor temperatures. A validated floor-runtime anomaly can optionally trigger a separate plain-English explanation without allowing the model to control Home Assistant.
 
 ---
 
@@ -57,8 +57,8 @@ The consumer is split across ten focused modules:
 | `consumer.py` | Lean entry point: tail loop, event routing, signal handling, daily rollover |
 | `constants.py` | Entity ID maps, env-var defaults, shared configuration constants |
 | `utils.py` | `utc_ts`, `follow` (select-based tail generator), `append_jsonl`, `_parse_dt`, `_get_version` |
-| `state.py` | `last_furnace_on_since` bootstrap scan, `_load_state` / `_save_state` persistence, `_empty_daily_state` initialiser |
-| `processors.py` | `process_floor_event`, `process_furnace_event`, `process_climate_event`, `process_outdoor_temp_event`, `process_mitigation_event`, `process_mitigation_rollback_event` — pure event-to-derived-event transforms |
+| `state.py` | `last_furnace_on_since` / `last_ac_cooling_on_since` bootstrap scans, `_load_state` / `_save_state` persistence, `_empty_daily_state` initialiser |
+| `processors.py` | `process_floor_event`, `process_cooling_floor_event`, `process_furnace_event`, `process_cooling_session_event`, `process_climate_event`, `process_outdoor_temp_event`, `process_mitigation_event`, `process_mitigation_rollback_event` — pure event-to-derived-event transforms |
 | `alerts.py` | `check_floor_2_warning`, `check_floor_2_escalation`, `check_observer_silence`, `write_zone_temp_snapshot` — in-flight periodic checks |
 | `reporting.py` | `emit_daily_summary`, `format_daily_summary_message` — end-of-day summary generation and Telegram formatting |
 | `metrics.py` | `HvacMetrics` — Prometheus gauge definitions, update helpers, and HTTP server (port 8001); foundation for the homeops.now public dashboard data pipeline |
@@ -88,6 +88,10 @@ and translates `homeops.observer.event.v1` mitigation records by their
 | `binary_sensor.floor_2_heating_call` | `floor_call_started.v1`, `floor_call_ended.v1` |
 | `binary_sensor.floor_3_heating_call` | `floor_call_started.v1`, `floor_call_ended.v1` |
 | `binary_sensor.furnace_heating` | `heating_session_started.v1`, `heating_session_ended.v1` |
+| `binary_sensor.floor_1_cooling_call` | `cooling_call_started.v1`, `cooling_call_ended.v1` |
+| `binary_sensor.floor_2_cooling_call` | `cooling_call_started.v1`, `cooling_call_ended.v1` |
+| `binary_sensor.floor_3_cooling_call` | `cooling_call_started.v1`, `cooling_call_ended.v1` |
+| `binary_sensor.ac_cooling` | `cooling_session_started.v1`, `cooling_session_ended.v1` |
 | `sensor.outdoor_temperature` | `outdoor_temp_updated.v1` |
 | `climate.floor_1_thermostat` | `thermostat_setpoint_changed.v1`, `thermostat_current_temp_updated.v1`, `thermostat_mode_changed.v1`, `thermostat_setpoint_reached.v1`, `zone_time_to_temp.v1`, `zone_overshoot.v1`, `zone_setpoint_miss.v1`, `zone_slow_to_heat_warning.v1` |
 | `climate.floor_2_thermostat` | `thermostat_setpoint_changed.v1`, `thermostat_current_temp_updated.v1`, `thermostat_mode_changed.v1`, `thermostat_setpoint_reached.v1`, `zone_time_to_temp.v1`, `zone_overshoot.v1`, `zone_setpoint_miss.v1`, `zone_slow_to_heat_warning.v1` |
@@ -112,7 +116,7 @@ Every derived event is:
 >
 > That document contains complete field tables with source/rationale columns, design notes, and planned (not-yet-implemented) events. The sections below are the working reference for the currently implemented event types.
 
-The consumer emits 28 derived event types. All share a common envelope. The
+The consumer emits 32 derived event types. All share a common envelope. The
 authoritative list is maintained in `docs/event-schemas/consumer-events.md`; the
 working sections below cover the most frequently inspected event payloads.
 
@@ -320,6 +324,118 @@ Emitted when the furnace transitions from `on` → `off`.
     "ended_at": "2026-03-19T14:08:15.000000+00:00",
     "entity_id": "binary_sensor.furnace_heating",
     "duration_s": 490
+  }
+}
+```
+
+---
+
+### `homeops.consumer.cooling_call_started.v1`
+
+Emitted when a per-floor cooling-call helper transitions from `off` → `on`.
+The helper represents inferred thermostat demand, not direct compressor telemetry.
+
+| Field | Type | Description |
+|---|---|---|
+| `data.floor` | string | Floor identifier: `"floor_1"`, `"floor_2"`, or `"floor_3"` |
+| `data.started_at` | string (ISO 8601 UTC) | Timestamp from the original observer event |
+| `data.entity_id` | string | One of the `binary_sensor.floor_*_cooling_call` entities |
+
+**Example:**
+
+```json
+{
+  "schema": "homeops.consumer.cooling_call_started.v1",
+  "source": "consumer.v1",
+  "ts": "2026-07-15T14:00:00.123456+00:00",
+  "data": {
+    "floor": "floor_1",
+    "started_at": "2026-07-15T14:00:00.000000+00:00",
+    "entity_id": "binary_sensor.floor_1_cooling_call"
+  }
+}
+```
+
+---
+
+### `homeops.consumer.cooling_call_ended.v1`
+
+Emitted when a per-floor cooling-call helper transitions from `on` → `off`.
+
+| Field | Type | Description |
+|---|---|---|
+| `data.floor` | string | Floor identifier |
+| `data.ended_at` | string (ISO 8601 UTC) | Timestamp from the original observer event |
+| `data.entity_id` | string | One of the `binary_sensor.floor_*_cooling_call` entities |
+| `data.duration_s` | integer \| null | Call duration, or `null` when the matching start was not observed in this run |
+
+**Example:**
+
+```json
+{
+  "schema": "homeops.consumer.cooling_call_ended.v1",
+  "source": "consumer.v1",
+  "ts": "2026-07-15T14:42:15.123456+00:00",
+  "data": {
+    "floor": "floor_1",
+    "ended_at": "2026-07-15T14:42:15.000000+00:00",
+    "entity_id": "binary_sensor.floor_1_cooling_call",
+    "duration_s": 2535
+  }
+}
+```
+
+---
+
+### `homeops.consumer.cooling_session_started.v1`
+
+Emitted when the aggregate `binary_sensor.ac_cooling` helper transitions from `off` → `on`.
+This is a whole-home inferred cooling-demand session, not proof that the compressor is running.
+
+| Field | Type | Description |
+|---|---|---|
+| `data.started_at` | string (ISO 8601 UTC) | Timestamp from the original observer event |
+| `data.entity_id` | string | Always `"binary_sensor.ac_cooling"` |
+
+**Example:**
+
+```json
+{
+  "schema": "homeops.consumer.cooling_session_started.v1",
+  "source": "consumer.v1",
+  "ts": "2026-07-15T14:00:01.123456+00:00",
+  "data": {
+    "started_at": "2026-07-15T14:00:01.000000+00:00",
+    "entity_id": "binary_sensor.ac_cooling"
+  }
+}
+```
+
+---
+
+### `homeops.consumer.cooling_session_ended.v1`
+
+Emitted when the aggregate `binary_sensor.ac_cooling` helper transitions from `on` → `off`.
+
+| Field | Type | Description |
+|---|---|---|
+| `data.ended_at` | string (ISO 8601 UTC) | Timestamp from the original observer event |
+| `data.entity_id` | string | Always `"binary_sensor.ac_cooling"` |
+| `data.duration_s` | integer \| null | Session duration, or `null` when the matching start was not observed in this run |
+| `data.outdoor_temp_f` | number \| null | Most recent outdoor temperature at session end, when available |
+
+**Example:**
+
+```json
+{
+  "schema": "homeops.consumer.cooling_session_ended.v1",
+  "source": "consumer.v1",
+  "ts": "2026-07-15T14:42:16.123456+00:00",
+  "data": {
+    "ended_at": "2026-07-15T14:42:16.000000+00:00",
+    "entity_id": "binary_sensor.ac_cooling",
+    "duration_s": 2535,
+    "outdoor_temp_f": 88.5
   }
 }
 ```
@@ -759,12 +875,18 @@ day.
 
 ## Bootstrap Behavior
 
-When the consumer starts it calls `last_furnace_on_since()` to scan the observer log in reverse and determine whether the furnace is currently mid-session. This prevents a spurious `heating_session_started` event if the furnace was already on when the consumer (re)started.
+When the consumer starts it calls `last_furnace_on_since()` and `last_ac_cooling_on_since()` to scan the observer log in reverse and determine whether the furnace or inferred AC is currently mid-session. This prevents a spurious `heating_session_started` or `cooling_session_started` event if either aggregate helper was already on when the consumer (re)started.
 
 `last_furnace_on_since()` returns:
 
 - The `datetime` of the most recent `off → on` furnace transition if the furnace appears to be on.
 - `None` if the most recent furnace event was an `on → off` transition, or if the log is empty or unreadable.
+
+`last_ac_cooling_on_since()` applies the same boundary rules to
+`binary_sensor.ac_cooling`. Per-floor cooling-call start times are not
+bootstrapped, matching the existing heating floor-call behavior; a cooling
+call that ends after a restart therefore has `duration_s: null` unless its
+start was observed in the current run.
 
 Floor call start times are **not** bootstrapped — if the consumer restarts mid-call, `duration_s` for that call will be `null` in the `floor_call_ended` event.
 

@@ -1,6 +1,9 @@
 """Event processors for floor, furnace, climate, and outdoor temperature events.
 
 Revision history:
+  2026-08-27  Add isolated cooling-call and aggregate cooling-session processors
+              with sibling event schemas, preserving the heating processors and
+              their payload contracts unchanged.
   2026-08-25  Validate and translate automatic mitigation rollback events so
               fail-safe shutdowns are durable, replayable, and alertable.
   2026-08-25  Validate and translate the staged Home Assistant mitigation event
@@ -19,8 +22,10 @@ from typing import Any
 from dateutil.parser import isoparse
 
 from constants import (
+    _COOLING_FLOOR_ENTITIES,
     _FLOOR_ENTITIES,
     _ZONE_TO_FLOOR_ENTITY,
+    AC_COOLING_ENTITY,
     CLIMATE_ENTITIES,
     SLOW_TO_HEAT_THRESHOLDS_S,
 )
@@ -261,6 +266,67 @@ def process_floor_event(
     return events, floor_on_since, floor_2_warn_sent
 
 
+def process_cooling_floor_event(
+    entity_id: str,
+    old_state: str | None,
+    new_state: str | None,
+    ts: datetime | None,
+    ts_str: str | None,
+    cooling_floor_on_since: dict[str, datetime | None],
+    processing_ts: str | None = None,
+) -> tuple[list[dict[str, Any]], dict[str, datetime | None]]:
+    """Process a floor cooling-call state change.
+
+    Cooling has its own state map and event names so the existing heating
+    ``floor_call_*`` stream remains unchanged.  The helper sensors represent
+    thermostat demand, not direct compressor feedback.
+    """
+    floor_key = _COOLING_FLOOR_ENTITIES.get(entity_id)
+    if floor_key is None:
+        return [], cooling_floor_on_since
+
+    events: list[dict[str, Any]] = []
+    cooling_floor_on_since = dict(cooling_floor_on_since)
+    _evt_ts = processing_ts or utc_ts()
+
+    if old_state == "off" and new_state == "on":
+        cooling_floor_on_since[entity_id] = ts
+        events.append(
+            {
+                "schema": "homeops.consumer.cooling_call_started.v1",
+                "source": "consumer.v1",
+                "ts": _evt_ts,
+                "data": {
+                    "floor": floor_key,
+                    "started_at": ts_str,
+                    "entity_id": entity_id,
+                },
+            }
+        )
+
+    if old_state == "on" and new_state == "off":
+        duration_s: int | None = None
+        started = cooling_floor_on_since.get(entity_id)
+        if started and ts:
+            duration_s = int((ts - started).total_seconds())
+        cooling_floor_on_since[entity_id] = None
+        events.append(
+            {
+                "schema": "homeops.consumer.cooling_call_ended.v1",
+                "source": "consumer.v1",
+                "ts": _evt_ts,
+                "data": {
+                    "floor": floor_key,
+                    "ended_at": ts_str,
+                    "entity_id": entity_id,
+                    "duration_s": duration_s,
+                },
+            }
+        )
+
+    return events, cooling_floor_on_since
+
+
 def process_furnace_event(
     entity_id: str,
     old_state: str | None,
@@ -318,6 +384,64 @@ def process_furnace_event(
         )
 
     return events, furnace_on_since
+
+
+def process_cooling_session_event(
+    entity_id: str,
+    old_state: str | None,
+    new_state: str | None,
+    ts: datetime | None,
+    ts_str: str | None,
+    ac_cooling_on_since: datetime | None,
+    processing_ts: str | None = None,
+    last_outdoor_temp_f: float | None = None,
+) -> tuple[list[dict[str, Any]], datetime | None]:
+    """Process the inferred whole-home AC/cooling helper state change.
+
+    This is a parallel path to :func:`process_furnace_event`; it deliberately
+    does not share or mutate ``furnace_on_since`` so heating and cooling
+    sessions remain independently durable contracts.
+    """
+    if entity_id != AC_COOLING_ENTITY:
+        return [], ac_cooling_on_since
+
+    events: list[dict[str, Any]] = []
+    _evt_ts = processing_ts or utc_ts()
+
+    if old_state == "off" and new_state == "on":
+        ac_cooling_on_since = ts
+        events.append(
+            {
+                "schema": "homeops.consumer.cooling_session_started.v1",
+                "source": "consumer.v1",
+                "ts": _evt_ts,
+                "data": {
+                    "started_at": ts_str,
+                    "entity_id": entity_id,
+                },
+            }
+        )
+
+    if old_state == "on" and new_state == "off":
+        duration_s: int | None = None
+        if ac_cooling_on_since and ts:
+            duration_s = int((ts - ac_cooling_on_since).total_seconds())
+        ac_cooling_on_since = None
+        events.append(
+            {
+                "schema": "homeops.consumer.cooling_session_ended.v1",
+                "source": "consumer.v1",
+                "ts": _evt_ts,
+                "data": {
+                    "ended_at": ts_str,
+                    "entity_id": entity_id,
+                    "duration_s": duration_s,
+                    "outdoor_temp_f": last_outdoor_temp_f,
+                },
+            }
+        )
+
+    return events, ac_cooling_on_since
 
 
 def process_climate_event(
