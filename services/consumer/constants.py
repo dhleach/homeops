@@ -1,6 +1,9 @@
 """Shared constants and entity mappings for the HomeOps consumer service.
 
 Revision history:
+  2026-08-27  Add the operator-created cooling-call entity map and aggregate AC
+              entity constant so the consumer can add cooling state without
+              changing the existing heating mappings.
   2026-08-24  Keep processor defaults available for direct callers while moving
               production warning thresholds to the validated insights rules.yaml file.
 """
@@ -20,6 +23,17 @@ _FLOOR_ENTITIES: dict[str, str] = {
 }
 
 _ZONE_TO_FLOOR_ENTITY: dict[str, str] = {v: k for k, v in _FLOOR_ENTITIES.items()}
+
+# Floor cooling-call binary sensors → floor keys.  This is intentionally a
+# separate map: the existing heating map and its consumers are a stable public
+# contract and must not be made mode-generic as part of the cooling rollout.
+_COOLING_FLOOR_ENTITIES: dict[str, str] = {
+    "binary_sensor.floor_1_cooling_call": "floor_1",
+    "binary_sensor.floor_2_cooling_call": "floor_2",
+    "binary_sensor.floor_3_cooling_call": "floor_3",
+}
+
+AC_COOLING_ENTITY = "binary_sensor.ac_cooling"
 
 _ZONE_TO_CLIMATE_ENTITY: dict[str, str] = {
     "floor_1": "climate.floor_1_thermostat",

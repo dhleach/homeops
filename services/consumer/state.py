@@ -1,4 +1,10 @@
-"""State persistence and initialization for the HomeOps consumer service."""
+"""State persistence and initialization for the HomeOps consumer service.
+
+Revision history:
+  2026-08-27  Persist and bootstrap cooling floor-call and aggregate AC session
+              state in separate fields so the established heating state format
+              and restart behavior remain compatible.
+"""
 
 from __future__ import annotations
 
@@ -9,15 +15,18 @@ from typing import Any
 
 from dateutil.parser import isoparse
 
-from constants import _FLOOR_ENTITIES, CLIMATE_ENTITIES, OUTDOOR_TEMP_STALE_S, STATE_FILE
+from constants import (
+    _FLOOR_ENTITIES,
+    AC_COOLING_ENTITY,
+    CLIMATE_ENTITIES,
+    OUTDOOR_TEMP_STALE_S,
+    STATE_FILE,
+)
 from utils import _parse_dt, utc_ts
 
 
-def last_furnace_on_since(path: str) -> datetime | None:
-    """
-    Look back through the observer log to recover whether the furnace is currently 'on'
-    and when that 'on' session started (based on the last off->on event).
-    """
+def _last_entity_on_since(path: str, entity_id: str) -> datetime | None:
+    """Return the start of the latest active ``off`` → ``on`` entity session."""
     try:
         with open(path, encoding="utf-8") as f:
             lines = f.readlines()
@@ -26,7 +35,8 @@ def last_furnace_on_since(path: str) -> datetime | None:
     except OSError:
         return None
 
-    # Reverse scan: the most recent furnace event determines whether a session is active.
+    # Reverse scan: the most recent event for the target determines whether a
+    # session is active.  Unrelated entities are ignored.
     for line in reversed(lines):
         line = line.strip()
         if not line:
@@ -38,7 +48,7 @@ def last_furnace_on_since(path: str) -> datetime | None:
         if evt.get("schema") != "homeops.observer.state_changed.v1":
             continue
         data = evt.get("data") or {}
-        if data.get("entity_id") != "binary_sensor.furnace_heating":
+        if data.get("entity_id") != entity_id:
             continue
         old_state = data.get("old_state")
         new_state = data.get("new_state")
@@ -52,6 +62,19 @@ def last_furnace_on_since(path: str) -> datetime | None:
         return None
 
     return None
+
+
+def last_furnace_on_since(path: str) -> datetime | None:
+    """
+    Look back through the observer log to recover whether the furnace is currently 'on'
+    and when that 'on' session started (based on the last off->on event).
+    """
+    return _last_entity_on_since(path, "binary_sensor.furnace_heating")
+
+
+def last_ac_cooling_on_since(path: str) -> datetime | None:
+    """Recover an active inferred AC session from the observer log on startup."""
+    return _last_entity_on_since(path, AC_COOLING_ENTITY)
 
 
 def _empty_daily_state() -> dict[str, Any]:
@@ -86,6 +109,8 @@ def _save_state(
     last_consumed_observer_ts: str | None = None,
     telegram_last_update_id: int | None = None,
     floor_2_telegram_last_sent_ts: datetime | None = None,
+    cooling_floor_on_since: dict[str, datetime | None] | None = None,
+    ac_cooling_on_since: datetime | None = None,
     state_file: Path | None = None,
 ) -> None:
     """Atomically persist consumer runtime state to disk."""
@@ -94,6 +119,9 @@ def _save_state(
         return dt.isoformat() if dt is not None else None
 
     serialized_fos: dict[str, str | None] = {k: _dt(v) for k, v in floor_on_since.items()}
+    serialized_cooling_fos: dict[str, str | None] = {
+        k: _dt(v) for k, v in (cooling_floor_on_since or {}).items()
+    }
 
     serialized_cs: dict[str, Any] = {}
     for eid, es in climate_state.items():
@@ -105,6 +133,8 @@ def _save_state(
     payload: dict[str, Any] = {
         "floor_on_since": serialized_fos,
         "furnace_on_since": _dt(furnace_on_since),
+        "cooling_floor_on_since": serialized_cooling_fos,
+        "ac_cooling_on_since": _dt(ac_cooling_on_since),
         "climate_state": serialized_cs,
         "daily_state": daily_state,
         "last_consumed_observer_ts": last_consumed_observer_ts,
@@ -200,6 +230,7 @@ def _load_last_outdoor_temp(
 
 __all__ = [
     "last_furnace_on_since",
+    "last_ac_cooling_on_since",
     "_empty_daily_state",
     "_save_state",
     "_load_state",
