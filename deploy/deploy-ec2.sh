@@ -6,6 +6,10 @@
 # used only for the existing dashboard ownership repair and Nginx validation.
 #
 # Revision history:
+#   2026-08-27  Refresh the OpenAI Luna credential and explicit diagnostic
+#               provider selection alongside the retained Gemini rollback key;
+#               this keeps the provider switch in the existing EC2 deploy path
+#               without exposing secrets in the repository.
 #   2026-08-21  Refresh the ignored Compose environment from EC2 IAM/SSM before
 #               recreating the backend so OIDC and shared Valkey settings survive
 #               deploys without putting credentials in the repository.
@@ -44,9 +48,11 @@ existing_env_value() {
 
 write_runtime_env() {
   local env_file="${REPO_DIR}/dashboard/.env"
-  local gemini_key oidc_issuer oidc_audience audience_claim jwks_url diagnostic_scope
+  local openai_key gemini_key diagnostic_provider
+  local oidc_issuer oidc_audience audience_claim jwks_url diagnostic_scope
   local limiter_backend redis_url
 
+  openai_key="$(ssm_value "/homeops/${ENVIRONMENT}/openai-api-key" || true)"
   gemini_key="$(ssm_value "/homeops/${ENVIRONMENT}/gemini-api-key" || true)"
   oidc_issuer="$(ssm_value "/homeops/${ENVIRONMENT}/ask-homeops-oidc-issuer" || true)"
   oidc_audience="$(ssm_value "/homeops/${ENVIRONMENT}/ask-homeops-oidc-audience" || true)"
@@ -58,7 +64,10 @@ write_runtime_env() {
 
   # Preserve known-good values if an otherwise unrelated SSM read is
   # temporarily unavailable. Do not print the values or include them in logs.
+  [[ -n "$openai_key" ]] || openai_key="$(existing_env_value OPENAI_API_KEY "$env_file")"
   [[ -n "$gemini_key" ]] || gemini_key="$(existing_env_value GEMINI_API_KEY "$env_file")"
+  diagnostic_provider="$(existing_env_value ASK_HOMEOPS_DIAGNOSTIC_PROVIDER "$env_file")"
+  [[ -n "$diagnostic_provider" ]] || diagnostic_provider="openai"
   [[ -n "$oidc_issuer" ]] || oidc_issuer="$(existing_env_value ASK_HOMEOPS_OIDC_ISSUER "$env_file")"
   [[ -n "$oidc_audience" ]] || oidc_audience="$(existing_env_value ASK_HOMEOPS_OIDC_AUDIENCE "$env_file")"
   [[ -n "$audience_claim" ]] || audience_claim="$(existing_env_value ASK_HOMEOPS_OIDC_AUDIENCE_CLAIM "$env_file")"
@@ -73,10 +82,17 @@ write_runtime_env() {
   if [[ -z "$limiter_backend" || -z "$redis_url" ]]; then
     echo "Ask HomeOps shared limiter settings are incomplete; backend will remain fail-closed" >&2
   fi
+  if [[ "$diagnostic_provider" == "openai" && -z "$openai_key" ]]; then
+    echo "OpenAI diagnostic key is missing; add /homeops/${ENVIRONMENT}/openai-api-key to SSM" >&2
+  elif [[ "$diagnostic_provider" == "gemini" && -z "$gemini_key" ]]; then
+    echo "Gemini rollback key is missing; add /homeops/${ENVIRONMENT}/gemini-api-key to SSM" >&2
+  fi
 
   umask 077
   {
+    printf 'OPENAI_API_KEY=%s\n' "$openai_key"
     printf 'GEMINI_API_KEY=%s\n' "$gemini_key"
+    printf 'ASK_HOMEOPS_DIAGNOSTIC_PROVIDER=%s\n' "$diagnostic_provider"
     printf 'ASK_HOMEOPS_OIDC_ISSUER=%s\n' "$oidc_issuer"
     printf 'ASK_HOMEOPS_OIDC_AUDIENCE=%s\n' "$oidc_audience"
     printf 'ASK_HOMEOPS_OIDC_AUDIENCE_CLAIM=%s\n' "$audience_claim"

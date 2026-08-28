@@ -280,7 +280,7 @@ export default function App() {
                   ["Infra", "AWS EC2 · S3 · CloudFront · Route53"],
                   ["IaC", "Terraform · Docker Compose"],
                   ["CI/CD", "GitHub Actions · Nginx · Certbot"],
-                  ["AI", "Gemini 2.5 Flash · live diagnostic Q&A"],
+                  ["AI", "GPT-5.6 Luna · live diagnostic Q&A"],
                 ].map(([label, value]) => (
                   <div key={label}>
                     <span className="font-medium text-slate-300">{label}</span>

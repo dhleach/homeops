@@ -2,6 +2,8 @@
 # Focused tests for the EC2 deployment readiness gate.
 #
 # Revision history:
+#   2026-08-27  Added coverage for the OpenAI Luna credential and explicit
+#               provider selection written by the EC2 runtime refresh.
 #   2026-08-21  Added coverage for the SSM-backed runtime environment refresh so
 #               auth/Valkey settings persist before a backend recreation.
 #   2026-08-19  Added retry-success and retry-exhaustion coverage so the
@@ -68,6 +70,7 @@ REPO_DIR="$runtime_dir"
 mkdir -p "$REPO_DIR/dashboard"
 ssm_value() {
   case "$1" in
+    */openai-api-key) printf '%s' 'redacted-test-openai-key' ;;
     */gemini-api-key) printf '%s' 'redacted-test-gemini-key' ;;
     */ask-homeops-oidc-issuer) printf '%s' 'https://issuer.example.test/pool' ;;
     */ask-homeops-oidc-audience) printf '%s' 'client-id' ;;
@@ -81,6 +84,8 @@ ssm_value() {
 }
 write_runtime_env
 [[ "$(stat -c '%a' "$REPO_DIR/dashboard/.env")" == "600" ]]
+grep -q '^OPENAI_API_KEY=redacted-test-openai-key$' "$REPO_DIR/dashboard/.env"
+grep -q '^ASK_HOMEOPS_DIAGNOSTIC_PROVIDER=openai$' "$REPO_DIR/dashboard/.env"
 grep -q '^ASK_HOMEOPS_LIMITER_BACKEND=redis$' "$REPO_DIR/dashboard/.env"
 grep -q '^ASK_HOMEOPS_OIDC_AUDIENCE_CLAIM=client_id$' "$REPO_DIR/dashboard/.env"
 printf '%s\n' "PASS: runtime environment refresh writes protected auth/Valkey settings"

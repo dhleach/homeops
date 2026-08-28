@@ -46,15 +46,15 @@ def test_budget_resets_daily_window_and_returns_retry_metadata() -> None:
     assert next_day.remaining == 0
 
 
-def test_diagnostic_rejects_daily_budget_before_gemini(monkeypatch) -> None:
+def test_diagnostic_rejects_daily_budget_before_openai(monkeypatch) -> None:
     """A daily-cap rejection must not invoke the provider a second time."""
-    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     monkeypatch.setattr(main, "diagnostic_budget", DiagnosticBudget(max_in_flight=5, daily_limit=1))
 
-    gemini_mock = AsyncMock(return_value="Looks healthy.")
+    openai_mock = AsyncMock(return_value="Looks healthy.")
     with (
         patch("main._build_hvac_context", new=AsyncMock(return_value="snapshot")),
-        patch("main._call_gemini", new=gemini_mock),
+        patch("main._call_openai", new=openai_mock),
     ):
         first = client.post(
             "/api/diagnostic",
@@ -72,27 +72,27 @@ def test_diagnostic_rejects_daily_budget_before_gemini(monkeypatch) -> None:
     assert second.json() == {"detail": DIAGNOSTIC_RATE_LIMIT_ERROR}
     assert second.headers["retry-after"].isdigit()
     assert second.headers["ratelimit-remaining"] == "0"
-    gemini_mock.assert_awaited_once()
+    openai_mock.assert_awaited_once()
 
 
 @pytest.mark.asyncio
-async def test_diagnostic_rejects_concurrent_request_before_gemini(monkeypatch) -> None:
+async def test_diagnostic_rejects_concurrent_request_before_openai(monkeypatch) -> None:
     """The in-flight guard fails fast while the existing provider call is busy."""
-    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     monkeypatch.setattr(main, "diagnostic_budget", DiagnosticBudget(max_in_flight=1, daily_limit=5))
 
     provider_started = asyncio.Event()
     provider_release = asyncio.Event()
 
-    async def slow_gemini(*_args, **_kwargs) -> str:
+    async def slow_openai(*_args, **_kwargs) -> str:
         provider_started.set()
         await provider_release.wait()
         return "Looks healthy."
 
-    gemini_mock = AsyncMock(side_effect=slow_gemini)
+    openai_mock = AsyncMock(side_effect=slow_openai)
     with (
         patch("main._build_hvac_context", new=AsyncMock(return_value="snapshot")),
-        patch("main._call_gemini", new=gemini_mock),
+        patch("main._call_openai", new=openai_mock),
     ):
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as async_client:
@@ -116,17 +116,17 @@ async def test_diagnostic_rejects_concurrent_request_before_gemini(monkeypatch) 
     assert second.status_code == 429
     assert second.json() == {"detail": DIAGNOSTIC_RATE_LIMIT_ERROR}
     assert first.status_code == 200
-    gemini_mock.assert_awaited_once()
+    openai_mock.assert_awaited_once()
 
 
 def test_metrics_are_low_cardinality_and_internal(monkeypatch) -> None:
     """Metrics expose aggregate controls without prompt, identity, or IP labels."""
-    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     monkeypatch.setattr(main, "diagnostic_budget", DiagnosticBudget(max_in_flight=5, daily_limit=5))
 
     with (
         patch("main._build_hvac_context", new=AsyncMock(return_value="snapshot")),
-        patch("main._call_gemini", new=AsyncMock(return_value="Looks healthy.")),
+        patch("main._call_openai", new=AsyncMock(return_value="Looks healthy.")),
     ):
         response = client.post(
             "/api/diagnostic",

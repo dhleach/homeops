@@ -2,6 +2,9 @@
 """Verify the public HomeOps deployment surfaces after a release.
 
 Revision history:
+  2026-08-27  Added an opt-in authenticated diagnostic probe so a release can
+              verify that the protected Ask HomeOps path returns a complete
+              answer, not merely that its public OpenAPI contract is present.
   2026-08-18  Added dependency-free frontend, API, Grafana, and Prometheus smoke checks
               so deployment workflows fail closed when the public system is unhealthy.
   2026-08-18  Required thermostat setpoint fields in the telemetry contract so a
@@ -17,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -26,6 +30,7 @@ from urllib.request import Request, urlopen
 DEFAULT_FRONTEND_URL = "https://homeops.now"
 DEFAULT_API_URL = "https://api.homeops.now"
 DEFAULT_BOB_EVALUATION_PATH = "/bob/evals/"
+DEFAULT_DIAGNOSTIC_QUESTION = "Are the current HVAC conditions healthy?"
 _MAX_BODY_BYTES = 1_000_000
 
 
@@ -43,6 +48,7 @@ class SmokeResponse:
 
 
 Fetcher = Callable[[str, float], SmokeResponse]
+DiagnosticPoster = Callable[[str, dict[str, object], str, float], SmokeResponse]
 
 
 def fetch_url(url: str, timeout: float) -> SmokeResponse:
@@ -59,6 +65,38 @@ def fetch_url(url: str, timeout: float) -> SmokeResponse:
         detail = exc.read(512).decode("utf-8", errors="replace").strip()
         suffix = f": {detail[:200]}" if detail else ""
         raise SmokeCheckError(f"{url}: HTTP {exc.code}{suffix}") from exc
+    except URLError as exc:
+        raise SmokeCheckError(f"{url}: request failed: {exc.reason}") from exc
+    except TimeoutError as exc:
+        raise SmokeCheckError(f"{url}: request timed out") from exc
+
+
+def post_json(
+    url: str,
+    payload: dict[str, object],
+    bearer_token: str,
+    timeout: float,
+) -> SmokeResponse:
+    """POST JSON without logging the bearer token or diagnostic response."""
+    request = Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {bearer_token}",
+            "Content-Type": "application/json",
+            "User-Agent": "homeops-deploy-smoke-check/1",
+        },
+        method="POST",
+    )
+    try:
+        with urlopen(request, timeout=timeout) as response:  # noqa: S310
+            return SmokeResponse(
+                status=response.status,
+                body=response.read(_MAX_BODY_BYTES),
+                url=response.geturl(),
+            )
+    except HTTPError as exc:
+        raise SmokeCheckError(f"{url}: HTTP {exc.code}") from exc
     except URLError as exc:
         raise SmokeCheckError(f"{url}: request failed: {exc.reason}") from exc
     except TimeoutError as exc:
@@ -244,6 +282,40 @@ def _check_api(base_url: str, fetcher: Fetcher, timeout: float) -> list[str]:
     ]
 
 
+def _check_diagnostic(
+    base_url: str,
+    poster: DiagnosticPoster,
+    timeout: float,
+    bearer_token: str | None,
+    question: str,
+) -> str:
+    """Verify the protected diagnostic endpoint returns a complete answer."""
+    if not bearer_token:
+        raise SmokeCheckError("diagnostic: --check-diagnostic requires HOMEOPS_DIAGNOSTIC_TOKEN")
+    if not question.strip():
+        raise SmokeCheckError("diagnostic: probe question must not be blank")
+
+    response = poster(
+        _join(base_url, "/api/diagnostic"),
+        {"question": question},
+        bearer_token,
+        timeout,
+    )
+    _require_status(response)
+    payload = _json(response)
+    if not isinstance(payload, dict):
+        raise SmokeCheckError(f"{response.url}: diagnostic response is not an object")
+    if payload.get("error") is not None:
+        raise SmokeCheckError(f"{response.url}: diagnostic returned an error")
+    answer = payload.get("answer")
+    if not isinstance(answer, str) or not answer.strip():
+        raise SmokeCheckError(f"{response.url}: diagnostic answer is empty")
+    context_chars = payload.get("context_chars")
+    if not isinstance(context_chars, int) or isinstance(context_chars, bool) or context_chars < 0:
+        raise SmokeCheckError(f"{response.url}: diagnostic context_chars is invalid")
+    return "api: authenticated diagnostic returned a complete answer"
+
+
 def _check_observability(base_url: str, fetcher: Fetcher, timeout: float) -> list[str]:
     grafana_response = fetcher(_join(base_url, "/grafana/api/health"), timeout)
     _require_status(grafana_response)
@@ -269,12 +341,26 @@ def run_smoke_checks(
     include_observability: bool = True,
     fetcher: Fetcher = fetch_url,
     include_bob_evaluation: bool = False,
+    include_diagnostic: bool = False,
+    diagnostic_token: str | None = None,
+    diagnostic_question: str = DEFAULT_DIAGNOSTIC_QUESTION,
+    poster: DiagnosticPoster = post_json,
 ) -> list[str]:
     """Run all release checks in sequence and return human-readable results."""
     results = [_check_frontend(frontend_url, fetcher, timeout)]
     if include_bob_evaluation:
         results.append(_check_bob_evaluation(frontend_url, fetcher, timeout))
     results.extend(_check_api(api_url, fetcher, timeout))
+    if include_diagnostic:
+        results.append(
+            _check_diagnostic(
+                api_url,
+                poster,
+                timeout,
+                diagnostic_token,
+                diagnostic_question,
+            )
+        )
     if include_observability:
         results.extend(_check_observability(api_url, fetcher, timeout))
     return results
@@ -295,6 +381,16 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Also verify the deployed /bob/evals/ route and redacted artifacts.",
     )
+    parser.add_argument(
+        "--check-diagnostic",
+        action="store_true",
+        help="Also make one authenticated diagnostic request using HOMEOPS_DIAGNOSTIC_TOKEN.",
+    )
+    parser.add_argument(
+        "--diagnostic-question",
+        default=DEFAULT_DIAGNOSTIC_QUESTION,
+        help="Safe question to use with --check-diagnostic.",
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -304,6 +400,9 @@ def main(argv: list[str] | None = None) -> int:
             timeout=args.timeout,
             include_observability=not args.skip_observability,
             include_bob_evaluation=args.check_bob_evaluation,
+            include_diagnostic=args.check_diagnostic,
+            diagnostic_token=os.environ.get("HOMEOPS_DIAGNOSTIC_TOKEN"),
+            diagnostic_question=args.diagnostic_question,
         )
     except SmokeCheckError as exc:
         print(f"FAIL: {exc}", file=sys.stderr)

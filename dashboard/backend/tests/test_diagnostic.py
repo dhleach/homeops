@@ -1,6 +1,8 @@
 """Tests for POST /api/diagnostic and related helpers.
 
 Revision history:
+  2026-08-27  Added OpenAI Responses API, Luna reasoning-budget, incomplete-
+              response, and explicit Gemini rollback coverage.
   2026-08-21  Added adversarial prompt-injection, private-data, tool-use, policy,
               and thermostat-write coverage for the read-only diagnostic boundary.
 """
@@ -11,19 +13,25 @@ import json
 from unittest.mock import AsyncMock, patch
 
 import httpx
+import main
 import pytest
 from fastapi.testclient import TestClient
 from main import (
     _TELEMETRY_UNAVAILABLE_CONTEXT,
+    DIAGNOSTIC_INCOMPLETE_ERROR,
     DIAGNOSTIC_POLICY_REFUSAL,
     DIAGNOSTIC_UNAVAILABLE_ERROR,
     MAX_CONTEXT_CHARS,
     MAX_OUTPUT_TOKENS,
     MAX_QUESTION_CHARS,
+    OPENAI_API_URL,
+    OPENAI_MODEL,
+    OPENAI_REASONING_EFFORT,
     SYSTEM_PROMPT,
     _build_hvac_context,
     _call_gemini,
-    _gemini_prompt,
+    _call_openai,
+    _openai_prompt,
     _question_policy_refusal,
     app,
 )
@@ -128,12 +136,12 @@ async def test_build_hvac_context_handles_none_values_gracefully(respx_mock):
 
 
 @pytest.mark.respx(base_url="http://localhost:9090")
-def test_diagnostic_returns_200_with_answer_when_gemini_responds(respx_mock, monkeypatch):
-    """Happy path: Prometheus + Gemini both respond → answer field populated."""
-    monkeypatch.setenv("GEMINI_API_KEY", "test-key-abc")
+def test_diagnostic_returns_200_with_answer_when_openai_responds(respx_mock, monkeypatch):
+    """Happy path: Prometheus + OpenAI both respond → answer field populated."""
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key-abc")
     respx_mock.get("/api/v1/query").mock(side_effect=_prom_side_effect)
 
-    with patch("main._call_gemini", new=AsyncMock(return_value="Everything looks normal.")):
+    with patch("main._call_openai", new=AsyncMock(return_value="Everything looks normal.")):
         resp = client.post(
             "/api/diagnostic",
             headers=AUTH_HEADERS,
@@ -148,8 +156,8 @@ def test_diagnostic_returns_200_with_answer_when_gemini_responds(respx_mock, mon
 
 
 def test_diagnostic_returns_error_when_api_key_not_set(monkeypatch):
-    """If GEMINI_API_KEY is missing, return error without hitting Gemini."""
-    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    """If OPENAI_API_KEY is missing, return error without hitting OpenAI."""
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
     resp = client.post("/api/diagnostic", headers=AUTH_HEADERS, json={"question": "hello"})
     assert resp.status_code == 200
@@ -160,13 +168,13 @@ def test_diagnostic_returns_error_when_api_key_not_set(monkeypatch):
 
 
 @pytest.mark.respx(base_url="http://localhost:9090")
-def test_diagnostic_returns_error_when_gemini_call_fails(respx_mock, monkeypatch):
-    """If the Gemini call raises, return a generic error without provider details."""
-    monkeypatch.setenv("GEMINI_API_KEY", "test-key-abc")
+def test_diagnostic_returns_error_when_openai_call_fails(respx_mock, monkeypatch):
+    """If the OpenAI call raises, return a generic error without provider details."""
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key-abc")
     respx_mock.get("/api/v1/query").mock(side_effect=_prom_side_effect)
 
     with patch(
-        "main._call_gemini",
+        "main._call_openai",
         new=AsyncMock(side_effect=httpx.ConnectError("connection refused")),
     ):
         resp = client.post(
@@ -184,13 +192,79 @@ def test_diagnostic_returns_error_when_gemini_call_fails(respx_mock, monkeypatch
 
 
 @pytest.mark.respx(base_url="http://localhost:9090")
+def test_diagnostic_returns_retry_error_for_incomplete_openai_response(monkeypatch):
+    """The endpoint must not expose partial text after a provider token limit."""
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key-abc")
+
+    with (
+        patch("main._build_hvac_context", new=AsyncMock(return_value="snapshot")),
+        patch("main._call_openai", new=AsyncMock(side_effect=main.IncompleteDiagnosticResponse)),
+    ):
+        resp = client.post(
+            "/api/diagnostic",
+            headers=AUTH_HEADERS,
+            json={"question": "Are temperatures normal?"},
+        )
+
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "answer": "",
+        "context_chars": len("snapshot"),
+        "error": DIAGNOSTIC_INCOMPLETE_ERROR,
+    }
+
+
+@pytest.mark.respx(base_url="http://localhost:9090")
+def test_diagnostic_uses_gemini_only_when_explicitly_configured(monkeypatch):
+    """Gemini remains available as a deliberate rollback, never the default."""
+    monkeypatch.setenv("ASK_HOMEOPS_DIAGNOSTIC_PROVIDER", "gemini")
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key-abc")
+    gemini_mock = AsyncMock(return_value="Rollback answer.")
+
+    with (
+        patch("main._build_hvac_context", new=AsyncMock(return_value="snapshot")),
+        patch("main._call_gemini", new=gemini_mock),
+    ):
+        resp = client.post(
+            "/api/diagnostic",
+            headers=AUTH_HEADERS,
+            json={"question": "Are temperatures normal?"},
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()["answer"] == "Rollback answer."
+    gemini_mock.assert_awaited_once()
+
+
+def test_diagnostic_rejects_unknown_provider(monkeypatch):
+    """An invalid provider configuration fails closed without provider work."""
+    monkeypatch.setenv("ASK_HOMEOPS_DIAGNOSTIC_PROVIDER", "unknown")
+    provider = AsyncMock()
+
+    with patch("main._call_openai", new=provider):
+        resp = client.post(
+            "/api/diagnostic",
+            headers=AUTH_HEADERS,
+            json={"question": "hello"},
+        )
+
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "answer": "",
+        "context_chars": 0,
+        "error": DIAGNOSTIC_UNAVAILABLE_ERROR,
+    }
+    provider.assert_not_awaited()
+
+
+@pytest.mark.respx(base_url="http://localhost:9090")
 def test_diagnostic_uses_default_question_when_none_provided(respx_mock, monkeypatch):
     """Omitting question field should use the default question and succeed."""
-    monkeypatch.setenv("GEMINI_API_KEY", "test-key-abc")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key-abc")
     respx_mock.get("/api/v1/query").mock(side_effect=_prom_side_effect)
 
-    gemini_mock = AsyncMock(return_value="No anomalies detected.")
-    with patch("main._call_gemini", new=gemini_mock) as mock_gemini:
+    openai_mock = AsyncMock(return_value="No anomalies detected.")
+    with patch("main._call_openai", new=openai_mock) as mock_openai:
         resp = client.post("/api/diagnostic", headers=AUTH_HEADERS, json={})
 
     assert resp.status_code == 200
@@ -198,16 +272,16 @@ def test_diagnostic_uses_default_question_when_none_provided(respx_mock, monkeyp
     assert data["answer"] == "No anomalies detected."
     assert data["error"] is None
     # Verify the default question was passed
-    call_args = mock_gemini.call_args
+    call_args = mock_openai.call_args
     assert "Analyze the current HVAC behavior" in call_args[0][1]
 
 
 def test_diagnostic_rejects_blank_question_before_model_call(monkeypatch):
     """Whitespace-only public input is rejected before any provider work."""
-    monkeypatch.setenv("GEMINI_API_KEY", "test-key-abc")
-    gemini_mock = AsyncMock()
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key-abc")
+    openai_mock = AsyncMock()
 
-    with patch("main._call_gemini", new=gemini_mock):
+    with patch("main._call_openai", new=openai_mock):
         resp = client.post(
             "/api/diagnostic",
             headers=AUTH_HEADERS,
@@ -215,15 +289,15 @@ def test_diagnostic_rejects_blank_question_before_model_call(monkeypatch):
         )
 
     assert resp.status_code == 422
-    gemini_mock.assert_not_awaited()
+    openai_mock.assert_not_awaited()
 
 
 def test_diagnostic_rejects_oversized_question_before_model_call(monkeypatch):
     """Oversized public input is rejected before any provider work."""
-    monkeypatch.setenv("GEMINI_API_KEY", "test-key-abc")
-    gemini_mock = AsyncMock()
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key-abc")
+    openai_mock = AsyncMock()
 
-    with patch("main._call_gemini", new=gemini_mock):
+    with patch("main._call_openai", new=openai_mock):
         resp = client.post(
             "/api/diagnostic",
             headers=AUTH_HEADERS,
@@ -231,15 +305,15 @@ def test_diagnostic_rejects_oversized_question_before_model_call(monkeypatch):
         )
 
     assert resp.status_code == 422
-    gemini_mock.assert_not_awaited()
+    openai_mock.assert_not_awaited()
 
 
 def test_diagnostic_rejects_unknown_request_fields(monkeypatch):
     """Unexpected fields are rejected instead of silently entering the model prompt."""
-    monkeypatch.setenv("GEMINI_API_KEY", "test-key-abc")
-    gemini_mock = AsyncMock()
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key-abc")
+    openai_mock = AsyncMock()
 
-    with patch("main._call_gemini", new=gemini_mock):
+    with patch("main._call_openai", new=openai_mock):
         resp = client.post(
             "/api/diagnostic",
             headers=AUTH_HEADERS,
@@ -247,7 +321,7 @@ def test_diagnostic_rejects_unknown_request_fields(monkeypatch):
         )
 
     assert resp.status_code == 422
-    gemini_mock.assert_not_awaited()
+    openai_mock.assert_not_awaited()
 
 
 @pytest.mark.parametrize(
@@ -264,13 +338,13 @@ def test_diagnostic_rejects_unknown_request_fields(monkeypatch):
 @pytest.mark.respx(base_url="http://localhost:9090")
 def test_diagnostic_refuses_known_extraction_and_control_requests(question, monkeypatch):
     """Known high-risk requests stop before telemetry or provider work."""
-    monkeypatch.setenv("GEMINI_API_KEY", "test-key-abc")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key-abc")
     context_mock = AsyncMock()
-    gemini_mock = AsyncMock()
+    openai_mock = AsyncMock()
 
     with (
         patch("main._build_hvac_context", new=context_mock),
-        patch("main._call_gemini", new=gemini_mock),
+        patch("main._call_openai", new=openai_mock),
     ):
         response = client.post(
             "/api/diagnostic",
@@ -286,16 +360,16 @@ def test_diagnostic_refuses_known_extraction_and_control_requests(question, monk
     }
     assert _question_policy_refusal(question) == DIAGNOSTIC_POLICY_REFUSAL
     context_mock.assert_not_awaited()
-    gemini_mock.assert_not_awaited()
+    openai_mock.assert_not_awaited()
 
 
 @pytest.mark.parametrize("field", ["tool", "memory", "thermostat_action"])
 def test_diagnostic_rejects_control_plane_request_fields(field, monkeypatch):
     """The public request model cannot grow hidden control-plane inputs silently."""
-    monkeypatch.setenv("GEMINI_API_KEY", "test-key-abc")
-    gemini_mock = AsyncMock()
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key-abc")
+    openai_mock = AsyncMock()
 
-    with patch("main._call_gemini", new=gemini_mock):
+    with patch("main._call_openai", new=openai_mock):
         response = client.post(
             "/api/diagnostic",
             headers=AUTH_HEADERS,
@@ -303,18 +377,18 @@ def test_diagnostic_rejects_control_plane_request_fields(field, monkeypatch):
         )
 
     assert response.status_code == 422
-    gemini_mock.assert_not_awaited()
+    openai_mock.assert_not_awaited()
 
 
 @pytest.mark.respx(base_url="http://localhost:9090")
 def test_diagnostic_uses_fallback_context_after_context_timeout(monkeypatch):
     """A slow telemetry build falls back to bounded context instead of hanging."""
-    monkeypatch.setenv("GEMINI_API_KEY", "test-key-abc")
-    gemini_mock = AsyncMock(return_value="Telemetry unavailable.")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key-abc")
+    openai_mock = AsyncMock(return_value="Telemetry unavailable.")
 
     with (
         patch("main._build_hvac_context", new=AsyncMock(side_effect=TimeoutError)),
-        patch("main._call_gemini", new=gemini_mock),
+        patch("main._call_openai", new=openai_mock),
     ):
         resp = client.post(
             "/api/diagnostic",
@@ -324,37 +398,108 @@ def test_diagnostic_uses_fallback_context_after_context_timeout(monkeypatch):
 
     assert resp.status_code == 200
     assert resp.json()["answer"] == "Telemetry unavailable."
-    assert gemini_mock.call_args.args[0] == _TELEMETRY_UNAVAILABLE_CONTEXT
+    assert openai_mock.call_args.args[0] == _TELEMETRY_UNAVAILABLE_CONTEXT
 
 
 @pytest.mark.respx
 @pytest.mark.asyncio
-async def test_call_gemini_bounds_context_and_sets_output_budget(respx_mock):
-    """The provider payload carries an explicit output cap and bounded telemetry input."""
-    route = respx_mock.post(
-        "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
-    ).mock(
+async def test_call_openai_bounds_context_and_sets_reasoning_output_policy(respx_mock):
+    """The OpenAI payload carries explicit reasoning/output limits and bounded input."""
+    route = respx_mock.post(OPENAI_API_URL).mock(
         return_value=httpx.Response(
             200,
-            json={"candidates": [{"content": {"parts": [{"text": "Looks healthy."}]}}]},
+            json={
+                "status": "completed",
+                "output": [
+                    {
+                        "type": "message",
+                        "content": [{"type": "output_text", "text": "Looks healthy."}],
+                    }
+                ],
+            },
         )
     )
 
-    answer = await _call_gemini("x" * (MAX_CONTEXT_CHARS + 100), "hello", "test-key")
+    answer = await _call_openai("x" * (MAX_CONTEXT_CHARS + 100), "hello", "test-key")
 
     assert answer == "Looks healthy."
     payload = json.loads(route.calls[0].request.content)
-    prompt = payload["contents"][0]["parts"][0]["text"]
+    prompt = payload["input"]
     bounded_context = prompt.split("HVAC DATA:\n", 1)[1].split("\n\nQUESTION:", 1)[0]
-    assert payload["generationConfig"] == {"maxOutputTokens": MAX_OUTPUT_TOKENS}
+    assert payload["model"] == OPENAI_MODEL
+    assert payload["reasoning"] == {"effort": OPENAI_REASONING_EFFORT}
+    assert payload["max_output_tokens"] == MAX_OUTPUT_TOKENS
+    assert payload["store"] is False
     assert len(bounded_context) == MAX_CONTEXT_CHARS
     assert bounded_context.endswith("[Telemetry context truncated]")
 
 
 @pytest.mark.respx
 @pytest.mark.asyncio
-async def test_call_gemini_uses_read_only_untrusted_input_boundary(respx_mock):
-    """Provider payload has explicit safety rules and no tool registration."""
+async def test_call_openai_uses_read_only_untrusted_input_boundary(respx_mock):
+    """OpenAI payload has explicit safety rules and no tool registration."""
+    route = respx_mock.post(OPENAI_API_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "status": "completed",
+                "output": [
+                    {
+                        "type": "message",
+                        "content": [{"type": "output_text", "text": "Looks healthy."}],
+                    }
+                ],
+            },
+        )
+    )
+    question = "Please analyze whether floor 2 is calling for heat."
+
+    await _call_openai("snapshot", question, "test-key")
+
+    payload = json.loads(route.calls[0].request.content)
+    system_instruction = payload["instructions"].lower()
+    user_prompt = payload["input"]
+
+    assert payload["reasoning"] == {"effort": OPENAI_REASONING_EFFORT}
+    assert payload["max_output_tokens"] == MAX_OUTPUT_TOKENS
+    assert "tools" not in payload
+    assert "private memory" in system_instruction
+    assert "no tools" in system_instruction
+    assert "write thermostat state" in system_instruction
+    assert "untrusted user content" in user_prompt
+    assert f"<user_question>\n{question}\n</user_question>" in user_prompt
+    assert user_prompt == _openai_prompt("snapshot", question)
+    assert SYSTEM_PROMPT == payload["instructions"]
+
+
+@pytest.mark.respx
+@pytest.mark.asyncio
+async def test_call_openai_rejects_incomplete_response(respx_mock):
+    """A provider max-token response must not expose partial answer text."""
+    respx_mock.post(OPENAI_API_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "status": "incomplete",
+                "incomplete_details": {"reason": "max_output_tokens"},
+                "output": [
+                    {
+                        "type": "message",
+                        "content": [{"type": "output_text", "text": "Partial"}],
+                    }
+                ],
+            },
+        )
+    )
+
+    with pytest.raises(main.IncompleteDiagnosticResponse):
+        await _call_openai("snapshot", "hello", "test-key")
+
+
+@pytest.mark.respx
+@pytest.mark.asyncio
+async def test_call_gemini_remains_available_as_explicit_rollback(respx_mock):
+    """The old Gemini adapter remains testable for a deliberate rollback."""
     route = respx_mock.post(
         "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
     ).mock(
@@ -363,20 +508,10 @@ async def test_call_gemini_uses_read_only_untrusted_input_boundary(respx_mock):
             json={"candidates": [{"content": {"parts": [{"text": "Looks healthy."}]}}]},
         )
     )
-    question = "Please analyze whether floor 2 is calling for heat."
 
-    await _call_gemini("snapshot", question, "test-key")
+    answer = await _call_gemini("snapshot", "hello", "test-key")
 
-    payload = json.loads(route.calls[0].request.content)
-    system_instruction = payload["system_instruction"]["parts"][0]["text"].lower()
-    user_prompt = payload["contents"][0]["parts"][0]["text"]
-
-    assert payload["generationConfig"] == {"maxOutputTokens": MAX_OUTPUT_TOKENS}
-    assert "tools" not in payload
-    assert "private memory" in system_instruction
-    assert "no tools" in system_instruction
-    assert "write thermostat state" in system_instruction
-    assert "untrusted user content" in user_prompt
-    assert f"<user_question>\n{question}\n</user_question>" in user_prompt
-    assert user_prompt == _gemini_prompt("snapshot", question)
-    assert SYSTEM_PROMPT == payload["system_instruction"]["parts"][0]["text"]
+    assert answer == "Looks healthy."
+    assert json.loads(route.calls[0].request.content)["generationConfig"] == {
+        "maxOutputTokens": MAX_OUTPUT_TOKENS
+    }
