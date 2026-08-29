@@ -158,6 +158,8 @@ For downstream ML label semantics, see the repository-level
 [`docs/thermal-prediction-targets.md`](../../docs/thermal-prediction-targets.md).
 For the downstream ML feature and point-in-time leakage contract, see
 [`docs/thermal-prediction-features.md`](../../docs/thermal-prediction-features.md).
+For the baseline-model ladder and time-aware evaluation protocol, see
+[`docs/thermal-prediction-evaluation.md`](../../docs/thermal-prediction-evaluation.md).
 The observer preserves raw climate state changes; it does not infer missing
 session boundaries or manufacture cooling labels.
 
