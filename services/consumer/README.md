@@ -22,6 +22,7 @@ For the host/network boundary around this service, see the repository-level
 - [Proactive Anomaly Insight](#proactive-anomaly-insight)
 - [Thermal prediction target contract](#thermal-prediction-target-contract)
 - [Thermal prediction feature schema](#thermal-prediction-feature-schema)
+- [Thermal prediction evaluation protocol](#thermal-prediction-evaluation-protocol)
 - [Read-only multi-zone scheduling query](#read-only-multi-zone-scheduling-query)
 - [Bootstrap Behavior](#bootstrap-behavior)
 - [Configuration Reference](#configuration-reference)
@@ -1266,6 +1267,12 @@ null behavior. Every feature is sourced from information available at
 readings are explicitly excluded. Heat and cool share one schema, while
 cooling remains unavailable until normalized cooling-call instrumentation
 exists. This document does not change consumer events or thermostat behavior.
+
+## Thermal prediction evaluation protocol
+
+The repository-level [`docs/thermal-prediction-evaluation.md`](../../docs/thermal-prediction-evaluation.md) defines the v1 baseline ladder and evaluation rules for future mode-aware thermal models. It selects a historical-median reference, a transparent degree-minute/thermal-response baseline, and a small regularized linear model for comparison. It requires chronological splits, point-in-time feature fitting, per-floor/per-mode reporting, uncertainty coverage, and explicit sparse-data behavior.
+
+This is a design contract only. It does not add consumer events, train a model, make a recommendation, invoke an LLM, or control Home Assistant. The future cross-zone thermal model and what-if query layer remain downstream work validated against deliberate experiments.
 
 The repository-level [`scripts/thermal_query.py`](../../scripts/thermal_query.py)
 is the LLM-facing composition layer for these read-only reports. It accepts a
