@@ -1,0 +1,448 @@
+"""Tests for deterministic point-in-time thermal training-row export."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+from export_thermal_dataset import build_dataset, load_jsonl_events
+
+
+def _observer(
+    ts: str,
+    entity_id: str,
+    new_state: str,
+    *,
+    attributes: dict | None = None,
+) -> dict:
+    return {
+        "schema": "homeops.observer.state_changed.v1",
+        "ts": ts,
+        "data": {
+            "entity_id": entity_id,
+            "old_state": "unknown",
+            "new_state": new_state,
+            "attributes": attributes or {},
+        },
+    }
+
+
+def _derived(schema: str, ts: str, data: dict) -> dict:
+    return {"schema": schema, "ts": ts, "data": data}
+
+
+def _write_jsonl(path: Path, events: list[dict]) -> None:
+    path.write_text(
+        "".join(json.dumps(event) + "\n" for event in events),
+        encoding="utf-8",
+    )
+
+
+def _fixture_events() -> tuple[list[dict], list[dict]]:
+    observer = [
+        _observer("2024-01-15T09:55:00+00:00", "sensor.outdoor_temperature", "30"),
+        _observer(
+            "2024-01-15T09:59:00+00:00",
+            "binary_sensor.floor_1_heating_call",
+            "off",
+        ),
+        _observer(
+            "2024-01-15T09:59:01+00:00",
+            "binary_sensor.floor_2_heating_call",
+            "off",
+        ),
+        _observer(
+            "2024-01-15T09:59:02+00:00",
+            "binary_sensor.floor_3_heating_call",
+            "off",
+        ),
+        _observer(
+            "2024-01-15T09:59:30+00:00",
+            "binary_sensor.floor_1_heating_call",
+            "on",
+        ),
+        _observer(
+            "2024-01-15T09:59:45+00:00",
+            "binary_sensor.floor_2_heating_call",
+            "on",
+        ),
+        _observer(
+            "2024-01-15T10:00:00+00:00",
+            "climate.floor_2_thermostat",
+            "heat",
+            attributes={
+                "current_temperature": 69.0,
+                "temperature": 70.0,
+                "hvac_action": "idle",
+            },
+        ),
+        _observer(
+            "2024-01-15T10:00:05+00:00",
+            "climate.floor_2_thermostat",
+            "heat",
+            attributes={
+                "current_temperature": 69.0,
+                "temperature": 70.0,
+                "hvac_action": "heating",
+            },
+        ),
+        _observer(
+            "2024-01-15T10:05:05+00:00",
+            "climate.floor_2_thermostat",
+            "heat",
+            attributes={
+                "current_temperature": 70.0,
+                "temperature": 70.0,
+                "hvac_action": "heating",
+            },
+        ),
+        _observer(
+            "2024-01-15T10:07:05+00:00",
+            "climate.floor_2_thermostat",
+            "heat",
+            attributes={
+                "current_temperature": 70.2,
+                "temperature": 70.0,
+                "hvac_action": "idle",
+            },
+        ),
+        _observer(
+            "2024-01-15T10:09:00+00:00",
+            "binary_sensor.floor_1_cooling_call",
+            "off",
+        ),
+        _observer(
+            "2024-01-15T10:09:01+00:00",
+            "binary_sensor.floor_2_cooling_call",
+            "off",
+        ),
+        _observer(
+            "2024-01-15T10:09:02+00:00",
+            "binary_sensor.floor_3_cooling_call",
+            "off",
+        ),
+        _observer(
+            "2024-01-15T10:09:30+00:00",
+            "binary_sensor.floor_2_cooling_call",
+            "on",
+        ),
+        _observer(
+            "2024-01-15T10:10:00+00:00",
+            "climate.floor_1_thermostat",
+            "cool",
+            attributes={
+                "current_temperature": 75.0,
+                "temperature": 73.0,
+                "hvac_action": "idle",
+            },
+        ),
+        _observer(
+            "2024-01-15T10:10:05+00:00",
+            "climate.floor_1_thermostat",
+            "cool",
+            attributes={
+                "current_temperature": 75.0,
+                "temperature": 73.0,
+                "hvac_action": "cooling",
+            },
+        ),
+        _observer(
+            "2024-01-15T10:18:05+00:00",
+            "climate.floor_1_thermostat",
+            "cool",
+            attributes={
+                "current_temperature": 73.0,
+                "temperature": 73.0,
+                "hvac_action": "cooling",
+            },
+        ),
+        _observer(
+            "2024-01-15T10:20:05+00:00",
+            "climate.floor_1_thermostat",
+            "cool",
+            attributes={
+                "current_temperature": 72.0,
+                "temperature": 73.0,
+                "hvac_action": "idle",
+            },
+        ),
+        _observer(
+            "2024-01-15T11:00:00+00:00",
+            "climate.floor_3_thermostat",
+            "heat",
+            attributes={
+                "current_temperature": 65.0,
+                "temperature": 68.0,
+                "hvac_action": "idle",
+            },
+        ),
+        _observer(
+            "2024-01-15T11:00:05+00:00",
+            "climate.floor_3_thermostat",
+            "heat",
+            attributes={
+                "current_temperature": 65.0,
+                "temperature": 68.0,
+                "hvac_action": "heating",
+            },
+        ),
+    ]
+    derived = [
+        _derived(
+            "homeops.consumer.zone_time_to_temp.v1",
+            "2024-01-15T10:05:05+00:00",
+            {
+                "entity_id": "climate.floor_2_thermostat",
+                "zone": "floor_2",
+                "start_temp": 69.0,
+                "setpoint": 70.0,
+                "setpoint_delta": 1.0,
+                "duration_s": 300,
+                "end_temp": 70.0,
+                "degrees_gained": 1.0,
+                "outdoor_temp_f": 30.0,
+                "other_zones_calling": ["floor_1"],
+            },
+        ),
+        _derived(
+            "homeops.consumer.thermostat_cooling_session_started.v1",
+            "2024-01-15T10:10:05+00:00",
+            {
+                "entity_id": "climate.floor_1_thermostat",
+                "zone": "floor_1",
+                "started_at": "2024-01-15T10:10:05+00:00",
+                "mode": "cool",
+                "hvac_mode": "cool",
+                "hvac_action": "cooling",
+                "setpoint": 73.0,
+                "current_temp": 75.0,
+                "other_zones_calling": ["floor_2"],
+            },
+        ),
+        _derived(
+            "homeops.consumer.zone_time_to_cool.v1",
+            "2024-01-15T10:18:05+00:00",
+            {
+                "entity_id": "climate.floor_1_thermostat",
+                "zone": "floor_1",
+                "mode": "cool",
+                "start_temp": 75.0,
+                "setpoint": 73.0,
+                "setpoint_delta": 2.0,
+                "duration_s": 480,
+                "end_temp": 73.0,
+                "degrees_cooled": 2.0,
+                "outdoor_temp_f": 30.0,
+                "other_zones_calling": ["floor_2"],
+            },
+        ),
+        _derived(
+            "homeops.consumer.thermostat_cooling_session_ended.v1",
+            "2024-01-15T10:20:05+00:00",
+            {
+                "entity_id": "climate.floor_1_thermostat",
+                "zone": "floor_1",
+                "ended_at": "2024-01-15T10:20:05+00:00",
+                "mode": "cool",
+                "hvac_mode": "cool",
+                "hvac_action": "idle",
+                "start_temp": 75.0,
+                "setpoint": 73.0,
+                "current_temp": 72.0,
+                "duration_s": 1200,
+                "target_reached": True,
+                "other_zones_calling": ["floor_2"],
+            },
+        ),
+    ]
+    return observer, derived
+
+
+def test_export_is_deterministic_and_keeps_future_out_of_features(tmp_path: Path):
+    observer, derived = _fixture_events()
+    observer_path = tmp_path / "observer.jsonl"
+    derived_path = tmp_path / "derived.jsonl"
+    _write_jsonl(observer_path, observer)
+    _write_jsonl(derived_path, derived)
+
+    observer_events, observer_stats = load_jsonl_events(observer_path, "observer")
+    derived_events, derived_stats = load_jsonl_events(derived_path, "derived")
+    first = build_dataset(observer_events, derived_events)
+    second = build_dataset(observer_events, derived_events)
+
+    assert json.dumps(first, sort_keys=True) == json.dumps(second, sort_keys=True)
+    assert observer_stats["lines"] == len(observer)
+    assert derived_stats["lines"] == len(derived)
+
+    heat = next(row for row in first if row["zone"] == "floor_2" and row["mode"] == "heat")
+    assert heat["prediction_ts"] == "2024-01-15T10:00:05+00:00"
+    assert heat["features"]["start_temp_f"] == 69.0
+    assert heat["features"]["start_setpoint_f"] == 70.0
+    assert heat["features"]["setpoint_delta_f"] == 1.0
+    assert heat["features"]["other_zones_calling"] == ["floor_1"]
+    assert heat["features"]["outdoor_temp_f"] == 30.0
+    assert heat["labels"]["time_to_setpoint_s"] == 300.0
+    assert heat["labels"]["zone_runtime_s"] == 420.0
+    assert heat["label_status"] == {
+        "time_to_setpoint": "eligible",
+        "zone_runtime": "eligible",
+    }
+    assert "target_crossing_ts" not in heat["features"]
+    assert "zone_runtime_s" not in heat["features"]
+
+    cool = next(row for row in first if row["zone"] == "floor_1" and row["mode"] == "cool")
+    assert cool["features"]["other_zones_calling"] == ["floor_2"]
+    assert cool["labels"]["time_to_setpoint_s"] == 480.0
+    assert cool["labels"]["zone_runtime_s"] == 600.0
+    assert cool["label_status"]["time_to_setpoint"] == "eligible"
+    assert any(
+        reference["source"] == "derived"
+        and reference["schema"] == "homeops.consumer.thermostat_cooling_session_started.v1"
+        for reference in cool["provenance"]["source_events"]
+    )
+
+
+def test_open_session_is_explicitly_right_censored():
+    observer, derived = _fixture_events()
+    rows = build_dataset(
+        [event for event in (load_jsonl_events_from_dicts(observer, "observer"))],
+        load_jsonl_events_from_dicts(derived, "derived"),
+    )
+
+    floor_3 = next(row for row in rows if row["zone"] == "floor_3")
+    assert floor_3["labels"] == {
+        "time_to_setpoint_s": None,
+        "zone_runtime_s": None,
+    }
+    assert floor_3["label_status"] == {
+        "time_to_setpoint": "right_censored",
+        "zone_runtime": "right_censored",
+    }
+    assert "missing_end_boundary" in floor_3["quality_flags"]
+
+
+def test_outcome_without_start_boundary_is_retained_but_not_eligible():
+    derived = [
+        _derived(
+            "homeops.consumer.zone_time_to_temp.v1",
+            "2024-01-15T12:00:00+00:00",
+            {
+                "zone": "floor_3",
+                "start_temp": 66.0,
+                "setpoint": 70.0,
+                "duration_s": 600,
+                "end_temp": 70.0,
+            },
+        )
+    ]
+    rows = build_dataset([], load_jsonl_events_from_dicts(derived, "derived"))
+
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["prediction_ts"] is None
+    assert row["labels"]["time_to_setpoint_s"] is None
+    assert row["label_status"]["time_to_setpoint"] == "missing_start_boundary"
+    assert row["label_status"]["zone_runtime"] == "missing_start_boundary"
+    assert row["provenance"]["start_boundary"] == "missing"
+
+
+def test_setpoint_change_after_crossing_does_not_invalidate_target_label():
+    observer = [
+        _observer(
+            "2024-01-15T08:00:00+00:00",
+            "climate.floor_1_thermostat",
+            "heat",
+            attributes={
+                "current_temperature": 69.0,
+                "temperature": 70.0,
+                "hvac_action": "idle",
+            },
+        ),
+        _observer(
+            "2024-01-15T08:00:05+00:00",
+            "climate.floor_1_thermostat",
+            "heat",
+            attributes={
+                "current_temperature": 69.0,
+                "temperature": 70.0,
+                "hvac_action": "heating",
+            },
+        ),
+        _observer(
+            "2024-01-15T08:05:05+00:00",
+            "climate.floor_1_thermostat",
+            "heat",
+            attributes={
+                "current_temperature": 70.0,
+                "temperature": 70.0,
+                "hvac_action": "heating",
+            },
+        ),
+        _observer(
+            "2024-01-15T08:06:05+00:00",
+            "climate.floor_1_thermostat",
+            "heat",
+            attributes={
+                "current_temperature": 70.1,
+                "temperature": 71.0,
+                "hvac_action": "heating",
+            },
+        ),
+        _observer(
+            "2024-01-15T08:07:05+00:00",
+            "climate.floor_1_thermostat",
+            "heat",
+            attributes={
+                "current_temperature": 70.2,
+                "temperature": 71.0,
+                "hvac_action": "idle",
+            },
+        ),
+    ]
+    row = build_dataset(
+        load_jsonl_events_from_dicts(observer, "observer"),
+        [],
+    )[0]
+
+    assert row["labels"]["time_to_setpoint_s"] == 300.0
+    assert row["label_status"]["time_to_setpoint"] == "eligible"
+    assert "setpoint_changed_during_session" not in row["quality_flags"]
+
+
+def test_whole_home_cooling_events_do_not_create_floor_rows():
+    derived = [
+        _derived(
+            "homeops.consumer.cooling_session_started.v1",
+            "2024-01-15T13:00:00+00:00",
+            {"started_at": "2024-01-15T13:00:00+00:00"},
+        ),
+        _derived(
+            "homeops.consumer.cooling_session_ended.v1",
+            "2024-01-15T13:30:00+00:00",
+            {"ended_at": "2024-01-15T13:30:00+00:00"},
+        ),
+    ]
+
+    assert build_dataset([], load_jsonl_events_from_dicts(derived, "derived")) == []
+
+
+def load_jsonl_events_from_dicts(events: list[dict], source: str):
+    """Create SourceEvents for unit fixtures without requiring a filesystem."""
+
+    from export_thermal_dataset import (
+        SourceEvent,
+        _event_data,
+        _event_timestamp,
+    )
+
+    return [
+        SourceEvent(
+            source=source,
+            line=index,
+            event=event,
+            schema=event["schema"],
+            data=_event_data(event),
+            timestamp=_event_timestamp(event, event["schema"]),
+        )
+        for index, event in enumerate(events, start=1)
+    ]

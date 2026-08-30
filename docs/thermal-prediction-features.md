@@ -6,9 +6,10 @@ contract](thermal-prediction-targets.md): that document defines what the model
 predicts, while this document defines what was knowable when the prediction was
 made.
 
-This is a data contract only. It does not add a consumer event, change live
-Home Assistant behavior, or make cooling history available. A future dataset
-builder may materialize this shape from observer and derived logs.
+This is a data contract only. It does not add a consumer event or change live
+Home Assistant behavior. The offline exporter
+scripts/export_thermal_dataset.py materializes this shape from observer and
+derived logs for both heat and explicitly instrumented cooling sessions.
 
 ## Canonical row and information boundary
 
@@ -92,10 +93,11 @@ available for heating when the readings are valid.
 
 The existing per-floor binary sensors are named
 `binary_sensor.floor_*_heating_call`; they are valid concurrent-call sources
-for heat only. Cooling rows require an explicitly instrumented normalized zone
-call signal. Until that exists, a cooling row cannot claim that its concurrent
-call feature is known, and cooling remains unavailable under the target
-contract. Heating history must never be relabeled as cooling history.
+for heat. Cooling rows use the separately instrumented
+`binary_sensor.floor_*_cooling_call` signals and the explicit cooling
+session-start snapshot. If a cooling call snapshot is incomplete, the exporter
+retains a null feature and quality flag rather than claiming that the state is
+known. Heating history must never be relabeled as cooling history.
 
 Heat and cool use the same field names, types, null rules, and pipeline. The
 `mode` value selects the directional interpretation of `setpoint_delta_f` and
@@ -130,6 +132,6 @@ This schema supplies features to the labels in
 [`thermal-prediction-targets.md`](thermal-prediction-targets.md). It does not
 decide minimum sample counts, train/test split policy, baseline/model family,
 confidence calibration, or recommendations. Those remain separate design
-tasks. The next dataset work may add a normalized exporter, but it must retain
-this exact information boundary and the target contract's incomplete-session
-semantics.
+tasks. The normalized exporter retains this exact information boundary and the
+target contract's incomplete-session semantics. Data-quality rejection and
+quarantine policy remain a separate downstream task.

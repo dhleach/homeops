@@ -18,22 +18,21 @@ The contract applies to the three canonical floors:
 - `floor_2`
 - `floor_3`
 
-The normalized `mode` value is either `heat` or `cool`. The current consumer
-has heating-oriented session and performance events, including
-`homeops.consumer.zone_time_to_temp.v1`; it does not yet emit a cooling
-session outcome. Therefore:
+The normalized `mode` value is either `heat` or `cool`. The exporter
+materializes both modes from their respective observer and derived event
+contracts:
 
-- `heat` is the only mode with currently eligible production history.
-- `cool` is a reserved, symmetric contract. It has zero eligible rows until
-  cooling transitions and measurements are instrumented and validated.
+- `heat` uses raw climate-action boundaries plus the existing heating
+  outcome events, including `homeops.consumer.zone_time_to_temp.v1`.
+- `cool` uses explicit cooling session boundaries and cooling outcome events.
 - Heating records must not be relabeled as cooling records, and `off`/`idle`
   intervals must not be used as synthetic cooling sessions.
 
 The existing `zone_time_to_temp.v1` event remains useful historical evidence,
 but it is not by itself the final mode-aware training row: it has no normalized
-`mode` field and records the setpoint captured at session end. A future label
-builder must snapshot the starting setpoint and apply the rules below rather
-than silently reusing a possibly changed end value.
+`mode` field and records the setpoint captured at session end. The exporter
+snapshots the starting setpoint from the observer boundary and applies the
+rules below rather than silently reusing a possibly changed end value.
 
 ## Session boundary contract
 
@@ -150,6 +149,7 @@ roadmap decisions and must not be smuggled into a label implementation:
 - confidence, calibration, and evaluation thresholds;
 - recommendations, mitigation, or thermostat write access.
 
-Those later tasks consume this contract. Until cooling instrumentation exists,
-any cooling report must say that the mode is unavailable or has insufficient
-data rather than implying that the model has learned cooling behavior.
+Those later tasks consume this contract. The exporter can now produce cooling
+rows, but an eligible label still requires valid cooling boundaries and
+measurements; a row marked censored or incomplete must not be presented as
+evidence that the model has learned cooling behavior.

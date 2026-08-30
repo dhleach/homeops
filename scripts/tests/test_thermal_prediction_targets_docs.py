@@ -4,6 +4,7 @@ Revision history:
   2026-08-27  Add a documentation contract test so target boundaries, units,
               mode availability, and incomplete-session handling cannot drift
               while the later ML pipeline is implemented.
+  2026-08-29  Update the contract assertions for the normalized cooling export.
 """
 
 from pathlib import Path
@@ -47,7 +48,7 @@ def test_target_contract_defines_censoring_and_cooling_boundary():
         "already_at_target",
         "consumer restart",
         "Setpoint changes before crossing",
-        "zero eligible rows",
+        "cooling outcome events",
         "must not be presented",
         "ordinary regression",
         "homeops.consumer.zone_time_to_temp.v1",
