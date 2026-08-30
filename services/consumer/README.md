@@ -24,6 +24,7 @@ For the host/network boundary around this service, see the repository-level
 - [Thermal prediction feature schema](#thermal-prediction-feature-schema)
 - [Thermal prediction evaluation protocol](#thermal-prediction-evaluation-protocol)
 - [Thermal prediction dataset export](#thermal-prediction-dataset-export)
+- [Thermal prediction dataset validation](#thermal-prediction-dataset-validation)
 - [Read-only multi-zone scheduling query](#read-only-multi-zone-scheduling-query)
 - [Bootstrap Behavior](#bootstrap-behavior)
 - [Configuration Reference](#configuration-reference)
@@ -1287,6 +1288,25 @@ timestamps and line-level provenance. See
 [`docs/thermal-prediction-dataset.md`](../../docs/thermal-prediction-dataset.md)
 for the schema, source-event rules, and command examples. This is an offline
 export only; it does not train a model or change Home Assistant.
+
+## Thermal prediction dataset validation
+
+The repository-level `scripts/validate_thermal_dataset.py` is the next offline
+boundary. It emits unchanged rows that are safe for at least one eligible
+target, writes rejected rows to a quarantine JSONL with stable reason codes,
+and produces per-floor/per-mode quality and `insufficient_data` coverage
+counts. It catches missing or contradictory boundaries, impossible durations,
+heat/cool source mismatches, stale inputs, duplicate/overlapping sessions,
+malformed experiment metadata, and target leakage without changing the source
+export or any runtime service. Run it with explicit output paths:
+
+```bash
+python3 scripts/validate_thermal_dataset.py \
+  --input state/thermal-training.jsonl \
+  --valid-out state/thermal-training.valid.jsonl \
+  --quarantine-out state/thermal-training.quarantine.jsonl \
+  --report-out state/thermal-training.validation.json
+```
 
 The repository-level [`scripts/thermal_query.py`](../../scripts/thermal_query.py)
 is the LLM-facing composition layer for these read-only reports. It accepts a

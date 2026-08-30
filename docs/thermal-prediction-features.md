@@ -134,4 +134,5 @@ decide minimum sample counts, train/test split policy, baseline/model family,
 confidence calibration, or recommendations. Those remain separate design
 tasks. The normalized exporter retains this exact information boundary and the
 target contract's incomplete-session semantics. Data-quality rejection and
-quarantine policy remain a separate downstream task.
+quarantine policy is applied by the offline `scripts/validate_thermal_dataset.py`
+validator without rewriting the exported rows.

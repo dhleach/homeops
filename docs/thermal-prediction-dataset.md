@@ -115,9 +115,65 @@ as experiment_id, operation_type, or intervention. This keeps deliberate
 interventions distinguishable from routine operation for the future coupled
 thermal-model and what-if work.
 
-The current exporter does not reject or quarantine malformed rows. The
-separate data-quality task will add those policies after this stable row shape
-is available.
+## Validation and quarantine
+
+The exporter and validator are separate offline steps. The exporter preserves
+the source evidence and materializes the stable row shape; the validator reads
+that JSONL without changing it and writes three artifacts:
+
+1. validated rows, unchanged from the input;
+2. quarantine records containing the unchanged original row (or the original
+   malformed line) and sorted machine-readable `reason_codes`; and
+3. a deterministic report with reason counts and eligible-label coverage for
+   every floor/mode slice.
+
+Run the validator after exporting:
+
+~~~bash
+python3 scripts/validate_thermal_dataset.py \
+  --input state/thermal-training.jsonl \
+  --valid-out state/thermal-training.valid.jsonl \
+  --quarantine-out state/thermal-training.quarantine.jsonl \
+  --report-out state/thermal-training.validation.json
+~~~
+
+The validator uses a three-hour maximum outdoor-reading age and a conservative
+seven-day maximum session/label duration by default. Both are configurable for
+replay or fixture work. It detects malformed rows, missing boundaries,
+timestamp-order errors, non-finite or impossible values, heat/cool directional
+mismatches, duplicate row IDs, overlapping sessions, stale outdoor inputs,
+feature target leakage, malformed experiment metadata, and incompatible
+heating/cooling source schemas. A cooling row must carry explicit cooling
+source evidence; an aggregate whole-home cooling event is never accepted as a
+floor row.
+
+Missing end boundaries are a quality warning when another target remains
+eligible: for example, a row can train `time_to_setpoint_s` while its runtime
+label is right-censored. A row with no eligible target is quarantined, as are
+all rows sharing a duplicate ID or an overlapping interval. This preserves
+useful censoring and behavior evidence for audit while ensuring ordinary
+regression training receives only the target-eligible rows. Missing outdoor or
+cross-zone features remain visible as non-fatal quality annotations because
+the feature contract permits nulls for unavailable as-of inputs.
+
+The quarantine record uses this shape:
+
+~~~json
+{
+  "schema": "homeops.thermal.training_row_quarantine.v1",
+  "source_line": 14,
+  "row_id": "floor_2:heat:2026-08-27T06:00:00+00:00",
+  "reason_codes": ["stale_outdoor_input"],
+  "row": {"schema": "homeops.thermal.training_row.v1"}
+}
+~~~
+
+The quality report has schema
+`homeops.thermal.training_row_validation.v1`. Its `by_zone_mode` section
+reports input, valid, quarantined, and eligible-label counts separately for
+`floor_1`, `floor_2`, and `floor_3` in both modes. A target slice below
+`--minimum-eligible-rows` is reported as `insufficient_data`; no score or
+replacement value is invented.
 
 ## Running the export
 
