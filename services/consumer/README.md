@@ -23,6 +23,7 @@ For the host/network boundary around this service, see the repository-level
 - [Thermal prediction target contract](#thermal-prediction-target-contract)
 - [Thermal prediction feature schema](#thermal-prediction-feature-schema)
 - [Thermal prediction evaluation protocol](#thermal-prediction-evaluation-protocol)
+- [Thermal prediction dataset export](#thermal-prediction-dataset-export)
 - [Read-only multi-zone scheduling query](#read-only-multi-zone-scheduling-query)
 - [Bootstrap Behavior](#bootstrap-behavior)
 - [Configuration Reference](#configuration-reference)
@@ -1251,9 +1252,9 @@ The canonical target definitions for future mode-aware ML work live in
 That contract defines per-zone `time_to_setpoint_s` and `zone_runtime_s`
 labels, the call-start prediction boundary, directional heat/cool crossing
 rules, and explicit treatment for incomplete or censored sessions. It does
-not change the consumer or imply that cooling data is currently available.
-The existing `zone_time_to_temp.v1` history remains heating evidence until a
-label builder snapshots the starting mode and setpoint correctly.
+not change the consumer. The offline dataset exporter now materializes both
+heating and explicitly instrumented cooling rows without relabeling heating
+history or synthesizing cooling sessions.
 
 ## Thermal prediction feature schema
 
@@ -1265,14 +1266,27 @@ same-zone runtime, optional humidity/occupancy/weather fields, provenance, and
 null behavior. Every feature is sourced from information available at
 `prediction_ts` (`active_start_ts`); completed-session outcomes and future
 readings are explicitly excluded. Heat and cool share one schema, while
-cooling remains unavailable until normalized cooling-call instrumentation
-exists. This document does not change consumer events or thermostat behavior.
+cooling call snapshots use the separate cooling-call sensors and may remain
+null when the source history is incomplete. This document does not change
+consumer events or thermostat behavior.
 
 ## Thermal prediction evaluation protocol
 
 The repository-level [`docs/thermal-prediction-evaluation.md`](../../docs/thermal-prediction-evaluation.md) defines the v1 baseline ladder and evaluation rules for future mode-aware thermal models. It selects a historical-median reference, a transparent degree-minute/thermal-response baseline, and a small regularized linear model for comparison. It requires chronological splits, point-in-time feature fitting, per-floor/per-mode reporting, uncertainty coverage, and explicit sparse-data behavior.
 
 This is a design contract only. It does not add consumer events, train a model, make a recommendation, invoke an LLM, or control Home Assistant. The future cross-zone thermal model and what-if query layer remain downstream work validated against deliberate experiments.
+
+## Thermal prediction dataset export
+
+The repository-level `scripts/export_thermal_dataset.py` materializes
+the target and feature contracts into deterministic
+`homeops.thermal.training_row.v1` JSONL rows from raw observer and
+consumer-derived logs. Each row keeps point-in-time features separate from
+later labels, preserves incomplete/censored status, and records source
+timestamps and line-level provenance. See
+[`docs/thermal-prediction-dataset.md`](../../docs/thermal-prediction-dataset.md)
+for the schema, source-event rules, and command examples. This is an offline
+export only; it does not train a model or change Home Assistant.
 
 The repository-level [`scripts/thermal_query.py`](../../scripts/thermal_query.py)
 is the LLM-facing composition layer for these read-only reports. It accepts a

@@ -4,6 +4,7 @@ Revision history:
   2026-08-27  Add a documentation contract test so feature sources, point-in-time
               availability, null behavior, heat/cool symmetry, and leakage rules
               remain explicit while the training pipeline is built.
+  2026-08-29  Update the contract assertions for the normalized cooling export.
 """
 
 from pathlib import Path
@@ -69,7 +70,7 @@ def test_feature_contract_uses_one_schema_for_heat_and_cool():
         "heat = setpoint − current, cool = current − setpoint",
         "same field names, types, null rules, and pipeline",
         "heating-call sensors as cooling calls",
-        "cooling remains unavailable",
+        "explicitly instrumented cooling",
         "Heating history must never be relabeled as cooling history",
     ):
         assert required in text
