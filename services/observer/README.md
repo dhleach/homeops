@@ -162,6 +162,9 @@ For the baseline-model ladder and time-aware evaluation protocol, see
 [`docs/thermal-prediction-evaluation.md`](../../docs/thermal-prediction-evaluation.md).
 For the offline normalized training-row export and provenance rules, see
 [`docs/thermal-prediction-dataset.md`](../../docs/thermal-prediction-dataset.md).
+The offline baseline trainer/evaluator consumes the validator's output after
+the observer has written its raw events; it is not part of this service and
+does not read or change live observer state.
 The observer preserves raw climate state changes; it does not infer missing
 session boundaries or manufacture cooling labels.
 

@@ -175,6 +175,31 @@ reports input, valid, quarantined, and eligible-label counts separately for
 `--minimum-eligible-rows` is reported as `insufficient_data`; no score or
 replacement value is invented.
 
+## Offline baseline evaluation
+
+Pass the validator's valid-row output to
+`scripts/evaluate_thermal_models.py` for the first model comparison. The
+evaluator fits the historical-median reference, the transparent
+degree-minute/thermal-response baseline, and Ridge regression only on the
+earlier chronological partition. It writes a per-floor/per-mode/per-target
+evaluation report and a separate reproducible model-artifact file; it never
+rewrites the validated rows.
+
+~~~bash
+python3 scripts/evaluate_thermal_models.py \
+  --input state/thermal-training.valid.jsonl \
+  --report-out reports/thermal-training-evaluation.json \
+  --artifacts-out reports/thermal-training-models.json \
+  --code-version "$(git rev-parse HEAD)"
+~~~
+
+The report schema is `homeops.thermal.training_evaluation.v1` and the model
+artifact schema is `homeops.thermal.model_artifacts.v1`. The evaluator keeps
+session and experiment groups together, excludes all post-start labels from
+features, preserves explicit `insufficient_data` results, and remains an
+offline analysis step rather than a prediction service or thermostat-control
+path.
+
 ## Running the export
 
 From the repository root:

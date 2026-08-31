@@ -5,9 +5,10 @@ HomeOps thermal predictions. It consumes the target definitions in
 thermal-prediction-targets.md and the point-in-time feature rules in
 thermal-prediction-features.md.
 
-This is a design contract. It does not train a model, add a consumer event,
-change production telemetry, invoke an LLM, make a recommendation, or grant
-thermostat write access.
+This is the design contract for the offline evaluator implemented by
+`scripts/evaluate_thermal_models.py`. The document and script do not add a
+consumer event, change production telemetry, invoke an LLM, make a
+recommendation, or grant thermostat write access.
 
 ## Decision summary
 
@@ -28,6 +29,41 @@ session-level comparison. It will use temperature trajectories and deliberate
 experiments to learn cross-floor coupling and support bounded what-if queries.
 This document keeps that path possible without pretending that the first
 session model is already a causal simulator.
+
+## Offline implementation boundary
+
+The evaluator consumes the unchanged valid-row output from
+`scripts/validate_thermal_dataset.py`. It uses a deterministic chronological
+split with default target fractions of 60% training, 20% validation, and 20%
+locked test. Boundaries are snapped to whole session/experiment groups, so a
+group can move a boundary slightly but can never be split across partitions.
+The minimum default is three eligible rows for fitting and scoring a result;
+all of these choices are explicit command-line configuration and are persisted
+in both output artifacts.
+
+Run it after exporting and validating the dataset:
+
+~~~bash
+python3 scripts/evaluate_thermal_models.py \
+  --input state/thermal-training.valid.jsonl \
+  --report-out reports/thermal-training-evaluation.json \
+  --artifacts-out reports/thermal-training-models.json \
+  --code-version "$(git rev-parse HEAD)"
+~~~
+
+The report has schema `homeops.thermal.training_evaluation.v1`; the fitted
+artifact file has schema `homeops.thermal.model_artifacts.v1`. The artifact
+file includes the dataset SHA-256, code version, split boundaries, model
+version, feature encoding, imputation statistics, coefficients, and
+training-residual interval widths. The implementation is standard-library
+only, including its small Ridge solver, so the offline boundary does not add a
+runtime NumPy or scikit-learn dependency.
+
+The first implementation uses an empirical 80% interval from training
+residuals. It reports the source and width explicitly; this is an auditable
+v1 uncertainty estimate, not a claim of production-calibrated confidence. A
+sparse floor/mode/target slice remains `insufficient_data`, and the evaluator
+does not automatically select, promote, deploy, or publish a winning model.
 
 ## What counts as a model
 
@@ -236,6 +272,8 @@ This contract does not:
 - make the LLM responsible for numeric HVAC prediction;
 - claim that the future cross-zone recommendation layer is already available.
 
-The next implementation task is the normalized dataset/export pipeline. It
-must preserve this evaluation boundary, the mode-aware target semantics, and
-the future experiment metadata needed for cross-zone thermal identification.
+The normalized exporter and data-quality validator are now complete. This
+evaluator is the first measured model-comparison boundary; the future
+cross-zone thermal model still requires trajectory data, deliberate
+intervention provenance, held-out experiments, and a separate read-only
+what-if query design.
