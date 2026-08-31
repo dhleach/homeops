@@ -74,3 +74,22 @@ def test_evaluation_contract_reserves_cross_zone_what_if_scope_without_control()
         "kilowatt-hour savings",
     ):
         assert required in text
+
+
+def test_evaluation_contract_documents_the_offline_implementation_boundary():
+    text = EVALUATION_DOC.read_text(encoding="utf-8")
+
+    for required in (
+        "scripts/evaluate_thermal_models.py",
+        "homeops.thermal.training_evaluation.v1",
+        "homeops.thermal.model_artifacts.v1",
+        "60% training",
+        "20% validation",
+        "20%",
+        "locked test",
+        "whole session/experiment groups",
+        "standard-library",
+        "training-residual interval widths",
+        "does not automatically select",
+    ):
+        assert required in text

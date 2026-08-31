@@ -2,7 +2,7 @@
 
 **Live dashboard → [homeops.now](https://homeops.now) · Bob evaluation evidence → [homeops.now/bob/evals/](https://homeops.now/bob/evals/) · API → [api.homeops.now/api/current-temps](https://api.homeops.now/api/current-temps)**
 
-A full-stack observability platform for a 3-zone home HVAC system — event-driven Python pipeline on a Raspberry Pi 5, live metrics in Prometheus + Grafana on AWS EC2, React dashboard on S3 + CloudFront, FastAPI backend, all provisioned with Terraform. 38 derived event types, 1231 Python tests, and 48 React component tests. The same public surface hosts Bob's reviewed, public-safe agent evaluation evidence at `/bob/evals/`.
+A full-stack observability platform for a 3-zone home HVAC system — event-driven Python pipeline on a Raspberry Pi 5, live metrics in Prometheus + Grafana on AWS EC2, React dashboard on S3 + CloudFront, FastAPI backend, all provisioned with Terraform. 38 derived event types, 1263 Python tests, and 48 React component tests. The same public surface hosts Bob's reviewed, public-safe agent evaluation evidence at `/bob/evals/`.
 
 ## The Problem
 
@@ -22,7 +22,7 @@ Home Assistant alone can't prevent this. It sees state changes; it doesn't reaso
 - **Opt-in proactive HVAC insight** — validated runtime anomalies can receive a bounded plain-English explanation through a provider-neutral LLM seam and Telegram delivery; disabled by default with replay deduplication and a daily call budget
 - **Schema-versioned events** — every event carries a `schema` field (e.g. `homeops.consumer.floor_2_long_call_warning.v1`) for safe downstream evolution
 - **Production-grade operations** — runs as `systemd` services on the Pi, log rotation via `logrotate`, exponential-backoff reconnects on the WebSocket
-- **1231 Python tests + 48 React component tests**, GitHub Actions CI, Ruff lint/format enforcement on every PR, and post-deploy public smoke checks
+- **1263 Python tests + 48 React component tests**, GitHub Actions CI, Ruff lint/format enforcement on every PR, and post-deploy public smoke checks
 - **Opt-in mitigation overlay** — staged Home Assistant zone-call staggering with a disabled-by-default guard and validated timing projections; it is not deployed by the normal application release
 - **Bob evaluation evidence** — a reviewed static snapshot of deterministic release-gate results and a clearly labeled, non-gating scripted live-trial fixture; it never calls Gmail, a model, or the live EMAIL-13 producer
 
@@ -225,6 +225,7 @@ homeops/
 │   ├── scheduling_query.py             # CLI/tool: read-only multi-zone schedule recommendation
 │   ├── export_thermal_dataset.py       # CLI: deterministic heat/cooling training-row export
 │   ├── validate_thermal_dataset.py     # CLI: validate rows and quarantine bad training data
+│   ├── evaluate_thermal_models.py      # CLI: offline baselines/Ridge training and evaluation
 │   ├── temp_correlation.py            # CLI: Pearson correlation — outdoor temp vs floor runtime
 │   ├── validate_floor_aggregation.py # dev: validate floor_daily_summary totals vs raw events
 │   ├── validate_anomalies.py         # read-only replay/report for anomaly detectors
@@ -400,7 +401,7 @@ PYTHONPATH=services/consumer:services/observer:services/insights:dashboard/backe
 NODE_ENV=test npm --prefix dashboard/frontend test
 ```
 
-1249 Python tests cover observer reconnect logic, consumer event derivation, heating and cooling call/session events, floor-2 long-call warning and escalation, thermostat tracking, heating and cooling cycle analytics, consumer state persistence, Prometheus metrics gauge updates, cooling metrics and daily reporting, the FastAPI backend and its mode-aware cooling contract, Ask HomeOps authentication/quota/budget/observability/prompt-safety guards, deployment smoke checks, provisioned Grafana dashboard contracts, insights engine rules, historical anomaly replay/reporting, multi-zone impact analysis, hourly zone-call frequency reporting, the floor-call data-model contract, daily furnace temperature/runtime scatter export, the self-contained HTML trend report, temperature-adjusted runtime anomaly analysis, zone cooling-curve heat-loss analysis, per-zone furnace-runtime-per-degree efficiency analysis, per-zone time-to-temperature modeling, natural-language thermal query composition, multi-zone scheduling query safety, shared rule configuration validation, enabled-rule gates, outdoor-temperature storm detection, direct consumer import-path validation, staged Home Assistant mitigation configuration, event logging, automatic rollback, mitigation end-to-end replay, proactive anomaly insight, missing-context, replay-guard, thermal prediction target contract, thermal prediction feature schema, thermal prediction evaluation protocol, normalized thermal training-row export, thermal training-row validation and quarantine, publication-boundary checks, CloudFront route checks, and test-count validation. The frontend has 48 React component tests covering mode-aware cards, summaries, stale-state handling, and the existing dashboard widgets. The canonical counts live in [`docs/test-counts.json`](docs/test-counts.json) and are verified against CI runner output.
+1263 Python tests cover observer reconnect logic, consumer event derivation, heating and cooling call/session events, floor-2 long-call warning and escalation, thermostat tracking, heating and cooling cycle analytics, consumer state persistence, Prometheus metrics gauge updates, cooling metrics and daily reporting, the FastAPI backend and its mode-aware cooling contract, Ask HomeOps authentication/quota/budget/observability/prompt-safety guards, deployment smoke checks, provisioned Grafana dashboard contracts, insights engine rules, historical anomaly replay/reporting, multi-zone impact analysis, hourly zone-call frequency reporting, the floor-call data-model contract, daily furnace temperature/runtime scatter export, the self-contained HTML trend report, temperature-adjusted runtime anomaly analysis, zone cooling-curve heat-loss analysis, per-zone furnace-runtime-per-degree efficiency analysis, per-zone time-to-temperature modeling, natural-language thermal query composition, multi-zone scheduling query safety, shared rule configuration validation, enabled-rule gates, outdoor-temperature storm detection, direct consumer import-path validation, staged Home Assistant mitigation configuration, event logging, automatic rollback, mitigation end-to-end replay, proactive anomaly insight, missing-context, replay-guard, thermal prediction target contract, thermal prediction feature schema, thermal prediction evaluation protocol, normalized thermal training-row export, thermal training-row validation and quarantine, offline thermal baseline/Ridge training and evaluation, publication-boundary checks, CloudFront route checks, and test-count validation. The frontend has 48 React component tests covering mode-aware cards, summaries, stale-state handling, and the existing dashboard widgets. The canonical counts live in [`docs/test-counts.json`](docs/test-counts.json) and are verified against CI runner output.
 
 The staged mitigation flow can also be replayed without live Home Assistant or
 Telegram writes:
@@ -667,6 +668,33 @@ setpoint delta. This command does not emit a production event, change
 thermostat settings, or modify consumer state or event logs. See
 [`docs/time-to-temp-2026-08.md`](docs/time-to-temp-2026-08.md) for the latest
 Pi-history snapshot and its telemetry limitations.
+
+### `scripts/evaluate_thermal_models.py`
+
+Train and compare the first mode-aware thermal-response candidates using the
+validated normalized dataset. The command fits a historical-median reference,
+an explainable degree-minute/thermal-response baseline, and a small
+standard-library Ridge model on earlier rows, then evaluates them on later
+validation/test rows. It writes a versioned report and reproducible model
+artifacts with per-floor/per-mode/target metrics. Session and deliberate
+experiment groups stay within one chronological partition, and sparse slices
+are reported as `insufficient_data` rather than scored as if they were
+well-supported.
+
+```bash
+python3 scripts/evaluate_thermal_models.py \
+  --input state/thermal-training.valid.jsonl \
+  --report-out reports/thermal-training-evaluation.json \
+  --artifacts-out reports/thermal-training-models.json \
+  --code-version "$(git rev-parse HEAD)"
+```
+
+This is an offline, read-only analysis boundary. It does not run in the
+consumer daemon, call an LLM, change Home Assistant, expose an API, or
+select/deploy a production model. See
+[`docs/thermal-prediction-evaluation.md`](docs/thermal-prediction-evaluation.md)
+for the fitting boundary, metrics, interval limitations, and future
+cross-zone what-if scope.
 
 ### `scripts/thermal_query.py`
 

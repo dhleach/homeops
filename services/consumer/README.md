@@ -25,6 +25,7 @@ For the host/network boundary around this service, see the repository-level
 - [Thermal prediction evaluation protocol](#thermal-prediction-evaluation-protocol)
 - [Thermal prediction dataset export](#thermal-prediction-dataset-export)
 - [Thermal prediction dataset validation](#thermal-prediction-dataset-validation)
+- [Offline baseline trainer/evaluator](#offline-baseline-trainerevaluator)
 - [Read-only multi-zone scheduling query](#read-only-multi-zone-scheduling-query)
 - [Bootstrap Behavior](#bootstrap-behavior)
 - [Configuration Reference](#configuration-reference)
@@ -1273,9 +1274,9 @@ consumer events or thermostat behavior.
 
 ## Thermal prediction evaluation protocol
 
-The repository-level [`docs/thermal-prediction-evaluation.md`](../../docs/thermal-prediction-evaluation.md) defines the v1 baseline ladder and evaluation rules for future mode-aware thermal models. It selects a historical-median reference, a transparent degree-minute/thermal-response baseline, and a small regularized linear model for comparison. It requires chronological splits, point-in-time feature fitting, per-floor/per-mode reporting, uncertainty coverage, and explicit sparse-data behavior.
+The repository-level [`docs/thermal-prediction-evaluation.md`](../../docs/thermal-prediction-evaluation.md) defines the v1 baseline ladder and evaluation rules for mode-aware thermal models. It selects a historical-median reference, a transparent degree-minute/thermal-response baseline, and a small regularized linear model for comparison. It requires chronological splits, point-in-time feature fitting, per-floor/per-mode reporting, uncertainty coverage, and explicit sparse-data behavior. The offline implementation is described below; it does not run as part of the consumer daemon.
 
-This is a design contract only. It does not add consumer events, train a model, make a recommendation, invoke an LLM, or control Home Assistant. The future cross-zone thermal model and what-if query layer remain downstream work validated against deliberate experiments.
+The evaluation contract does not add consumer events, make a recommendation, invoke an LLM, or control Home Assistant. The future cross-zone thermal model and what-if query layer remain downstream work validated against deliberate experiments.
 
 ## Thermal prediction dataset export
 
@@ -1291,7 +1292,7 @@ export only; it does not train a model or change Home Assistant.
 
 ## Thermal prediction dataset validation
 
-The repository-level `scripts/validate_thermal_dataset.py` is the next offline
+The repository-level `scripts/validate_thermal_dataset.py` is the quality
 boundary. It emits unchanged rows that are safe for at least one eligible
 target, writes rejected rows to a quarantine JSONL with stable reason codes,
 and produces per-floor/per-mode quality and `insufficient_data` coverage
@@ -1307,6 +1308,31 @@ python3 scripts/validate_thermal_dataset.py \
   --quarantine-out state/thermal-training.quarantine.jsonl \
   --report-out state/thermal-training.validation.json
 ```
+
+## Offline baseline trainer/evaluator
+
+The repository-level `scripts/evaluate_thermal_models.py` consumes the valid
+JSONL produced by the validator and compares the historical-median,
+degree-minute/thermal-response, and standard-library Ridge candidates. It
+uses default 60/20/20 chronological train/validation/test target fractions,
+snaps boundaries to whole session or experiment groups, and fits every
+parameter only on the training partition. The default minimum is three
+eligible rows for a fit or score; sparse slices report `insufficient_data`.
+
+The JSON report includes MAE, P95 absolute error, signed bias, prediction
+interval coverage/width when supported, skipped predictions, and eligible
+counts for every floor/mode/target slice. The separate model artifact records
+the dataset hash, code version, feature encoder, fitted parameters, and
+training-residual interval metadata. The evaluator is offline and read-only;
+it is not imported by the consumer service and cannot control Home Assistant.
+
+~~~bash
+python3 scripts/evaluate_thermal_models.py \
+  --input state/thermal-training.valid.jsonl \
+  --report-out reports/thermal-training-evaluation.json \
+  --artifacts-out reports/thermal-training-models.json \
+  --code-version "$(git rev-parse HEAD)"
+~~~
 
 The repository-level [`scripts/thermal_query.py`](../../scripts/thermal_query.py)
 is the LLM-facing composition layer for these read-only reports. It accepts a
