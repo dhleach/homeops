@@ -48,3 +48,21 @@ def test_dataset_contract_preserves_modes_and_prevents_leakage():
         "identical JSONL",
     ):
         assert required in text
+
+
+def test_dataset_contract_defines_validation_and_quarantine_boundary():
+    text = DATASET_DOC.read_text(encoding="utf-8")
+
+    for required in (
+        "Validation and quarantine",
+        "validate_thermal_dataset.py",
+        "homeops.thermal.training_row_quarantine.v1",
+        "reason_codes",
+        "duplicate row IDs",
+        "overlapping sessions",
+        "stale outdoor inputs",
+        "feature target leakage",
+        "insufficient_data",
+        "unchanged original row",
+    ):
+        assert required in text

@@ -83,7 +83,7 @@ For the point-in-time thermal prediction feature schema and leakage rules, see
 [`docs/thermal-prediction-features.md`](docs/thermal-prediction-features.md).
 For the selected baseline-model ladder and time-aware evaluation protocol, see
 [`docs/thermal-prediction-evaluation.md`](docs/thermal-prediction-evaluation.md).
-For the deterministic JSONL training-row export and provenance rules, see
+For the deterministic JSONL training-row export, validation, and provenance rules, see
 [`docs/thermal-prediction-dataset.md`](docs/thermal-prediction-dataset.md).
 For the Bob evaluation publication boundary, snapshot refresh procedure, and
 CloudFront route, see
@@ -224,6 +224,7 @@ homeops/
 │   ├── thermal_query.py                # CLI/tool: bounded natural-language thermal context
 │   ├── scheduling_query.py             # CLI/tool: read-only multi-zone schedule recommendation
 │   ├── export_thermal_dataset.py       # CLI: deterministic heat/cooling training-row export
+│   ├── validate_thermal_dataset.py     # CLI: validate rows and quarantine bad training data
 │   ├── temp_correlation.py            # CLI: Pearson correlation — outdoor temp vs floor runtime
 │   ├── validate_floor_aggregation.py # dev: validate floor_daily_summary totals vs raw events
 │   ├── validate_anomalies.py         # read-only replay/report for anomaly detectors
@@ -238,7 +239,7 @@ homeops/
 │   ├── thermal-prediction-targets.md  # mode-aware ML target and censoring contract
 │   ├── thermal-prediction-features.md # point-in-time ML feature and leakage contract
 │   ├── thermal-prediction-evaluation.md # baseline-model ladder and evaluation protocol
-│   ├── thermal-prediction-dataset.md  # normalized training-row schema and export rules
+│   ├── thermal-prediction-dataset.md  # normalized training-row schema, export, and validation rules
 │   ├── test-counts.json              # CI-verified Python and React test counts
 │   └── event-schemas/
 │       └── consumer-events.md    # authoritative event schema reference
@@ -399,7 +400,7 @@ PYTHONPATH=services/consumer:services/observer:services/insights:dashboard/backe
 NODE_ENV=test npm --prefix dashboard/frontend test
 ```
 
-1231 Python tests cover observer reconnect logic, consumer event derivation, heating and cooling call/session events, floor-2 long-call warning and escalation, thermostat tracking, heating and cooling cycle analytics, consumer state persistence, Prometheus metrics gauge updates, cooling metrics and daily reporting, the FastAPI backend and its mode-aware cooling contract, Ask HomeOps authentication/quota/budget/observability/prompt-safety guards, deployment smoke checks, provisioned Grafana dashboard contracts, insights engine rules, historical anomaly replay/reporting, multi-zone impact analysis, hourly zone-call frequency reporting, the floor-call data-model contract, daily furnace temperature/runtime scatter export, the self-contained HTML trend report, temperature-adjusted runtime anomaly analysis, zone cooling-curve heat-loss analysis, per-zone furnace-runtime-per-degree efficiency analysis, per-zone time-to-temperature modeling, natural-language thermal query composition, multi-zone scheduling query safety, shared rule configuration validation, enabled-rule gates, outdoor-temperature storm detection, direct consumer import-path validation, staged Home Assistant mitigation configuration, event logging, automatic rollback, mitigation end-to-end replay, proactive anomaly insight, missing-context, replay-guard, thermal prediction target contract, thermal prediction feature schema, thermal prediction evaluation protocol, normalized thermal training-row export, publication-boundary checks, CloudFront route checks, and test-count validation. The frontend has 48 React component tests covering mode-aware cards, summaries, stale-state handling, and the existing dashboard widgets. The canonical counts live in [`docs/test-counts.json`](docs/test-counts.json) and are verified against CI runner output.
+1249 Python tests cover observer reconnect logic, consumer event derivation, heating and cooling call/session events, floor-2 long-call warning and escalation, thermostat tracking, heating and cooling cycle analytics, consumer state persistence, Prometheus metrics gauge updates, cooling metrics and daily reporting, the FastAPI backend and its mode-aware cooling contract, Ask HomeOps authentication/quota/budget/observability/prompt-safety guards, deployment smoke checks, provisioned Grafana dashboard contracts, insights engine rules, historical anomaly replay/reporting, multi-zone impact analysis, hourly zone-call frequency reporting, the floor-call data-model contract, daily furnace temperature/runtime scatter export, the self-contained HTML trend report, temperature-adjusted runtime anomaly analysis, zone cooling-curve heat-loss analysis, per-zone furnace-runtime-per-degree efficiency analysis, per-zone time-to-temperature modeling, natural-language thermal query composition, multi-zone scheduling query safety, shared rule configuration validation, enabled-rule gates, outdoor-temperature storm detection, direct consumer import-path validation, staged Home Assistant mitigation configuration, event logging, automatic rollback, mitigation end-to-end replay, proactive anomaly insight, missing-context, replay-guard, thermal prediction target contract, thermal prediction feature schema, thermal prediction evaluation protocol, normalized thermal training-row export, thermal training-row validation and quarantine, publication-boundary checks, CloudFront route checks, and test-count validation. The frontend has 48 React component tests covering mode-aware cards, summaries, stale-state handling, and the existing dashboard widgets. The canonical counts live in [`docs/test-counts.json`](docs/test-counts.json) and are verified against CI runner output.
 
 The staged mitigation flow can also be replayed without live Home Assistant or
 Telegram writes:
