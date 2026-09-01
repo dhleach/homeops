@@ -30,6 +30,10 @@ VALID_MODES = frozenset({"heat", "cool"})
 OUTDOOR_TEMP_MAX_AGE_S = 10_800.0
 DEFAULT_MAX_SESSION_SECONDS = 7 * 24 * 60 * 60
 DEFAULT_MIN_ELIGIBLE_ROWS = 1
+# The exporter serializes duration labels to three decimal places. Keep this
+# tolerance separate from EPSILON: directional and feature semantics still
+# use the stricter numeric comparison below.
+DURATION_TIMESTAMP_TOLERANCE_S = 1e-3
 EPSILON = 1e-6
 
 # These bounds are intentionally broad.  They catch unit mistakes and broken
@@ -282,6 +286,7 @@ def _validate_source_evidence(
 
     schemas: set[str] = set()
     references: set[tuple[str, int]] = set()
+    cooling_action_evidence = False
     for reference in source_events:
         if not isinstance(reference, dict):
             reasons.add("invalid_source_reference")
@@ -307,6 +312,10 @@ def _validate_source_evidence(
             reasons.add("invalid_source_reference")
         else:
             schemas.add(schema)
+        for key in ("active_action", "hvac_action"):
+            value = reference.get(key)
+            if isinstance(value, str) and value.strip().lower() in {"cool", "cooling"}:
+                cooling_action_evidence = True
         if "timestamp" in reference and reference["timestamp"] is not None:
             if _parse_timestamp(reference["timestamp"]) is None:
                 reasons.add("invalid_source_timestamp")
@@ -317,7 +326,7 @@ def _validate_source_evidence(
         reasons.add("heating_cooling_source_mismatch")
     if mode == "cool" and HEATING_SOURCE_SCHEMAS & schemas:
         reasons.add("heating_cooling_source_mismatch")
-    if mode == "cool" and not COOLING_SOURCE_SCHEMAS & schemas:
+    if mode == "cool" and not (COOLING_SOURCE_SCHEMAS & schemas or cooling_action_evidence):
         reasons.add("missing_cooling_source_evidence")
     return schemas
 
@@ -542,7 +551,8 @@ def _validate_labels(
                 reasons.add("time_label_without_target_boundary")
             elif (
                 value is not None
-                and abs(value - (target_crossing_ts - prediction_ts).total_seconds()) > EPSILON
+                and abs(value - (target_crossing_ts - prediction_ts).total_seconds())
+                > DURATION_TIMESTAMP_TOLERANCE_S
             ):
                 reasons.add("time_label_timestamp_mismatch")
     elif time_value is not None:
@@ -561,7 +571,8 @@ def _validate_labels(
                 reasons.add("runtime_label_without_end_boundary")
             elif (
                 value is not None
-                and abs(value - (active_end_ts - prediction_ts).total_seconds()) > EPSILON
+                and abs(value - (active_end_ts - prediction_ts).total_seconds())
+                > DURATION_TIMESTAMP_TOLERANCE_S
             ):
                 reasons.add("runtime_label_timestamp_mismatch")
     elif runtime_value is not None:
@@ -869,10 +880,21 @@ def _build_report(
     rows_by_slice: defaultdict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
     valid_by_slice: defaultdict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
     quarantined_by_slice: Counter[tuple[str, str]] = Counter()
+    reason_counts_by_slice: defaultdict[tuple[str, str], Counter[str]] = defaultdict(Counter)
+    fatal_reason_counts_by_slice: defaultdict[tuple[str, str], Counter[str]] = defaultdict(Counter)
     for _, row in records:
         key = _slice_key(row)
         if key is not None:
             rows_by_slice[key].append(row)
+    for index, row in records:
+        key = _slice_key(row)
+        if key is None:
+            continue
+        reasons = reasons_by_index.get(index, set())
+        reason_counts_by_slice[key].update(reasons)
+        fatal_reason_counts_by_slice[key].update(
+            reason for reason in reasons if reason not in NON_FATAL_REASON_CODES
+        )
     for row in valid_rows:
         valid_by_slice[(row["zone"], row["mode"])].append(row)
     for record in quarantined_rows:
@@ -909,6 +931,8 @@ def _build_report(
                 "input_rows": len(rows_by_slice[key]),
                 "valid_rows": len(rows),
                 "quarantined_rows": quarantined_by_slice[key],
+                "reason_counts": dict(sorted(reason_counts_by_slice[key].items())),
+                "fatal_reason_counts": dict(sorted(fatal_reason_counts_by_slice[key].items())),
                 "eligible_time_to_setpoint": eligible_time,
                 "eligible_zone_runtime": eligible_runtime,
                 "time_to_setpoint_status": time_status,
@@ -929,6 +953,13 @@ def _build_report(
         "max_session_seconds": max_session_seconds,
         "stale_outdoor_seconds": stale_outdoor_seconds,
         "reason_counts": dict(sorted(reason_counts.items())),
+        "fatal_reason_counts": dict(
+            sorted(
+                (reason, count)
+                for reason, count in reason_counts.items()
+                if reason not in NON_FATAL_REASON_CODES
+            )
+        ),
         "valid_row_warning_counts": dict(sorted(warning_counts.items())),
         "by_zone_mode": by_zone_mode,
     }

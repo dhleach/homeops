@@ -106,6 +106,29 @@ def test_valid_heat_and_cooling_rows_pass_unchanged():
     assert result.report["status"] == "ok"
 
 
+def test_timestamp_duration_labels_allow_millisecond_rounding():
+    row = _row()
+    row["labels"]["time_to_setpoint_s"] = 300.0005
+    row["labels"]["zone_runtime_s"] = 420.0005
+
+    result = validate_rows([row])
+
+    assert result.valid_rows == [row]
+    assert result.quarantined_rows == []
+
+
+def test_timestamp_duration_mismatch_beyond_millisecond_is_quarantined():
+    row = _row()
+    row["labels"]["time_to_setpoint_s"] = 300.002
+    row["labels"]["zone_runtime_s"] = 420.002
+
+    result = validate_rows([row])
+    codes = set(result.quarantined_rows[0]["reason_codes"])
+
+    assert "time_label_timestamp_mismatch" in codes
+    assert "runtime_label_timestamp_mismatch" in codes
+
+
 def test_directional_temperature_mismatch_is_quarantined():
     row = _row("cool")
     row["features"]["start_temp_f"] = 72.0
@@ -174,6 +197,40 @@ def test_heat_row_with_cooling_source_is_quarantined():
     result = validate_rows([row])
 
     assert "heating_cooling_source_mismatch" in result.quarantined_rows[0]["reason_codes"]
+
+
+def test_cooling_row_with_explicit_observer_action_is_valid_without_derived_source():
+    row = _row("cool")
+    row["provenance"]["source_events"] = [
+        {
+            "source": "observer",
+            "line": 1,
+            "schema": "homeops.observer.state_changed.v1",
+            "timestamp": row["prediction_ts"],
+            "hvac_action": "cooling",
+        }
+    ]
+
+    result = validate_rows([row])
+
+    assert result.valid_rows == [row]
+    assert result.quarantined_rows == []
+
+
+def test_cooling_row_without_cooling_schema_or_action_stays_quarantined():
+    row = _row("cool")
+    row["provenance"]["source_events"] = [
+        {
+            "source": "observer",
+            "line": 1,
+            "schema": "homeops.observer.state_changed.v1",
+            "timestamp": row["prediction_ts"],
+        }
+    ]
+
+    result = validate_rows([row])
+
+    assert "missing_cooling_source_evidence" in result.quarantined_rows[0]["reason_codes"]
 
 
 def test_duplicate_row_ids_quarantine_all_ambiguous_records():
@@ -262,6 +319,7 @@ def test_coverage_report_marks_sparse_floor_mode_slices_insufficient():
         "insufficient_data"
     )
     assert result.report["by_zone_mode"]["floor_1:heat"]["eligible_time_to_setpoint"] == 1
+    assert result.report["by_zone_mode"]["floor_1:heat"]["fatal_reason_counts"] == {}
 
 
 def test_cli_writes_separate_valid_quarantine_and_report_outputs(tmp_path: Path):

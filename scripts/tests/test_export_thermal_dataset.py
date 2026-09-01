@@ -216,7 +216,7 @@ def _fixture_events() -> tuple[list[dict], list[dict]]:
                 "hvac_action": "cooling",
                 "setpoint": 73.0,
                 "current_temp": 75.0,
-                "other_zones_calling": ["floor_2"],
+                "other_zones_calling": ["binary_sensor.floor_2_cooling_call"],
             },
         ),
         _derived(
@@ -298,6 +298,10 @@ def test_export_is_deterministic_and_keeps_future_out_of_features(tmp_path: Path
     assert any(
         reference["source"] == "derived"
         and reference["schema"] == "homeops.consumer.thermostat_cooling_session_started.v1"
+        for reference in cool["provenance"]["source_events"]
+    )
+    assert any(
+        reference["source"] == "observer" and reference.get("hvac_action") == "cooling"
         for reference in cool["provenance"]["source_events"]
     )
 
