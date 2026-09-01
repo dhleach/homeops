@@ -129,6 +129,31 @@ def _event_timestamp_text(event: dict[str, Any], schema: str) -> str | None:
     return value if isinstance(value, str) else None
 
 
+def _active_action(data: dict[str, Any]) -> str | None:
+    """Return an explicit active HVAC action in canonical form.
+
+    Observer climate events store ``hvac_action`` under ``attributes`` while
+    derived events store it directly in their data. Only active actions are
+    provenance evidence here; an ``idle`` end-state is not evidence that a
+    session was active in either mode.
+    """
+
+    attributes = data.get("attributes")
+    candidates: list[Any] = []
+    if isinstance(attributes, dict):
+        candidates.append(attributes.get("hvac_action"))
+    candidates.extend((data.get("hvac_action"), data.get("active_action")))
+    for value in candidates:
+        if not isinstance(value, str):
+            continue
+        normalized = value.strip().lower()
+        if normalized in {"heat", "heating"}:
+            return "heating"
+        if normalized in {"cool", "cooling"}:
+            return "cooling"
+    return None
+
+
 @dataclass(frozen=True)
 class SourceEvent:
     source: str
@@ -142,13 +167,17 @@ class SourceEvent:
         """Return a stable, non-fabricated reference to the source event."""
 
         event_id = self.event.get("event_id") or self.event.get("id") or self.data.get("event_id")
-        return {
+        reference = {
             "source": self.source,
             "line": self.line,
             "schema": self.schema,
             "event_id": event_id,
             "timestamp": _event_timestamp_text(self.event, self.schema),
         }
+        action = _active_action(self.data)
+        if action is not None:
+            reference["hvac_action"] = action
+        return reference
 
     def key(self) -> tuple[str, int]:
         return self.source, self.line
@@ -229,7 +258,10 @@ def _normalize_zone_list(value: Any) -> list[str] | None:
         return None
     if not isinstance(value, (list, tuple, set)):
         return None
-    result = sorted({str(item) for item in value if isinstance(item, str) and item})
+    entity_to_zone = {**HEATING_CALL_ENTITIES, **COOLING_CALL_ENTITIES}
+    result = sorted(
+        {entity_to_zone.get(item, item) for item in value if isinstance(item, str) and item}
+    )
     return result
 
 

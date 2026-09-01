@@ -109,9 +109,12 @@ explicitly supplied complete history.
 ## Provenance and experiments
 
 Each source reference includes the source log (observer or derived), JSONL
-line, event schema, original event ID when present, and source timestamp. The
-exporter also preserves experiment metadata when an event contains fields such
-as experiment_id, operation_type, or intervention. This keeps deliberate
+line, event schema, original event ID when present, and source timestamp. When
+the source event explicitly reports an active HVAC action, the reference also
+preserves canonical `hvac_action` evidence (`heating` or `cooling`); an idle
+end-state is not treated as active-action evidence. The exporter also preserves
+experiment metadata when an event contains fields such as experiment_id,
+operation_type, or intervention. This keeps deliberate
 interventions distinguishable from routine operation for the future coupled
 thermal-model and what-if work.
 
@@ -144,8 +147,17 @@ timestamp-order errors, non-finite or impossible values, heat/cool directional
 mismatches, duplicate row IDs, overlapping sessions, stale outdoor inputs,
 feature target leakage, malformed experiment metadata, and incompatible
 heating/cooling source schemas. A cooling row must carry explicit cooling
-source evidence; an aggregate whole-home cooling event is never accepted as a
+source evidence: either a mode-specific cooling schema or a source reference
+that explicitly reports `hvac_action: cooling`. The row's mode alone is not
+evidence, and an aggregate whole-home cooling event is never accepted as a
 floor row.
+
+The exporter stores duration labels (`time_to_setpoint_s` and
+`zone_runtime_s`) to milliseconds. The validator therefore permits an absolute
+timestamp/label difference of up to 1 millisecond for those two consistency
+checks. This is a representation-precision boundary, not a general relaxation
+of timestamp ordering, impossible-duration, overlap, provenance, directional,
+or leakage checks; discrepancies beyond 1 millisecond remain quarantined.
 
 Missing end boundaries are a quality warning when another target remains
 eligible: for example, a row can train `time_to_setpoint_s` while its runtime
@@ -171,9 +183,9 @@ The quarantine record uses this shape:
 The quality report has schema
 `homeops.thermal.training_row_validation.v1`. Its `by_zone_mode` section
 reports input, valid, quarantined, and eligible-label counts separately for
-`floor_1`, `floor_2`, and `floor_3` in both modes. A target slice below
-`--minimum-eligible-rows` is reported as `insufficient_data`; no score or
-replacement value is invented.
+`floor_1`, `floor_2`, and `floor_3` in both modes, together with total and
+fatal `reason_counts`. A target slice below `--minimum-eligible-rows` is
+reported as `insufficient_data`; no score or replacement value is invented.
 
 ## Offline baseline evaluation
 
