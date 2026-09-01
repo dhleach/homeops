@@ -40,6 +40,7 @@ jobs:
             scripts/furnace_temp_scatter.py scripts/generate_report.py scripts/runtime_temp_anomalies.py \
             scripts/zone_heat_loss.py scripts/runtime_per_degree.py scripts/time_to_temp.py \
             scripts/thermal_query.py scripts/scheduling_query.py scripts/export_thermal_dataset.py \
+            scripts/thermal_experiment_marker.py \
             scripts/validate_thermal_dataset.py scripts/evaluate_thermal_models.py \
             scripts/mitigation_e2e.py \
             scripts/tests/test_deploy_smoke_check.py scripts/tests/test_grafana_dashboards.py \
@@ -53,6 +54,7 @@ jobs:
             scripts/tests/test_runtime_per_degree.py scripts/tests/test_time_to_temp.py \
             scripts/tests/test_mitigation_e2e.py scripts/tests/test_thermal_query.py \
             scripts/tests/test_scheduling_query.py scripts/tests/test_export_thermal_dataset.py \
+            scripts/tests/test_thermal_experiment_marker.py scripts/tests/test_thermal_experiment_checklist_docs.py \
             scripts/tests/test_validate_thermal_dataset.py scripts/tests/test_evaluate_thermal_models.py \
             scripts/tests/test_thermal_prediction_targets_docs.py \
             scripts/tests/test_thermal_prediction_dataset_docs.py \
@@ -80,6 +82,7 @@ jobs:
             scripts/furnace_temp_scatter.py scripts/generate_report.py scripts/runtime_temp_anomalies.py \
             scripts/zone_heat_loss.py scripts/runtime_per_degree.py scripts/time_to_temp.py \
             scripts/thermal_query.py scripts/scheduling_query.py scripts/export_thermal_dataset.py \
+            scripts/thermal_experiment_marker.py \
             scripts/validate_thermal_dataset.py scripts/evaluate_thermal_models.py \
             scripts/mitigation_e2e.py \
             scripts/tests/test_deploy_smoke_check.py scripts/tests/test_grafana_dashboards.py \
@@ -93,6 +96,7 @@ jobs:
             scripts/tests/test_runtime_per_degree.py scripts/tests/test_time_to_temp.py \
             scripts/tests/test_mitigation_e2e.py scripts/tests/test_thermal_query.py \
             scripts/tests/test_scheduling_query.py scripts/tests/test_export_thermal_dataset.py \
+            scripts/tests/test_thermal_experiment_marker.py scripts/tests/test_thermal_experiment_checklist_docs.py \
             scripts/tests/test_validate_thermal_dataset.py scripts/tests/test_evaluate_thermal_models.py \
             scripts/tests/test_thermal_prediction_targets_docs.py \
             scripts/tests/test_thermal_prediction_dataset_docs.py \

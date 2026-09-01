@@ -5,7 +5,12 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from export_thermal_dataset import build_dataset, load_jsonl_events
+from export_thermal_dataset import (
+    build_dataset,
+    load_jsonl_events,
+    load_optional_jsonl_events,
+)
+from thermal_experiment_marker import MarkerStore, record_message
 
 
 def _observer(
@@ -428,6 +433,103 @@ def test_whole_home_cooling_events_do_not_create_floor_rows():
     ]
 
     assert build_dataset([], load_jsonl_events_from_dicts(derived, "derived")) == []
+
+
+def test_experiment_marker_sidecar_joins_to_overlapping_active_floor_session(tmp_path: Path):
+    observer, derived = _fixture_events()
+    store = MarkerStore(tmp_path / "markers.jsonl")
+    start = record_message(
+        "Starting a 30-minute cooling test on Floor 1.",
+        store=store,
+        source_message_id="marker-start",
+        received_at="2024-01-15T10:09:30+00:00",
+    )
+    record_message(
+        "Floor 1 test ended.",
+        store=store,
+        source_message_id="marker-end",
+        received_at="2024-01-15T10:20:30+00:00",
+    )
+    marker_events = load_jsonl_events_from_dicts(
+        store.read(),
+        "experiment",
+    )
+
+    rows = build_dataset(
+        load_jsonl_events_from_dicts(observer, "observer"),
+        load_jsonl_events_from_dicts(derived, "derived"),
+        experiment_events=marker_events,
+    )
+    cool = next(row for row in rows if row["zone"] == "floor_1" and row["mode"] == "cool")
+    experiment = cool["provenance"]["experiment"]
+
+    assert experiment["experiment_id"] == start["record"]["data"]["experiment_id"]
+    assert experiment["configuration_id"] == "cool-s1-f1"
+    assert experiment["status"] == "completed"
+    assert experiment["active_zones"] == ["floor_1"]
+    assert len(cool["provenance"]["experiment_marker_events"]) == 2
+    assert "experiment_id" not in cool["features"]
+
+
+def test_experiment_markers_do_not_create_rows_for_passive_floors():
+    observer, derived = _fixture_events()
+    marker = {
+        "schema": "homeops.thermal.experiment_marker.v1",
+        "source": "telegram.experiment_marker",
+        "ts": "2024-01-15T10:10:00+00:00",
+        "event_id": "marker-only",
+        "data": {
+            "action": "start",
+            "status": "active",
+            "experiment_id": "cool-s1-f1-example",
+            "configuration_id": "cool-s1-f1",
+            "experiment_name": "Cooling — Floor 1 only",
+            "test_id": "cool-s1-f1",
+            "operation_type": "controlled_thermal_experiment",
+            "mode": "cool",
+            "active_zones": ["floor_1"],
+            "suppressed_zones": ["floor_2", "floor_3"],
+            "planned_duration_s": 1800,
+            "target_f": None,
+            "start_ts": "2024-01-15T10:10:00+00:00",
+            "end_ts": None,
+            "received_at": "2024-01-15T10:10:00+00:00",
+            "confidence": "exact",
+            "source_type": "live",
+            "duration_defaulted": True,
+            "abort_reason": None,
+            "intervention": {
+                "source": "operator",
+                "mode": "cool",
+                "active_zones": ["floor_1"],
+                "suppressed_zones": ["floor_2", "floor_3"],
+                "planned_duration_s": 1800,
+            },
+            "raw_text": "Starting a 30-minute cooling test on Floor 1.",
+            "source_message_id": "marker-only",
+        },
+    }
+    rows = build_dataset(
+        load_jsonl_events_from_dicts(observer, "observer"),
+        load_jsonl_events_from_dicts(derived, "derived"),
+        experiment_events=load_jsonl_events_from_dicts([marker], "experiment"),
+    )
+
+    cool = next(row for row in rows if row["zone"] == "floor_1" and row["mode"] == "cool")
+    assert cool["provenance"]["experiment"]["configuration_id"] == "cool-s1-f1"
+    assert all(
+        row["provenance"].get("experiment", {}).get("experiment_id") != "cool-s1-f1-example"
+        for row in rows
+        if row["zone"] != "floor_1"
+    )
+
+
+def test_missing_experiment_sidecar_is_optional_for_pre_marker_histories(tmp_path: Path):
+    events, stats = load_optional_jsonl_events(tmp_path / "not-created.jsonl", "experiment")
+
+    assert events == []
+    assert stats["missing"] == 1
+    assert stats["lines"] == 0
 
 
 def load_jsonl_events_from_dicts(events: list[dict], source: str):

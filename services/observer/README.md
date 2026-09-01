@@ -172,6 +172,11 @@ would cross partitions.
 The observer preserves raw climate state changes; it does not infer missing
 session boundaries or manufacture cooling labels.
 
+Deliberate cooling tests use the separate data-only marker sidecar documented
+in [`docs/thermal-experiment-checklist.md`](../../docs/thermal-experiment-checklist.md).
+The observer does not consume or emit those Telegram markers; the offline
+exporter joins them to the raw/derived history after collection.
+
 ---
 
 ## Entity Reference
