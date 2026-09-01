@@ -1334,6 +1334,11 @@ python3 scripts/evaluate_thermal_models.py \
   --code-version "$(git rev-parse HEAD)"
 ~~~
 
+For uneven heating and cooling histories, add `--split-strategy mode_aware` to
+create separate chronological partitions per mode. The alternate report
+records each mode's boundaries and fits Ridge separately per mode; the global
+strategy remains the default reference.
+
 The repository-level [`scripts/thermal_query.py`](../../scripts/thermal_query.py)
 is the LLM-facing composition layer for these read-only reports. It accepts a
 natural-language question plus an explicit primary zone and outdoor

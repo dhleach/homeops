@@ -17,6 +17,7 @@ from evaluate_thermal_models import (
     chronological_split,
     load_dataset,
     main,
+    mode_aware_split,
     train_and_evaluate,
 )
 
@@ -127,6 +128,54 @@ def test_chronological_split_with_two_groups_keeps_later_group_as_test():
     assert split.test[0]["row_id"].endswith(":1")
 
 
+def test_mode_aware_split_keeps_each_mode_ordered_and_groups_isolated():
+    rows = [
+        _row(
+            index,
+            zone=zone,
+            mode=mode,
+            experiment_id="shared-experiment" if index in (1, 2) else None,
+        )
+        for mode, zone in (("heat", "floor_1"), ("cool", "floor_2"))
+        for index in range(10)
+    ]
+
+    split = mode_aware_split(rows, validation_fraction=0.2, test_fraction=0.2)
+
+    assert set(split.by_mode) == {"heat", "cool"}
+    for mode_split in split.by_mode.values():
+        assert mode_split.train[-1]["prediction_ts"] < mode_split.validation[0]["prediction_ts"]
+        assert mode_split.validation[-1]["prediction_ts"] < mode_split.test[0]["prediction_ts"]
+    assert not set(split.train_groups) & set(split.validation_groups)
+    assert not set(split.train_groups) & set(split.test_groups)
+    assert not set(split.validation_groups) & set(split.test_groups)
+    assert split.to_dict()["strategy"] == "mode_aware_chronological"
+
+
+def test_mode_aware_split_fails_closed_when_a_shared_group_would_cross_partitions():
+    rows = [
+        _row(
+            index,
+            zone="floor_1",
+            mode="heat",
+            experiment_id="shared-experiment" if index == 1 else None,
+        )
+        for index in range(10)
+    ]
+    rows.extend(
+        _row(
+            index,
+            zone="floor_2",
+            mode="cool",
+            experiment_id="shared-experiment" if index == 8 else None,
+        )
+        for index in range(10)
+    )
+
+    with pytest.raises(ValueError, match="divide shared groups"):
+        mode_aware_split(rows)
+
+
 def test_historical_median_and_degree_minute_fits_are_slice_specific():
     rows = [_row(index) for index in range(5)]
     rows.extend(_row(index, zone="floor_2", mode="cool") for index in range(5, 10))
@@ -210,6 +259,8 @@ def test_train_and_evaluate_emits_all_candidates_and_versioned_artifacts():
     assert artifacts["schema"] == ARTIFACT_SCHEMA
     assert report["dataset_sha256"] == "abc123"
     assert report["code_version"] == "commit-1"
+    assert report["configuration"]["split_strategy"] == "global"
+    assert report["configuration"]["ridge_model_scope"] == "pooled"
     assert set(report["candidates"]) == {
         "historical_median",
         "degree_minute_thermal_response",
@@ -219,6 +270,27 @@ def test_train_and_evaluate_emits_all_candidates_and_versioned_artifacts():
     assert result["historical_median"]["test"]["predicted_rows"] == 3
     assert result["degree_minute_thermal_response"]["test"]["status"] == "ok"
     assert result["ridge_regression"]["test"]["mae_s"] is not None
+
+
+def test_mode_aware_evaluation_records_boundaries_and_mode_specific_ridge_artifacts():
+    rows = []
+    for index in range(15):
+        rows.append(_row(index, zone="floor_1", mode="heat"))
+        rows.append(_row(index, zone="floor_2", mode="cool"))
+
+    report, artifacts = train_and_evaluate(
+        rows,
+        minimum_eligible_rows=1,
+        split_strategy="mode_aware",
+    )
+
+    assert report["configuration"]["split_strategy"] == "mode_aware"
+    assert report["configuration"]["ridge_model_scope"] == "mode_specific"
+    assert set(report["split"]["by_mode"]) == {"heat", "cool"}
+    ridge_artifacts = artifacts["candidates"]["ridge_regression"]["time_to_setpoint_s"]
+    assert ridge_artifacts["kind"] == "ridge_regression_by_mode"
+    assert ridge_artifacts["scope"] == "mode_specific"
+    assert set(ridge_artifacts["by_mode"]) == {"heat", "cool"}
 
 
 def test_evaluation_marks_unrepresented_slices_insufficient_data():
@@ -306,6 +378,8 @@ def test_cli_persists_report_and_model_artifacts(tmp_path: Path):
             "test-version",
             "--minimum-eligible-rows",
             "1",
+            "--split-strategy",
+            "mode_aware",
         ]
     )
 
@@ -315,6 +389,7 @@ def test_cli_persists_report_and_model_artifacts(tmp_path: Path):
     assert report["schema"] == EVALUATION_SCHEMA
     assert artifacts["schema"] == ARTIFACT_SCHEMA
     assert report["code_version"] == "test-version"
+    assert report["configuration"]["split_strategy"] == "mode_aware"
 
 
 def test_cli_does_not_allow_two_json_outputs_on_stdout():
