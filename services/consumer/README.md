@@ -1290,6 +1290,18 @@ timestamps and line-level provenance. See
 for the schema, source-event rules, and command examples. This is an offline
 export only; it does not train a model or change Home Assistant.
 
+Deliberate operator tests are recorded separately by
+[`scripts/thermal_experiment_marker.py`](../../scripts/thermal_experiment_marker.py).
+It accepts plain-language start/end/abort or retrospective messages, writes
+the data-only `homeops.thermal.experiment_marker.v1` sidecar, and derives the
+canonical six-test checklist. The exporter joins bounded marker intervals to
+overlapping active-floor sessions when `--experiment-log` is present (its
+default is `state/experiments/markers.jsonl`). Repeated runs are retained as
+separate experiment IDs; no marker path controls Home Assistant.
+
+See the operator protocol and repeat-run policy in
+[`docs/thermal-experiment-checklist.md`](../../docs/thermal-experiment-checklist.md).
+
 ## Thermal prediction dataset validation
 
 The repository-level `scripts/validate_thermal_dataset.py` is the quality

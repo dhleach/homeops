@@ -44,6 +44,9 @@ def test_dataset_contract_preserves_modes_and_prevents_leakage():
         "operation_type",
         "--observer-log",
         "--derived-log",
+        "--experiment-log",
+        "homeops.thermal.experiment_marker.v1",
+        "experiment_marker_events",
         "byte-for-byte",
         "identical JSONL",
     ):

@@ -118,6 +118,28 @@ operation_type, or intervention. This keeps deliberate
 interventions distinguishable from routine operation for the future coupled
 thermal-model and what-if work.
 
+### Natural-language experiment marker sidecar
+
+The first deliberate cooling suite uses the separate append-only marker log
+`state/experiments/markers.jsonl`, with schema
+`homeops.thermal.experiment_marker.v1`. The marker recorder accepts the
+operator's plain-language start/end/abort message and preserves a unique
+`experiment_id`, stable configuration ID, mode, active/suppressed zones,
+timestamps, planned duration, confidence, raw message, and source-message
+identity. Source-message identity makes Telegram retries idempotent. It is a
+data-only path: it does not call Home Assistant or change a thermostat.
+
+The exporter's optional `--experiment-log` input defaults to that sidecar and
+is ignored when the file does not yet exist. A bounded marker interval is joined
+to overlapping sessions for its active zones and copied to
+`provenance.experiment`; marker source references are retained under
+`provenance.experiment_marker_events`. The experiment ID is provenance and
+whole-experiment split metadata, never a model feature. A marker does not
+manufacture passive-floor rows or turn an absent response into evidence.
+
+The canonical six-configuration protocol and repeat-run policy are documented
+in [`docs/thermal-experiment-checklist.md`](thermal-experiment-checklist.md).
+
 ## Validation and quarantine
 
 The exporter and validator are separate offline steps. The exporter preserves
@@ -220,6 +242,7 @@ From the repository root:
 python3 scripts/export_thermal_dataset.py \
   --observer-log state/observer/events.jsonl \
   --derived-log state/consumer/events.jsonl \
+  --experiment-log state/experiments/markers.jsonl \
   --out state/thermal-training.jsonl
 ~~~
 

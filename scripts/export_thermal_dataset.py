@@ -22,6 +22,8 @@ from zoneinfo import ZoneInfo
 
 TRAINING_ROW_SCHEMA = "homeops.thermal.training_row.v1"
 OBSERVER_STATE_SCHEMA = "homeops.observer.state_changed.v1"
+EXPERIMENT_MARKER_SCHEMA = "homeops.thermal.experiment_marker.v1"
+EXPERIMENT_MARKER_MATCH_TOLERANCE_S = 5 * 60
 
 HEATING_CALL_ENTITIES = {
     "binary_sensor.floor_1_heating_call": "floor_1",
@@ -213,6 +215,7 @@ class Session:
     outcome_events: list[SourceEvent] = field(default_factory=list)
     source_start_events: list[SourceEvent] = field(default_factory=list)
     source_end_events: list[SourceEvent] = field(default_factory=list)
+    experiment_marker_events: list[SourceEvent] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -688,6 +691,128 @@ def _merge_cooling_sessions(
     return sessions
 
 
+def _build_experiment_runs(events: Iterable[SourceEvent]) -> list[dict[str, Any]]:
+    """Reconstruct marker intervals from the append-only experiment log."""
+
+    runs: dict[str, dict[str, Any]] = {}
+    ordered = sorted(
+        (event for event in events if event.schema == EXPERIMENT_MARKER_SCHEMA),
+        key=lambda event: (event.timestamp or datetime.max.replace(tzinfo=UTC), event.line),
+    )
+    for event in ordered:
+        data = event.data
+        experiment_id = data.get("experiment_id")
+        action = data.get("action")
+        if not isinstance(experiment_id, str) or not experiment_id.strip():
+            continue
+        if action in {"start", "retroactive"}:
+            run = dict(data)
+            run["marker_events"] = [event]
+            runs[experiment_id] = run
+            continue
+        if action not in {"end", "abort"} or experiment_id not in runs:
+            continue
+        run = runs[experiment_id]
+        run["status"] = "completed" if action == "end" else "aborted"
+        run["end_ts"] = data.get("end_ts")
+        run["received_at"] = data.get("received_at")
+        if action == "abort":
+            run["abort_reason"] = data.get("abort_reason")
+        _append_unique(run["marker_events"], event)
+    return list(runs.values())
+
+
+def _experiment_interval(run: dict[str, Any]) -> tuple[datetime, datetime] | None:
+    """Return the declared marker interval, or None when it cannot be bounded."""
+
+    start = _parse_timestamp(run.get("start_ts"))
+    if start is None:
+        return None
+    end = _parse_timestamp(run.get("end_ts"))
+    if end is None:
+        duration = _number(run.get("planned_duration_s"))
+        if duration is None or duration <= 0:
+            return None
+        end = start + timedelta(seconds=duration)
+    if end < start:
+        return None
+    return start, end
+
+
+def _experiment_metadata(run: dict[str, Any]) -> dict[str, Any]:
+    """Select marker metadata that belongs in training-row provenance."""
+
+    metadata: dict[str, Any] = {}
+    for key in (
+        "experiment_id",
+        "configuration_id",
+        "experiment_name",
+        "test_id",
+        "operation_type",
+        "mode",
+        "active_zones",
+        "suppressed_zones",
+        "planned_duration_s",
+        "target_f",
+        "start_ts",
+        "end_ts",
+        "status",
+        "confidence",
+        "source_type",
+        "duration_defaulted",
+        "abort_reason",
+    ):
+        if key in run:
+            metadata[key] = run[key]
+    if "intervention" in run:
+        metadata["intervention"] = run["intervention"]
+    return metadata
+
+
+def _marker_overlaps_session(run: dict[str, Any], session: Session) -> bool:
+    interval = _experiment_interval(run)
+    session_start = session.candidate_start_ts
+    if interval is None or session_start is None:
+        return False
+    marker_start, marker_end = interval
+    session_end = session.end_ts or session_start
+    tolerance = timedelta(seconds=EXPERIMENT_MARKER_MATCH_TOLERANCE_S)
+    return session_start <= marker_end + tolerance and session_end >= marker_start - tolerance
+
+
+def _apply_experiment_markers(
+    sessions: list[Session],
+    events: Iterable[SourceEvent],
+) -> None:
+    """Attach bounded operator provenance to active-floor sessions."""
+
+    for run in _build_experiment_runs(events):
+        active_zones = run.get("active_zones")
+        mode = run.get("mode")
+        if (
+            not isinstance(active_zones, list)
+            or mode not in {"heat", "cool"}
+            or run.get("status") not in {"active", "completed", "aborted", "needs_review"}
+        ):
+            continue
+        metadata = _experiment_metadata(run)
+        for session in sessions:
+            if (
+                session.mode != mode
+                or session.zone not in active_zones
+                or not _marker_overlaps_session(run, session)
+            ):
+                continue
+            existing_id = session.metadata.get("experiment_id")
+            marker_id = metadata.get("experiment_id")
+            if existing_id is not None and existing_id != marker_id:
+                session.outcome_types.add("multiple_experiment_markers")
+                continue
+            session.metadata.update(metadata)
+            for event in run["marker_events"]:
+                _append_unique(session.experiment_marker_events, event)
+
+
 def _local_minute(timestamp: datetime | None, timezone: ZoneInfo) -> int | None:
     if timestamp is None:
         return None
@@ -840,6 +965,10 @@ def _session_to_row(
     }
     if session.metadata:
         provenance["experiment"] = session.metadata
+    if session.experiment_marker_events:
+        provenance["experiment_marker_events"] = [
+            event.reference() for event in session.experiment_marker_events
+        ]
 
     row = {
         "schema": TRAINING_ROW_SCHEMA,
@@ -896,6 +1025,7 @@ def build_dataset(
     *,
     timezone: ZoneInfo = ZoneInfo("America/New_York"),
     history_complete: bool = False,
+    experiment_events: Iterable[SourceEvent] | None = None,
 ) -> list[dict[str, Any]]:
     """Build deterministic rows from already-loaded observer and derived events."""
 
@@ -905,6 +1035,7 @@ def build_dataset(
     cooling_sessions = _build_derived_cooling_sessions(derived_events)
     sessions = _merge_cooling_sessions(raw_sessions, cooling_sessions)
     _apply_outcomes(sessions, derived_events)
+    _apply_experiment_markers(sessions, experiment_events or [])
     rows = [
         _session_to_row(session, sessions, timezone, history_complete)
         for session in sessions
@@ -959,6 +1090,25 @@ def load_jsonl_events(path: Path, source: str) -> tuple[list[SourceEvent], dict[
     return events, stats
 
 
+def load_optional_jsonl_events(
+    path: Path,
+    source: str,
+) -> tuple[list[SourceEvent], dict[str, int]]:
+    """Load an optional sidecar log without breaking histories collected before it existed."""
+
+    if not path.exists():
+        return [], {
+            "lines": 0,
+            "malformed": 0,
+            "non_object": 0,
+            "invalid_timestamp": 0,
+            "missing": 1,
+        }
+    events, stats = load_jsonl_events(path, source)
+    stats["missing"] = 0
+    return events, stats
+
+
 def _write_rows(rows: Iterable[dict[str, Any]], output: TextIO) -> None:
     for row in rows:
         output.write(json.dumps(row, sort_keys=True, separators=(",", ":")))
@@ -980,6 +1130,12 @@ def _parser() -> argparse.ArgumentParser:
         type=Path,
         default=Path("state/consumer/events.jsonl"),
         help="Consumer-derived JSONL path.",
+    )
+    parser.add_argument(
+        "--experiment-log",
+        type=Path,
+        default=Path("state/experiments/markers.jsonl"),
+        help="Optional natural-language experiment marker JSONL path.",
     )
     parser.add_argument(
         "--out",
@@ -1006,11 +1162,15 @@ def main(argv: list[str] | None = None) -> int:
         timezone = ZoneInfo(args.timezone)
         observer_events, observer_stats = load_jsonl_events(args.observer_log, "observer")
         derived_events, derived_stats = load_jsonl_events(args.derived_log, "derived")
+        experiment_events, experiment_stats = load_optional_jsonl_events(
+            args.experiment_log, "experiment"
+        )
         rows = build_dataset(
             observer_events,
             derived_events,
             timezone=timezone,
             history_complete=args.history_complete,
+            experiment_events=experiment_events,
         )
     except (OSError, ValueError) as exc:
         print(f"export failed: {exc}", file=sys.stderr)
@@ -1027,6 +1187,7 @@ def main(argv: list[str] | None = None) -> int:
     summary = {
         "observer": observer_stats,
         "derived": derived_stats,
+        "experiment": experiment_stats,
         "rows": len(rows),
     }
     print(json.dumps(summary, sort_keys=True), file=sys.stderr)
