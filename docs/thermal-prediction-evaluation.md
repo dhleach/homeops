@@ -22,7 +22,10 @@ The same chronological evaluation protocol is used for every candidate. The
 primary targets are the mode-aware time_to_setpoint_s and zone_runtime_s
 labels. Results are reported separately by zone, HVAC mode, and target; a
 pooled score may summarize the results but cannot hide a sparse or unsafe
-floor-specific result.
+floor-specific result. The stable default uses one global chronological split.
+The `mode_aware` strategy is an explicit alternate for histories where one
+mode dominates the newest dates: it creates a separate chronological split for
+each HVAC mode and fits the pooled Ridge candidate separately within each mode.
 
 The future cross-zone thermal model is deliberately downstream of this v1
 session-level comparison. It will use temperature trajectories and deliberate
@@ -33,13 +36,18 @@ session model is already a causal simulator.
 ## Offline implementation boundary
 
 The evaluator consumes the unchanged valid-row output from
-`scripts/validate_thermal_dataset.py`. It uses a deterministic chronological
-split with default target fractions of 60% training, 20% validation, and 20%
-locked test. Boundaries are snapped to whole session/experiment groups, so a
-group can move a boundary slightly but can never be split across partitions.
-The minimum default is three eligible rows for fitting and scoring a result;
-all of these choices are explicit command-line configuration and are persisted
-in both output artifacts.
+`scripts/validate_thermal_dataset.py`. By default it uses a deterministic
+global chronological split with target fractions of 60% training, 20% validation, and
+20% locked test. The optional `--split-strategy mode_aware`
+variant applies those fractions independently within each HVAC mode. All
+boundaries are snapped to whole session/experiment groups, so a group can move
+a boundary slightly but can never be split across partitions. If one
+deliberate experiment spans modes and the independent boundaries would place
+its rows in different partitions, the mode-aware strategy fails closed rather
+than allowing leakage; the global strategy remains available. The minimum
+default is three eligible rows for fitting and scoring a result. All choices
+are explicit command-line configuration and are persisted in both output
+artifacts.
 
 Run it after exporting and validating the dataset:
 
@@ -48,6 +56,17 @@ python3 scripts/evaluate_thermal_models.py \
   --input state/thermal-training.valid.jsonl \
   --report-out reports/thermal-training-evaluation.json \
   --artifacts-out reports/thermal-training-models.json \
+  --code-version "$(git rev-parse HEAD)"
+~~~
+
+For uneven heat/cooling histories, request the alternate mode-aware report:
+
+~~~bash
+python3 scripts/evaluate_thermal_models.py \
+  --input state/thermal-training.valid.jsonl \
+  --report-out reports/thermal-training-mode-aware-evaluation.json \
+  --artifacts-out reports/thermal-training-mode-aware-models.json \
+  --split-strategy mode_aware \
   --code-version "$(git rev-parse HEAD)"
 ~~~
 
@@ -191,6 +210,15 @@ walk-forward/expanding-window evaluation. Each fold trains on the past and
 tests on a later contiguous block. Do not randomly shuffle neighboring
 sessions: adjacent sessions can share weather, house state, and an
 experiment's thermal memory, which would make the test unrealistically easy.
+
+The explicit `mode_aware` strategy applies the same chronological rule inside
+each HVAC mode. Its heat and cool boundaries may occur on different calendar
+dates, which is intentional when one mode was introduced later or dominates
+the newest global rows. Its report stores the train/validation/test boundaries
+under `split.by_mode`; the aggregate partition counts do not claim one shared
+wall-clock boundary. Ridge is fit separately per mode under this strategy so a
+later observation in one mode cannot train a prediction evaluated on an
+earlier observation in the other mode.
 
 Deliberate thermal experiments are held out by whole experiment, not split
 row-by-row. This creates the right future test for the later cross-zone

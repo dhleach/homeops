@@ -164,7 +164,11 @@ For the offline normalized training-row export and provenance rules, see
 [`docs/thermal-prediction-dataset.md`](../../docs/thermal-prediction-dataset.md).
 The offline baseline trainer/evaluator consumes the validator's output after
 the observer has written its raw events; it is not part of this service and
-does not read or change live observer state.
+does not read or change live observer state. Its default global chronological
+split can be replaced with `--split-strategy mode_aware` when heating and
+cooling histories occupy different time ranges; that alternate remains
+chronological within each mode and fails closed if a shared experiment group
+would cross partitions.
 The observer preserves raw climate state changes; it does not infer missing
 session boundaries or manufacture cooling labels.
 

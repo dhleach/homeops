@@ -3,10 +3,9 @@
 
 The evaluator consumes validated ``homeops.thermal.training_row.v1`` JSONL.
 It fits a historical-median reference, a transparent degree-minute response
-model, and a small standard-library Ridge regression model on the earlier
-chronological partition.  It then scores the same candidates on later
-validation and test partitions without reading or changing live HomeOps
-state.
+model, and a small standard-library Ridge regression model on an earlier
+chronological partition. It then scores the same candidates on later
+validation and test partitions without reading or changing live HomeOps state.
 
 This module deliberately has no NumPy or scikit-learn dependency.  The Ridge
 solver and feature encoder are small enough to keep the reproducible offline
@@ -16,6 +15,8 @@ are persisted in the artifact output for audit and later reuse.
 Revision history:
   2026-08-31  Add the v1 offline baseline/model trainer and time-aware
               evaluator for the validated thermal training-row contract.
+  2026-09-01  Add explicit mode-aware chronological partitions for uneven
+              heating and cooling histories.
 """
 
 from __future__ import annotations
@@ -51,6 +52,8 @@ DEFAULT_TEST_FRACTION = 0.20
 DEFAULT_MINIMUM_ELIGIBLE_ROWS = 3
 DEFAULT_RIDGE_ALPHA = 1.0
 DEFAULT_INTERVAL_LEVEL = 0.80
+DEFAULT_SPLIT_STRATEGY = "global"
+SPLIT_STRATEGIES = ("global", "mode_aware")
 
 NUMERIC_FEATURES = (
     "start_temp_f",
@@ -218,6 +221,36 @@ class ChronologicalSplit:
         }
 
 
+@dataclass(frozen=True)
+class ModeAwareSplit:
+    """Chronological partitions computed independently for each HVAC mode."""
+
+    by_mode: dict[str, ChronologicalSplit]
+    train: list[dict[str, Any]]
+    validation: list[dict[str, Any]]
+    test: list[dict[str, Any]]
+    train_groups: tuple[str, ...]
+    validation_groups: tuple[str, ...]
+    test_groups: tuple[str, ...]
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return per-mode boundaries without implying one global time boundary."""
+
+        return {
+            "strategy": "mode_aware_chronological",
+            "group_isolation": True,
+            "partitions": {
+                "train": {"rows": len(self.train), "groups": len(self.train_groups)},
+                "validation": {
+                    "rows": len(self.validation),
+                    "groups": len(self.validation_groups),
+                },
+                "test": {"rows": len(self.test), "groups": len(self.test_groups)},
+            },
+            "by_mode": {mode: split.to_dict() for mode, split in sorted(self.by_mode.items())},
+        }
+
+
 def load_dataset(path: str | Path) -> LoadedDataset:
     """Load a validator-produced JSONL file and reject unsafe input early."""
 
@@ -350,6 +383,84 @@ def chronological_split(
     validation = [row for _, group in groups[train_end:validation_end] for row in group]
     test = [row for _, group in groups[validation_end:] for row in group]
     return ChronologicalSplit(
+        train=train,
+        validation=validation,
+        test=test,
+        train_groups=train_groups,
+        validation_groups=validation_groups,
+        test_groups=test_groups,
+    )
+
+
+def mode_aware_split(
+    rows: Iterable[dict[str, Any]],
+    *,
+    validation_fraction: float = DEFAULT_VALIDATION_FRACTION,
+    test_fraction: float = DEFAULT_TEST_FRACTION,
+) -> ModeAwareSplit:
+    """Split each HVAC mode chronologically while failing closed on shared groups."""
+
+    materialized = list(rows)
+    if not materialized:
+        raise ValueError("cannot split an empty dataset")
+    unknown_modes = sorted({row.get("mode") for row in materialized} - set(MODES))
+    if unknown_modes:
+        raise ValueError(f"mode-aware split has unknown modes: {unknown_modes}")
+
+    by_mode = {
+        mode: chronological_split(
+            [row for row in materialized if row.get("mode") == mode],
+            validation_fraction=validation_fraction,
+            test_fraction=test_fraction,
+        )
+        for mode in MODES
+        if any(row.get("mode") == mode for row in materialized)
+    }
+
+    group_partitions: defaultdict[str, set[str]] = defaultdict(set)
+    for split in by_mode.values():
+        for partition, groups in (
+            ("train", split.train_groups),
+            ("validation", split.validation_groups),
+            ("test", split.test_groups),
+        ):
+            for group in groups:
+                group_partitions[group].add(partition)
+    conflicting_groups = sorted(
+        group for group, partitions in group_partitions.items() if len(partitions) > 1
+    )
+    if conflicting_groups:
+        sample = ", ".join(repr(group) for group in conflicting_groups[:3])
+        raise ValueError(
+            "mode-aware split would divide shared groups across partitions: "
+            f"{sample}; use the global strategy or align the experiment boundaries"
+        )
+
+    def _combined_rows(partition: str) -> list[dict[str, Any]]:
+        rows_by_partition = {
+            "train": lambda split: split.train,
+            "validation": lambda split: split.validation,
+            "test": lambda split: split.test,
+        }
+        return sorted(
+            [row for split in by_mode.values() for row in rows_by_partition[partition](split)],
+            key=_row_sort_key,
+        )
+
+    train = _combined_rows("train")
+    validation = _combined_rows("validation")
+    test = _combined_rows("test")
+    train_groups = tuple(
+        sorted({group for split in by_mode.values() for group in split.train_groups})
+    )
+    validation_groups = tuple(
+        sorted({group for split in by_mode.values() for group in split.validation_groups})
+    )
+    test_groups = tuple(
+        sorted({group for split in by_mode.values() for group in split.test_groups})
+    )
+    return ModeAwareSplit(
+        by_mode=by_mode,
         train=train,
         validation=validation,
         test=test,
@@ -846,6 +957,10 @@ def _all_slice_keys() -> tuple[str, ...]:
     return tuple(f"{zone}:{mode}" for zone in ZONES for mode in MODES)
 
 
+def _mode_from_slice_key(slice_key: str) -> str:
+    return slice_key.rsplit(":", 1)[1]
+
+
 def _candidate_slice_result(
     model: MedianFit | DegreeMinuteFit | RidgeFit | None,
     train_rows: list[dict[str, Any]],
@@ -891,6 +1006,7 @@ def train_and_evaluate(
     minimum_eligible_rows: int = DEFAULT_MINIMUM_ELIGIBLE_ROWS,
     ridge_alpha: float = DEFAULT_RIDGE_ALPHA,
     interval_level: float = DEFAULT_INTERVAL_LEVEL,
+    split_strategy: str = DEFAULT_SPLIT_STRATEGY,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Fit the v1 ladder and return a report plus reproducible artifacts."""
 
@@ -900,17 +1016,28 @@ def train_and_evaluate(
         raise ValueError("ridge_alpha must be finite and greater than 0")
     if not math.isfinite(interval_level) or not 0 < interval_level < 1:
         raise ValueError("interval_level must be in (0, 1)")
+    if split_strategy not in SPLIT_STRATEGIES:
+        raise ValueError(f"split_strategy must be one of {SPLIT_STRATEGIES}")
     if not rows:
         raise ValueError("cannot evaluate an empty dataset")
 
-    split = chronological_split(
-        rows,
-        validation_fraction=validation_fraction,
-        test_fraction=test_fraction,
-    )
+    split: ChronologicalSplit | ModeAwareSplit
+    if split_strategy == "global":
+        split = chronological_split(
+            rows,
+            validation_fraction=validation_fraction,
+            test_fraction=test_fraction,
+        )
+    else:
+        split = mode_aware_split(
+            rows,
+            validation_fraction=validation_fraction,
+            test_fraction=test_fraction,
+        )
     median_models: dict[str, dict[str, MedianFit]] = {}
     degree_models: dict[str, dict[str, DegreeMinuteFit]] = {}
     ridge_models: dict[str, RidgeFit | None] = {}
+    ridge_models_by_mode: dict[str, dict[str, RidgeFit | None]] = {}
     for target, _ in TARGETS:
         median_models[target] = _fit_median_models(
             split.train,
@@ -924,13 +1051,25 @@ def train_and_evaluate(
             minimum_rows=minimum_eligible_rows,
             interval_level=interval_level,
         )
-        ridge_models[target] = _fit_ridge_model(
-            split.train,
-            target,
-            minimum_rows=minimum_eligible_rows,
-            alpha=ridge_alpha,
-            interval_level=interval_level,
-        )
+        if split_strategy == "mode_aware":
+            ridge_models_by_mode[target] = {
+                mode: _fit_ridge_model(
+                    split.by_mode[mode].train,
+                    target,
+                    minimum_rows=minimum_eligible_rows,
+                    alpha=ridge_alpha,
+                    interval_level=interval_level,
+                )
+                for mode in sorted(split.by_mode)
+            }
+        else:
+            ridge_models[target] = _fit_ridge_model(
+                split.train,
+                target,
+                minimum_rows=minimum_eligible_rows,
+                alpha=ridge_alpha,
+                interval_level=interval_level,
+            )
 
     by_slice: dict[str, Any] = {}
     for slice_key in _all_slice_keys():
@@ -939,6 +1078,11 @@ def train_and_evaluate(
             train_rows = _slice_rows(split.train, slice_key, target)
             validation_rows = _slice_rows(split.validation, slice_key, target)
             test_rows = _slice_rows(split.test, slice_key, target)
+            ridge_model = (
+                ridge_models_by_mode[target].get(_mode_from_slice_key(slice_key))
+                if split_strategy == "mode_aware"
+                else ridge_models[target]
+            )
             slice_result[target] = {
                 "historical_median": _candidate_slice_result(
                     median_models[target].get(slice_key),
@@ -957,7 +1101,7 @@ def train_and_evaluate(
                     minimum_rows=minimum_eligible_rows,
                 ),
                 "ridge_regression": _candidate_slice_result(
-                    ridge_models[target],
+                    ridge_model,
                     train_rows,
                     validation_rows,
                     test_rows,
@@ -994,6 +1138,8 @@ def train_and_evaluate(
         "minimum_eligible_rows": minimum_eligible_rows,
         "ridge_alpha": ridge_alpha,
         "interval_level": interval_level,
+        "split_strategy": split_strategy,
+        "ridge_model_scope": "mode_specific" if split_strategy == "mode_aware" else "pooled",
     }
     split_dict = split.to_dict()
     report = {
@@ -1023,6 +1169,24 @@ def train_and_evaluate(
     ]
     if all_test_results and all(result["status"] == "ok" for result in all_test_results):
         report["coverage_status"] = "ok"
+    if split_strategy == "mode_aware":
+        ridge_artifacts: dict[str, Any] = {
+            target: {
+                "kind": "ridge_regression_by_mode",
+                "target": target,
+                "scope": "mode_specific",
+                "by_mode": {
+                    mode: (model.artifact() if model is not None else None)
+                    for mode, model in sorted(ridge_models_by_mode[target].items())
+                },
+            }
+            for target in sorted(ridge_models_by_mode)
+        }
+    else:
+        ridge_artifacts = {
+            target: model.artifact() if model is not None else None
+            for target, model in sorted(ridge_models.items())
+        }
     artifacts = {
         "schema": ARTIFACT_SCHEMA,
         "model_version": MODEL_VERSION,
@@ -1041,10 +1205,7 @@ def train_and_evaluate(
                 target: {slice_key: model.artifact() for slice_key, model in sorted(models.items())}
                 for target, models in sorted(degree_models.items())
             },
-            "ridge_regression": {
-                target: model.artifact() if model is not None else None
-                for target, model in sorted(ridge_models.items())
-            },
+            "ridge_regression": ridge_artifacts,
         },
     }
     return report, artifacts
@@ -1073,6 +1234,12 @@ def _parser() -> argparse.ArgumentParser:
         "--code-version",
         default=os.environ.get("HOMEOPS_CODE_VERSION", "unknown"),
         help="Repository/code identifier stored in reproducibility metadata.",
+    )
+    parser.add_argument(
+        "--split-strategy",
+        choices=SPLIT_STRATEGIES,
+        default=DEFAULT_SPLIT_STRATEGY,
+        help="Evaluation partition strategy; global is the stable default.",
     )
     parser.add_argument(
         "--validation-fraction",
@@ -1123,6 +1290,7 @@ def main(argv: list[str] | None = None) -> int:
             minimum_eligible_rows=args.minimum_eligible_rows,
             ridge_alpha=args.ridge_alpha,
             interval_level=args.interval_level,
+            split_strategy=args.split_strategy,
         )
         _write_json(report, args.report_out, stream=sys.stdout)
         _write_json(artifacts, args.artifacts_out)
