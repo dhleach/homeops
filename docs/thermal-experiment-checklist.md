@@ -96,10 +96,16 @@ message identity. Source-message identity makes retries idempotent.
 
 The exporter joins a bounded marker interval to overlapping sessions for the
 marked active floors and copies the marker under `provenance.experiment` plus
-`provenance.experiment_marker_events`. The experiment ID is provenance and
-grouping metadata, never a model feature. Markers do not manufacture passive
-floor training rows or claim that a floor responded when no telemetry session
-exists.
+`provenance.experiment_marker_events`. For an exact marker whose setpoint
+change occurs during an already-active HVAC call, the primary exported row
+starts at the observed setpoint transition and preserves the original HVAC
+session start in the boundary metadata. Later sessions in the same interval
+are marked as continuations, not independent experiments. Approximate or
+unverified marker alignments remain explicitly flagged.
+The experiment ID is provenance and grouping metadata, never a model feature.
+Markers do not
+manufacture passive floor training rows or claim that a floor responded when
+no telemetry session exists.
 
 To inspect the current derived checklist from a deployed checkout:
 
