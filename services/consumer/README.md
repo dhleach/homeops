@@ -1292,7 +1292,8 @@ export only; it does not train a model or change Home Assistant.
 
 Deliberate operator tests are recorded separately by
 [`scripts/thermal_experiment_marker.py`](../../scripts/thermal_experiment_marker.py).
-It accepts plain-language start/end/abort or retrospective messages, writes
+It accepts plain-language start/end/abort messages (including common past-tense
+live-start phrasing) or retrospective messages, writes
 the data-only `homeops.thermal.experiment_marker.v1` sidecar, and derives the
 canonical six-test checklist. The exporter joins bounded marker intervals to
 overlapping active-floor sessions when `--experiment-log` is present (its

@@ -48,10 +48,13 @@ fields internally. These messages are recorded without waiting for a reply:
 
 - `Starting a 30-minute cooling test on Floor 1.`
 - `Starting a cooling test on Floors 1 and 3.`
+- `First floor cooling experiment started.`
 - `Floor 1 test ended.`
 - `Stop the test — the kids are getting cold.`
 
-The duration defaults to 30 minutes when a live start omits it. The actual
+Live starts may use ordinary present or past-tense phrasing; the raw message
+is retained as provenance. The duration defaults to 30 minutes when a live
+start omits it. The actual
 setpoint is recovered from the subsequent Home Assistant event when available;
 it does not need to be included in the message. An explicit target may still be
 recorded as operator context.

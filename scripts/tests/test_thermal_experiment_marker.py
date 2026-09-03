@@ -37,6 +37,26 @@ def test_live_singleton_message_uses_exact_received_time_and_default_duration():
     assert parsed.confidence == "exact"
 
 
+@pytest.mark.parametrize(
+    "message, expected_zone",
+    (
+        ("First floor cooling experiment started.", "floor_1"),
+        ("The Floor 2 cooling test started.", "floor_2"),
+        ("I started a cooling test on Floor 3.", "floor_3"),
+    ),
+)
+def test_live_start_accepts_common_past_tense_phrasing(message: str, expected_zone: str):
+    parsed = parse_command(message, received_at=RECEIVED)
+
+    assert parsed.action == "start"
+    assert parsed.mode == "cool"
+    assert parsed.active_zones == (expected_zone,)
+    assert parsed.duration_s == DEFAULT_DURATION_S
+    assert parsed.duration_defaulted is True
+    assert parsed.start_ts == RECEIVED
+    assert parsed.raw_text == message
+
+
 def test_live_pair_message_extracts_all_active_floors_and_declared_target():
     parsed = parse_command(
         "Start a 45 minute cooling test on Floors 1 and 3, target 72.",

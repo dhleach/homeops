@@ -219,7 +219,7 @@ def _action(text: str) -> str:
         return "retroactive"
     if re.search(r"\b(?:end(?:ed)?|finish(?:ed)?|done|complete(?:d)?)\b", text):
         return "end"
-    if re.search(r"\b(?:start(?:ing)?|begin(?:ning)?|run(?:ning)?)\b", text):
+    if re.search(r"\b(?:start(?:ing|ed)?|begin(?:ning)?|run(?:ning)?)\b", text):
         return "start"
     raise MarkerError("message does not clearly start, end, abort, or describe a past test")
 
