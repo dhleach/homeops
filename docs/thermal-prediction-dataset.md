@@ -8,7 +8,9 @@ Home Assistant, Prometheus, or thermostat behavior.
 
 ## The row boundary
 
-Each row represents one observed floor HVAC session. The row separates:
+Each routine row represents one observed floor HVAC session. A marked primary
+row may instead represent the intervention-bounded slice of one observed
+session. Every row separates:
 
 - features: facts available at the prediction boundary
 - labels: outcomes observed after that boundary
@@ -17,6 +19,15 @@ Each row represents one observed floor HVAC session. The row separates:
 The exporter can retain a row whose start or end boundary is incomplete, but it
 marks the affected label as ineligible or right-censored instead of inventing a
 timestamp or duration.
+
+For an exact deliberate experiment marker, the primary row may use the
+observed thermostat setpoint transition as its prediction boundary when the
+HVAC call was already active. The original HVAC-session start remains in
+`provenance.experiment.boundary.session_start_ts`; the row's active interval,
+features, and labels begin at the intervention transition. Later HVAC sessions
+inside the same marker interval are retained as follow-on rows with
+`provenance.experiment.boundary.role: "continuation"` and are not separate
+experiments.
 
 ## Output schema
 
@@ -87,8 +98,10 @@ are never repaired by subtracting a derived duration from an outcome timestamp.
 - Existing heating history is never relabeled as cooling.
 - No cooling row is synthesized from an idle interval, an off interval, or a
   heating event.
-- The start setpoint and temperature are retained from the session start. A
-  later setpoint is not substituted for the original target.
+- Routine rows retain the start setpoint and temperature from the HVAC session
+  start. For an exact marked experiment, a directional setpoint transition
+  inside that session is an explicit exception: the primary row is rebased to
+  the transition and records both boundaries in experiment provenance.
 - The exporter retains outcome-only rows when a source log begins after the
   session start, but those rows have no eligible start-based label.
 
@@ -133,7 +146,13 @@ The exporter's optional `--experiment-log` input defaults to that sidecar and
 is ignored when the file does not yet exist. A bounded marker interval is joined
 to overlapping sessions for its active zones and copied to
 `provenance.experiment`; marker source references are retained under
-`provenance.experiment_marker_events`. The experiment ID is provenance and
+`provenance.experiment_marker_events`. For an exact live marker, a directional
+setpoint transition inside an active session becomes the primary row boundary;
+the boundary record retains marker, intervention, and original HVAC-session
+timestamps. A session that starts inside the marker can be the primary row
+when the intervention is already reflected at session start. Additional
+sessions in the same interval are marked as continuations, so their rows are
+not mistaken for independent experiments. The experiment ID is provenance and
 whole-experiment split metadata, never a model feature. A marker does not
 manufacture passive-floor rows or turn an absent response into evidence.
 

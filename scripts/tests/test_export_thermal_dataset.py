@@ -11,6 +11,7 @@ from export_thermal_dataset import (
     load_optional_jsonl_events,
 )
 from thermal_experiment_marker import MarkerStore, record_message
+from validate_thermal_dataset import validate_row
 
 
 def _observer(
@@ -467,8 +468,270 @@ def test_experiment_marker_sidecar_joins_to_overlapping_active_floor_session(tmp
     assert experiment["configuration_id"] == "cool-s1-f1"
     assert experiment["status"] == "completed"
     assert experiment["active_zones"] == ["floor_1"]
+    assert experiment["boundary"]["status"] == "clean"
+    assert experiment["boundary"]["type"] == "session_start"
+    assert experiment["boundary"]["role"] == "primary"
     assert len(cool["provenance"]["experiment_marker_events"]) == 2
     assert "experiment_id" not in cool["features"]
+
+
+def test_experiment_marker_rebases_active_session_to_setpoint_change(tmp_path: Path):
+    observer = [
+        _observer("2024-01-15T09:55:00+00:00", "sensor.outdoor_temperature", "80"),
+        _observer("2024-01-15T09:59:00+00:00", "binary_sensor.floor_1_cooling_call", "off"),
+        _observer("2024-01-15T09:59:01+00:00", "binary_sensor.floor_2_cooling_call", "off"),
+        _observer("2024-01-15T09:59:02+00:00", "binary_sensor.floor_3_cooling_call", "off"),
+        _observer(
+            "2024-01-15T10:00:00+00:00",
+            "climate.floor_1_thermostat",
+            "cool",
+            attributes={
+                "current_temperature": 74.0,
+                "temperature": 74.0,
+                "hvac_action": "idle",
+            },
+        ),
+        _observer(
+            "2024-01-15T10:00:05+00:00",
+            "climate.floor_1_thermostat",
+            "cool",
+            attributes={
+                "current_temperature": 74.0,
+                "temperature": 74.0,
+                "hvac_action": "cooling",
+            },
+        ),
+        _observer(
+            "2024-01-15T10:00:35+00:00",
+            "climate.floor_1_thermostat",
+            "cool",
+            attributes={
+                "current_temperature": 74.0,
+                "temperature": 70.0,
+                "hvac_action": "cooling",
+            },
+        ),
+        _observer(
+            "2024-01-15T10:05:35+00:00",
+            "climate.floor_1_thermostat",
+            "cool",
+            attributes={
+                "temperature": 70.0,
+                "hvac_action": "cooling",
+            },
+        ),
+        _observer(
+            "2024-01-15T10:06:35+00:00",
+            "climate.floor_1_thermostat",
+            "cool",
+            attributes={
+                "current_temperature": 70.0,
+                "temperature": 70.0,
+                "hvac_action": "idle",
+            },
+        ),
+    ]
+    derived = [
+        _derived(
+            "homeops.consumer.zone_time_to_cool.v1",
+            "2024-01-15T10:05:35+00:00",
+            {
+                "zone": "floor_1",
+                "mode": "cool",
+                "start_temp": 74.0,
+                "setpoint": 70.0,
+                "duration_s": 300.0,
+                "end_temp": 70.0,
+            },
+        )
+    ]
+    store = MarkerStore(tmp_path / "markers.jsonl")
+    start = record_message(
+        "Starting a 30-minute cooling test on Floor 1.",
+        store=store,
+        source_message_id="active-start",
+        received_at="2024-01-15T10:00:30+00:00",
+    )
+    record_message(
+        "Floor 1 test ended.",
+        store=store,
+        source_message_id="active-end",
+        received_at="2024-01-15T10:10:30+00:00",
+    )
+
+    rows = build_dataset(
+        load_jsonl_events_from_dicts(observer, "observer"),
+        load_jsonl_events_from_dicts(derived, "derived"),
+        experiment_events=load_jsonl_events_from_dicts(store.read(), "experiment"),
+    )
+    row = next(row for row in rows if row["zone"] == "floor_1" and row["mode"] == "cool")
+    boundary = row["provenance"]["experiment"]["boundary"]
+
+    assert (
+        start["record"]["data"]["experiment_id"] == row["provenance"]["experiment"]["experiment_id"]
+    )
+    assert boundary["status"] == "clean"
+    assert boundary["type"] == "setpoint_change"
+    assert boundary["role"] == "primary"
+    assert boundary["session_start_ts"] == "2024-01-15T10:00:05+00:00"
+    assert boundary["intervention_start_ts"] == "2024-01-15T10:00:35+00:00"
+    assert row["prediction_ts"] == "2024-01-15T10:00:35+00:00"
+    assert row["active_end_ts"] == "2024-01-15T10:06:35+00:00"
+    assert row["features"]["start_temp_f"] == 74.0
+    assert row["features"]["start_setpoint_f"] == 70.0
+    assert row["features"]["setpoint_delta_f"] == 4.0
+    assert row["labels"]["time_to_setpoint_s"] == 300.0
+    assert row["labels"]["zone_runtime_s"] == 360.0
+    assert row["observations"]["observed_duration_s"] == 360.0
+    assert "setpoint_changed_during_session" not in row["quality_flags"]
+    assert "experiment_boundary_unverified" not in row["quality_flags"]
+    assert validate_row(row) == []
+    assert any(
+        reference.get("source_message_id") == "active-start"
+        for reference in row["provenance"]["experiment_marker_events"]
+    )
+    assert any(
+        reference["timestamp"] == "2024-01-15T10:00:35+00:00"
+        for reference in row["provenance"]["source_events"]
+    )
+
+
+def test_experiment_marker_groups_follow_on_sessions_without_rebasing_them(tmp_path: Path):
+    observer = [
+        _observer("2024-01-15T09:55:00+00:00", "sensor.outdoor_temperature", "80"),
+        _observer("2024-01-15T09:59:00+00:00", "binary_sensor.floor_1_cooling_call", "off"),
+        _observer("2024-01-15T09:59:01+00:00", "binary_sensor.floor_2_cooling_call", "off"),
+        _observer("2024-01-15T09:59:02+00:00", "binary_sensor.floor_3_cooling_call", "off"),
+        _observer(
+            "2024-01-15T10:00:00+00:00",
+            "climate.floor_1_thermostat",
+            "cool",
+            attributes={"current_temperature": 74.0, "temperature": 74.0, "hvac_action": "idle"},
+        ),
+        _observer(
+            "2024-01-15T10:00:05+00:00",
+            "climate.floor_1_thermostat",
+            "cool",
+            attributes={"current_temperature": 74.0, "temperature": 74.0, "hvac_action": "cooling"},
+        ),
+        _observer(
+            "2024-01-15T10:00:35+00:00",
+            "climate.floor_1_thermostat",
+            "cool",
+            attributes={"current_temperature": 74.0, "temperature": 70.0, "hvac_action": "cooling"},
+        ),
+        _observer(
+            "2024-01-15T10:06:35+00:00",
+            "climate.floor_1_thermostat",
+            "cool",
+            attributes={"current_temperature": 70.0, "temperature": 70.0, "hvac_action": "idle"},
+        ),
+        _observer(
+            "2024-01-15T10:07:05+00:00",
+            "climate.floor_1_thermostat",
+            "cool",
+            attributes={"current_temperature": 70.0, "temperature": 70.0, "hvac_action": "cooling"},
+        ),
+        _observer(
+            "2024-01-15T10:08:05+00:00",
+            "climate.floor_1_thermostat",
+            "cool",
+            attributes={"current_temperature": 70.0, "temperature": 70.0, "hvac_action": "idle"},
+        ),
+    ]
+    store = MarkerStore(tmp_path / "markers.jsonl")
+    record_message(
+        "Starting a 30-minute cooling test on Floor 1.",
+        store=store,
+        source_message_id="group-start",
+        received_at="2024-01-15T10:00:30+00:00",
+    )
+    record_message(
+        "Floor 1 test ended.",
+        store=store,
+        source_message_id="group-end",
+        received_at="2024-01-15T10:10:30+00:00",
+    )
+
+    rows = build_dataset(
+        load_jsonl_events_from_dicts(observer, "observer"),
+        [],
+        experiment_events=load_jsonl_events_from_dicts(store.read(), "experiment"),
+    )
+    cool_rows = [row for row in rows if row["zone"] == "floor_1" and row["mode"] == "cool"]
+    assert len(cool_rows) == 2
+    primary = next(
+        row for row in cool_rows if row["provenance"]["experiment"]["boundary"]["role"] == "primary"
+    )
+    follow_on = next(
+        row
+        for row in cool_rows
+        if row["provenance"]["experiment"]["boundary"]["role"] == "continuation"
+    )
+
+    assert primary["prediction_ts"] == "2024-01-15T10:00:35+00:00"
+    assert follow_on["prediction_ts"] == "2024-01-15T10:07:05+00:00"
+    assert follow_on["provenance"]["experiment"]["boundary"]["status"] == "continuation"
+    assert follow_on["provenance"]["experiment"]["boundary"]["primary_status"] == "ambiguous"
+    assert follow_on["provenance"]["experiment"]["boundary"]["type"] == "follow_on_session"
+    assert "experiment_follow_on_cycle" in follow_on["quality_flags"]
+    assert (
+        primary["provenance"]["experiment"]["experiment_id"]
+        == follow_on["provenance"]["experiment"]["experiment_id"]
+    )
+
+
+def test_marker_inside_existing_session_without_transition_is_unverified(tmp_path: Path):
+    observer = [
+        _observer("2024-01-15T09:55:00+00:00", "sensor.outdoor_temperature", "80"),
+        _observer("2024-01-15T09:59:00+00:00", "binary_sensor.floor_1_cooling_call", "off"),
+        _observer("2024-01-15T09:59:01+00:00", "binary_sensor.floor_2_cooling_call", "off"),
+        _observer("2024-01-15T09:59:02+00:00", "binary_sensor.floor_3_cooling_call", "off"),
+        _observer(
+            "2024-01-15T10:00:00+00:00",
+            "climate.floor_1_thermostat",
+            "cool",
+            attributes={"current_temperature": 75.0, "temperature": 74.0, "hvac_action": "idle"},
+        ),
+        _observer(
+            "2024-01-15T10:00:05+00:00",
+            "climate.floor_1_thermostat",
+            "cool",
+            attributes={"current_temperature": 75.0, "temperature": 74.0, "hvac_action": "cooling"},
+        ),
+        _observer(
+            "2024-01-15T10:10:05+00:00",
+            "climate.floor_1_thermostat",
+            "cool",
+            attributes={"current_temperature": 74.5, "temperature": 74.0, "hvac_action": "idle"},
+        ),
+    ]
+    store = MarkerStore(tmp_path / "markers.jsonl")
+    record_message(
+        "Starting a 30-minute cooling test on Floor 1.",
+        store=store,
+        source_message_id="unverified-start",
+        received_at="2024-01-15T10:05:00+00:00",
+    )
+    record_message(
+        "Floor 1 test ended.",
+        store=store,
+        source_message_id="unverified-end",
+        received_at="2024-01-15T10:08:00+00:00",
+    )
+
+    row = build_dataset(
+        load_jsonl_events_from_dicts(observer, "observer"),
+        [],
+        experiment_events=load_jsonl_events_from_dicts(store.read(), "experiment"),
+    )[0]
+    boundary = row["provenance"]["experiment"]["boundary"]
+
+    assert boundary["status"] == "unverified"
+    assert boundary["type"] == "marker_inside_session"
+    assert boundary["role"] == "primary"
+    assert "experiment_boundary_unverified" in row["quality_flags"]
+    assert row["prediction_ts"] == "2024-01-15T10:00:05+00:00"
 
 
 def test_experiment_markers_do_not_create_rows_for_passive_floors():

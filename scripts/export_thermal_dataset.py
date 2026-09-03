@@ -24,6 +24,7 @@ TRAINING_ROW_SCHEMA = "homeops.thermal.training_row.v1"
 OBSERVER_STATE_SCHEMA = "homeops.observer.state_changed.v1"
 EXPERIMENT_MARKER_SCHEMA = "homeops.thermal.experiment_marker.v1"
 EXPERIMENT_MARKER_MATCH_TOLERANCE_S = 5 * 60
+EXPERIMENT_INTERVENTION_MATCH_TOLERANCE_S = 60
 
 HEATING_CALL_ENTITIES = {
     "binary_sensor.floor_1_heating_call": "floor_1",
@@ -179,6 +180,9 @@ class SourceEvent:
         action = _active_action(self.data)
         if action is not None:
             reference["hvac_action"] = action
+        source_message_id = self.data.get("source_message_id")
+        if isinstance(source_message_id, str) and source_message_id:
+            reference["source_message_id"] = source_message_id
         return reference
 
     def key(self) -> tuple[str, int]:
@@ -208,6 +212,14 @@ class Session:
     target_crossing_ts: datetime | None = None
     target_event: SourceEvent | None = None
     setpoint_change_ts: datetime | None = None
+    setpoint_change_event: SourceEvent | None = None
+    setpoint_change_temp_f: float | None = None
+    setpoint_change_setpoint_f: float | None = None
+    setpoint_change_other_zones: list[str] | None = None
+    setpoint_change_outdoor: OutdoorReading | None = None
+    intervention_target_crossing_ts: datetime | None = None
+    intervention_target_event: SourceEvent | None = None
+    rebased_to_intervention: bool = False
     start_boundary_missing: bool = False
     last_temp_f: float | None = None
     observed_duration_s: float | None = None
@@ -215,6 +227,7 @@ class Session:
     outcome_events: list[SourceEvent] = field(default_factory=list)
     source_start_events: list[SourceEvent] = field(default_factory=list)
     source_end_events: list[SourceEvent] = field(default_factory=list)
+    boundary_events: list[SourceEvent] = field(default_factory=list)
     experiment_marker_events: list[SourceEvent] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
 
@@ -369,7 +382,13 @@ def _directional_delta(session: Session) -> float | None:
     return session.start_temp_f - session.start_setpoint_f
 
 
-def _observe_active(session: Session, event: SourceEvent) -> None:
+def _observe_active(
+    session: Session,
+    event: SourceEvent,
+    *,
+    call_states: dict[str, dict[str, bool | None]] | None = None,
+    latest_outdoor: OutdoorReading | None = None,
+) -> None:
     current_temp, setpoint, _ = _climate_values(event)
     if (
         setpoint is not None
@@ -378,13 +397,41 @@ def _observe_active(session: Session, event: SourceEvent) -> None:
         and session.setpoint_change_ts is None
     ):
         session.setpoint_change_ts = event.timestamp
+        session.setpoint_change_event = event
+        session.setpoint_change_temp_f = current_temp
+        session.setpoint_change_setpoint_f = setpoint
+        session.setpoint_change_other_zones = (
+            _call_snapshot(session.mode, session.zone, call_states)
+            if call_states is not None
+            else None
+        )
+        session.setpoint_change_outdoor = (
+            _outdoor_as_of(latest_outdoor, event.timestamp)
+            if latest_outdoor is not None and event.timestamp is not None
+            else None
+        )
+        _append_unique(session.boundary_events, event)
 
     previous_temp = session.last_temp_f
     session.last_temp_f = current_temp
     if (
+        session.setpoint_change_ts is not None
+        and session.intervention_target_crossing_ts is None
+        and session.setpoint_change_setpoint_f is not None
+        and current_temp is not None
+        and previous_temp is not None
+    ):
+        target = session.setpoint_change_setpoint_f
+        crossed = (
+            session.mode == "heat" and previous_temp < target and current_temp >= target
+        ) or (session.mode == "cool" and previous_temp > target and current_temp <= target)
+        if crossed:
+            session.intervention_target_crossing_ts = event.timestamp
+            session.intervention_target_event = event
+        return
+    if (
         session.target_crossing_ts is not None
         or session.start_boundary_missing
-        or session.setpoint_change_ts is not None
         or current_temp is None
         or session.start_setpoint_f is None
         or previous_temp is None
@@ -466,7 +513,12 @@ def _build_raw_sessions(events: Iterable[SourceEvent]) -> list[Session]:
                     latest_outdoor,
                 )
             elif current_session.mode != mode:
-                _observe_active(current_session, event)
+                _observe_active(
+                    current_session,
+                    event,
+                    call_states=call_states,
+                    latest_outdoor=latest_outdoor,
+                )
                 _close_session(current_session, event)
                 sessions.append(current_session)
                 active[zone] = _new_raw_session(
@@ -478,9 +530,19 @@ def _build_raw_sessions(events: Iterable[SourceEvent]) -> list[Session]:
                     latest_outdoor,
                 )
             else:
-                _observe_active(current_session, event)
+                _observe_active(
+                    current_session,
+                    event,
+                    call_states=call_states,
+                    latest_outdoor=latest_outdoor,
+                )
         elif action is not None and current_session is not None:
-            _observe_active(current_session, event)
+            _observe_active(
+                current_session,
+                event,
+                call_states=call_states,
+                latest_outdoor=latest_outdoor,
+            )
             _close_session(current_session, event)
             sessions.append(current_session)
             active.pop(zone, None)
@@ -573,11 +635,28 @@ def _merge_session(base: Session, overlay: Session) -> None:
         base.end_temp_f = overlay.end_temp_f
     if base.observed_duration_s is None:
         base.observed_duration_s = overlay.observed_duration_s
+    if base.setpoint_change_ts is None:
+        base.setpoint_change_ts = overlay.setpoint_change_ts
+    if base.setpoint_change_event is None:
+        base.setpoint_change_event = overlay.setpoint_change_event
+    if base.setpoint_change_temp_f is None:
+        base.setpoint_change_temp_f = overlay.setpoint_change_temp_f
+    if base.setpoint_change_setpoint_f is None:
+        base.setpoint_change_setpoint_f = overlay.setpoint_change_setpoint_f
+    if base.setpoint_change_other_zones is None:
+        base.setpoint_change_other_zones = overlay.setpoint_change_other_zones
+    if base.setpoint_change_outdoor is None:
+        base.setpoint_change_outdoor = overlay.setpoint_change_outdoor
+    if base.intervention_target_crossing_ts is None:
+        base.intervention_target_crossing_ts = overlay.intervention_target_crossing_ts
+        base.intervention_target_event = overlay.intervention_target_event
     base.metadata.update(overlay.metadata)
     for event in overlay.source_start_events:
         _append_unique(base.source_start_events, event)
     for event in overlay.source_end_events:
         _append_unique(base.source_end_events, event)
+    for event in overlay.boundary_events:
+        _append_unique(base.boundary_events, event)
     if overlay.start_boundary_missing:
         base.outcome_types.add("missing_start_boundary")
     else:
@@ -649,7 +728,15 @@ def _apply_outcomes(
         _append_unique(session.outcome_events, event)
         if event.schema in {HEATING_TARGET_SCHEMA, COOLING_TARGET_SCHEMA}:
             session.outcome_types.add("target_reached")
-            if session.target_crossing_ts is None:
+            if (
+                session.setpoint_change_ts is not None
+                and event.timestamp is not None
+                and event.timestamp >= session.setpoint_change_ts
+            ):
+                if session.intervention_target_crossing_ts is None:
+                    session.intervention_target_crossing_ts = event.timestamp
+                    session.intervention_target_event = event
+            elif session.target_crossing_ts is None:
                 session.target_crossing_ts = event.timestamp
                 session.target_event = event
             if session.observed_duration_s is None:
@@ -769,6 +856,18 @@ def _experiment_metadata(run: dict[str, Any]) -> dict[str, Any]:
     return metadata
 
 
+def _setpoint_change_is_directional(
+    mode: str,
+    previous_setpoint_f: float | None,
+    new_setpoint_f: float | None,
+) -> bool:
+    if previous_setpoint_f is None or new_setpoint_f is None:
+        return False
+    if mode == "heat":
+        return new_setpoint_f - previous_setpoint_f > EPSILON
+    return previous_setpoint_f - new_setpoint_f > EPSILON
+
+
 def _marker_overlaps_session(run: dict[str, Any], session: Session) -> bool:
     interval = _experiment_interval(run)
     session_start = session.candidate_start_ts
@@ -778,6 +877,141 @@ def _marker_overlaps_session(run: dict[str, Any], session: Session) -> bool:
     session_end = session.end_ts or session_start
     tolerance = timedelta(seconds=EXPERIMENT_MARKER_MATCH_TOLERANCE_S)
     return session_start <= marker_end + tolerance and session_end >= marker_start - tolerance
+
+
+def _experiment_boundary(run: dict[str, Any], session: Session) -> dict[str, Any]:
+    """Describe how an exact marker aligns with one observed HVAC session."""
+
+    interval = _experiment_interval(run)
+    session_start = session.start_ts
+    candidate_start = session.candidate_start_ts
+    boundary: dict[str, Any] = {
+        "status": "unverified",
+        "type": "marker_overlap",
+        "role": "primary",
+        "marker_start_ts": None,
+        "marker_end_ts": None,
+        "session_start_ts": _iso(session_start),
+        "candidate_session_start_ts": _iso(candidate_start),
+        "session_end_ts": _iso(session.end_ts),
+        "intervention_start_ts": None,
+        "intervention_start_temp_f": None,
+        "intervention_start_setpoint_f": None,
+        "setpoint_change_ts": _iso(session.setpoint_change_ts),
+        "setpoint_change_temp_f": session.setpoint_change_temp_f,
+        "setpoint_change_setpoint_f": session.setpoint_change_setpoint_f,
+    }
+    if interval is None or candidate_start is None:
+        boundary["type"] = "unbounded_marker"
+        return boundary
+
+    marker_start, marker_end = interval
+    boundary["marker_start_ts"] = _iso(marker_start)
+    boundary["marker_end_ts"] = _iso(marker_end)
+    if run.get("confidence") != "exact":
+        boundary["status"] = "approximate"
+        boundary["type"] = "approximate_marker"
+        return boundary
+
+    change_ts = session.setpoint_change_ts
+    if change_ts is not None and marker_start <= change_ts <= marker_end:
+        if not _setpoint_change_is_directional(
+            session.mode,
+            session.start_setpoint_f,
+            session.setpoint_change_setpoint_f,
+        ):
+            boundary["status"] = "ambiguous"
+            boundary["type"] = "invalid_setpoint_change"
+            return boundary
+        if session.setpoint_change_temp_f is None:
+            boundary["status"] = "ambiguous"
+            boundary["type"] = "missing_intervention_temperature"
+            return boundary
+        boundary.update(
+            {
+                "status": "clean",
+                "type": "setpoint_change",
+                "alignment": "inside_marker",
+                "intervention_start_ts": _iso(change_ts),
+                "intervention_start_temp_f": session.setpoint_change_temp_f,
+                "intervention_start_setpoint_f": session.setpoint_change_setpoint_f,
+            }
+        )
+        return boundary
+
+    if (
+        change_ts is not None
+        and change_ts < marker_start
+        and marker_start - change_ts <= timedelta(seconds=EXPERIMENT_INTERVENTION_MATCH_TOLERANCE_S)
+    ):
+        boundary["status"] = "ambiguous"
+        boundary["type"] = "setpoint_change_before_marker"
+        boundary["alignment"] = "before_marker_tolerance"
+        return boundary
+
+    if (
+        session_start is not None
+        and not session.start_boundary_missing
+        and marker_start <= session_start <= marker_end
+    ):
+        delta = _directional_delta(session)
+        if delta is None:
+            boundary["status"] = "ambiguous"
+            boundary["type"] = "missing_intervention_measurement"
+            return boundary
+        if delta < -EPSILON:
+            boundary["status"] = "ambiguous"
+            boundary["type"] = "invalid_setpoint_change"
+            return boundary
+        if delta <= EPSILON:
+            boundary["status"] = "ambiguous"
+            boundary["type"] = "already_at_target"
+            return boundary
+        boundary.update(
+            {
+                "status": "clean",
+                "type": "session_start",
+                "alignment": "session_start_inside_marker",
+                "intervention_start_ts": _iso(session_start),
+                "intervention_start_temp_f": session.start_temp_f,
+                "intervention_start_setpoint_f": session.start_setpoint_f,
+            }
+        )
+        return boundary
+
+    if candidate_start < marker_start:
+        boundary["type"] = "marker_inside_session"
+    elif candidate_start > marker_end:
+        boundary["type"] = "session_outside_marker"
+    return boundary
+
+
+def _rebase_session_to_intervention(session: Session) -> None:
+    """Use an observed setpoint transition as the row boundary for a test."""
+
+    if session.rebased_to_intervention:
+        return
+    if (
+        session.setpoint_change_ts is None
+        or session.setpoint_change_temp_f is None
+        or session.setpoint_change_setpoint_f is None
+    ):
+        return
+
+    session.start_ts = session.setpoint_change_ts
+    session.start_temp_f = session.setpoint_change_temp_f
+    session.start_setpoint_f = session.setpoint_change_setpoint_f
+    session.start_other_zones = session.setpoint_change_other_zones
+    session.start_outdoor = session.setpoint_change_outdoor
+    session.start_boundary_missing = False
+    session.target_crossing_ts = session.intervention_target_crossing_ts
+    session.target_event = session.intervention_target_event
+    session.observed_duration_s = (
+        round((session.end_ts - session.start_ts).total_seconds(), 3)
+        if session.end_ts is not None and session.end_ts > session.start_ts
+        else None
+    )
+    session.rebased_to_intervention = True
 
 
 def _apply_experiment_markers(
@@ -796,21 +1030,60 @@ def _apply_experiment_markers(
         ):
             continue
         metadata = _experiment_metadata(run)
-        for session in sessions:
-            if (
-                session.mode != mode
-                or session.zone not in active_zones
-                or not _marker_overlaps_session(run, session)
-            ):
+        for zone in active_zones:
+            matching = sorted(
+                (
+                    session
+                    for session in sessions
+                    if session.mode == mode
+                    and session.zone == zone
+                    and _marker_overlaps_session(run, session)
+                ),
+                key=lambda session: (
+                    session.candidate_start_ts is None,
+                    session.candidate_start_ts or datetime.max.replace(tzinfo=UTC),
+                ),
+            )
+            if not matching:
                 continue
-            existing_id = session.metadata.get("experiment_id")
-            marker_id = metadata.get("experiment_id")
-            if existing_id is not None and existing_id != marker_id:
-                session.outcome_types.add("multiple_experiment_markers")
-                continue
-            session.metadata.update(metadata)
-            for event in run["marker_events"]:
-                _append_unique(session.experiment_marker_events, event)
+
+            boundaries = [(session, _experiment_boundary(run, session)) for session in matching]
+            clean = [item for item in boundaries if item[1]["status"] == "clean"]
+            candidates = clean or boundaries
+            primary = min(
+                candidates,
+                key=lambda item: (
+                    _parse_timestamp(item[1].get("intervention_start_ts"))
+                    or item[0].candidate_start_ts
+                    or datetime.max.replace(tzinfo=UTC),
+                ),
+            )[0]
+
+            for index, (session, boundary) in enumerate(boundaries, start=1):
+                existing_id = session.metadata.get("experiment_id")
+                marker_id = metadata.get("experiment_id")
+                if existing_id is not None and existing_id != marker_id:
+                    session.outcome_types.add("multiple_experiment_markers")
+                    continue
+
+                is_primary = session is primary
+                primary_status = boundary["status"]
+                primary_type = boundary["type"]
+                boundary["role"] = "primary" if is_primary else "continuation"
+                boundary["sequence_index"] = index
+                if not is_primary:
+                    boundary["primary_status"] = primary_status
+                    boundary["status"] = "continuation"
+                    boundary["type"] = "follow_on_session"
+
+                session_metadata = dict(metadata)
+                session_metadata["boundary"] = boundary
+                session.metadata.update(session_metadata)
+                for event in run["marker_events"]:
+                    _append_unique(session.experiment_marker_events, event)
+
+                if is_primary and primary_status == "clean" and primary_type == "setpoint_change":
+                    _rebase_session_to_intervention(session)
 
 
 def _local_minute(timestamp: datetime | None, timezone: ZoneInfo) -> int | None:
@@ -848,7 +1121,7 @@ def _runtime_status(session: Session) -> str:
 
 
 def _setpoint_changed_before_target(session: Session) -> bool:
-    if session.setpoint_change_ts is None:
+    if session.rebased_to_intervention or session.setpoint_change_ts is None:
         return False
     return (
         session.target_crossing_ts is None
@@ -878,12 +1151,26 @@ def _quality_flags(
         flags.add("invalid_target_inputs")
     if runtime_status == "invalid_timestamp":
         flags.add("invalid_session_timestamps")
+    experiment = session.metadata.get("experiment")
+    boundary = session.metadata.get("boundary")
+    if not isinstance(boundary, dict) and isinstance(experiment, dict):
+        boundary = experiment.get("boundary")
+    if isinstance(boundary, dict):
+        if boundary.get("role") == "continuation":
+            flags.add("experiment_follow_on_cycle")
+        elif boundary.get("status") != "clean":
+            flags.add("experiment_boundary_unverified")
     return sorted(flags)
 
 
 def _source_events(session: Session) -> list[SourceEvent]:
     events: list[SourceEvent] = []
-    for event in session.source_start_events + session.source_end_events + session.outcome_events:
+    for event in (
+        session.source_start_events
+        + session.source_end_events
+        + session.boundary_events
+        + session.outcome_events
+    ):
         _append_unique(events, event)
     if session.start_outdoor is not None:
         _append_unique(events, session.start_outdoor.event)
