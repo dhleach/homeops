@@ -6,6 +6,9 @@
 # used only for the existing dashboard ownership repair and Nginx validation.
 #
 # Revision history:
+#   2026-09-24  Activate Prometheus configuration and Grafana provisioning
+#               changes only when their tracked inputs changed, while keeping
+#               dashboard JSON updates on the existing file-provider reload path.
 #   2026-08-27  Refresh the OpenAI Luna credential and explicit diagnostic
 #               provider selection alongside the retained Gemini rollback key;
 #               this keeps the provider switch in the existing EC2 deploy path
@@ -136,7 +139,124 @@ wait_for_backend() {
   return 1
 }
 
+wait_for_observability_service() {
+  local service="$1"
+  local url="$2"
+  local label="$3"
+  local attempts="$4"
+  local delay_seconds="$5"
+  local timeout_seconds="$6"
+  local attempt
+
+  if ! [[ "$attempts" =~ ^[1-9][0-9]*$ ]]; then
+    echo "${label} readiness attempts must be a positive integer: $attempts" >&2
+    return 2
+  fi
+
+  for ((attempt = 1; attempt <= attempts; attempt++)); do
+    if curl --fail --silent --show-error --max-time "$timeout_seconds" \
+      "$url" >/dev/null; then
+      echo "${label} readiness check passed on attempt $attempt/$attempts"
+      return 0
+    fi
+
+    if ((attempt < attempts)); then
+      echo "${label} not ready; retrying in ${delay_seconds}s (attempt $attempt/$attempts)" >&2
+      sleep "$delay_seconds"
+    fi
+  done
+
+  echo "${label} did not become ready after $attempts attempts: $url" >&2
+  echo "--- docker compose ps $service ---" >&2
+  docker compose ps "$service" >&2 || true
+  echo "--- docker compose logs --tail=100 $service ---" >&2
+  docker compose logs --tail=100 "$service" >&2 || true
+  return 1
+}
+
+wait_for_prometheus() {
+  wait_for_observability_service \
+    prometheus \
+    "${HOMEOPS_PROMETHEUS_READINESS_URL:-http://127.0.0.1:9090/-/ready}" \
+    Prometheus \
+    "${HOMEOPS_PROMETHEUS_READINESS_ATTEMPTS:-15}" \
+    "${HOMEOPS_PROMETHEUS_READINESS_DELAY_SECONDS:-2}" \
+    "${HOMEOPS_PROMETHEUS_READINESS_TIMEOUT_SECONDS:-10}"
+}
+
+wait_for_grafana() {
+  wait_for_observability_service \
+    grafana \
+    "${HOMEOPS_GRAFANA_HEALTH_URL:-http://127.0.0.1:3000/api/health}" \
+    Grafana \
+    "${HOMEOPS_GRAFANA_READINESS_ATTEMPTS:-15}" \
+    "${HOMEOPS_GRAFANA_READINESS_DELAY_SECONDS:-2}" \
+    "${HOMEOPS_GRAFANA_READINESS_TIMEOUT_SECONDS:-10}"
+}
+
+observability_targets() {
+  local changed_files="$1"
+
+  PROMETHEUS_CONFIG_CHANGED=0
+  GRAFANA_PROVISIONING_CHANGED=0
+  GRAFANA_DASHBOARDS_CHANGED=0
+
+  # A Compose-file change can affect image, command, environment, or mounts for
+  # either service, so recreate both observability services conservatively.
+  if grep -Eq '^(dashboard/prometheus/|dashboard/docker-compose\.yml$)' <<<"$changed_files"; then
+    PROMETHEUS_CONFIG_CHANGED=1
+  fi
+  if grep -Eq '^(dashboard/grafana/provisioning/|dashboard/docker-compose\.yml$)' <<<"$changed_files"; then
+    GRAFANA_PROVISIONING_CHANGED=1
+  fi
+  if grep -Eq '^dashboard/grafana/dashboards/' <<<"$changed_files"; then
+    GRAFANA_DASHBOARDS_CHANGED=1
+  fi
+}
+
+activate_observability() {
+  local prometheus_changed="$1"
+  local grafana_provisioning_changed="$2"
+  local grafana_dashboards_changed="$3"
+  local actions=()
+
+  if [[ "$prometheus_changed" == "1" ]]; then
+    echo "Prometheus inputs changed; validating configuration"
+    docker compose run --rm --no-deps --entrypoint promtool \
+      prometheus check config /etc/prometheus/prometheus.yml
+    docker compose up -d --force-recreate prometheus
+    if ! wait_for_prometheus; then
+      return 1
+    fi
+    actions+=("prometheus")
+  fi
+
+  if [[ "$grafana_provisioning_changed" == "1" ]]; then
+    echo "Grafana provisioning inputs changed; recreating Grafana"
+    docker compose up -d --force-recreate grafana
+    if ! wait_for_grafana; then
+      return 1
+    fi
+    actions+=("grafana")
+  fi
+
+  if [[ "$grafana_dashboards_changed" == "1" ]]; then
+    echo "Grafana dashboard JSON changed; file-provider reload will be verified by the public smoke check"
+    actions+=("grafana-dashboard-provider")
+  fi
+
+  if ((${#actions[@]} == 0)); then
+    OBSERVABILITY_SUMMARY="none"
+    echo "No Prometheus or Grafana service activation required"
+  else
+    OBSERVABILITY_SUMMARY="${actions[*]}"
+    echo "Observability activation complete: ${OBSERVABILITY_SUMMARY}"
+  fi
+}
+
 deploy() {
+  local previous_sha deployed_sha changed_files
+
   if [[ "$(git -C "$REPO_DIR" branch --show-current)" != "$BRANCH" ]]; then
     echo "Expected $REPO_DIR to be on $BRANCH" >&2
     exit 1
@@ -147,12 +267,20 @@ deploy() {
     exit 1
   fi
 
+  previous_sha="$(git -C "$REPO_DIR" rev-parse HEAD)"
   git -C "$REPO_DIR" fetch --prune origin "$BRANCH"
   git -C "$REPO_DIR" merge --ff-only "origin/$BRANCH"
+  deployed_sha="$(git -C "$REPO_DIR" rev-parse HEAD)"
+  changed_files="$(git -C "$REPO_DIR" diff --name-only "$previous_sha" "$deployed_sha")"
+  observability_targets "$changed_files"
 
   write_runtime_env
 
   cd "$REPO_DIR/dashboard"
+  activate_observability \
+    "$PROMETHEUS_CONFIG_CHANGED" \
+    "$GRAFANA_PROVISIONING_CHANGED" \
+    "$GRAFANA_DASHBOARDS_CHANGED"
   docker compose up -d --build --force-recreate backend
 
   # Docker can create root-owned bind-mounted directories. Keep the checked-out
@@ -170,7 +298,7 @@ deploy() {
   sudo -n nginx -t
 
   DEPLOYED_SHA="$(git -C "$REPO_DIR" rev-parse --short HEAD)"
-  echo "EC2 backend deploy complete: $DEPLOYED_SHA ($BRANCH); backend healthy; Nginx config valid"
+  echo "EC2 deploy complete: $DEPLOYED_SHA ($BRANCH); observability: $OBSERVABILITY_SUMMARY; backend healthy; Nginx config valid"
 }
 
 if [[ "${HOMEOPS_DEPLOY_EC2_LIB_ONLY:-0}" != "1" ]]; then
