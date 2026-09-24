@@ -2,6 +2,8 @@
 # Focused tests for the EC2 deployment readiness gate.
 #
 # Revision history:
+#   2026-09-24  Added changed-path targeting and fail-closed observability
+#               activation coverage for Prometheus and Grafana.
 #   2026-08-27  Added coverage for the OpenAI Luna credential and explicit
 #               provider selection written by the EC2 runtime refresh.
 #   2026-08-21  Added coverage for the SSM-backed runtime environment refresh so
@@ -89,3 +91,66 @@ grep -q '^ASK_HOMEOPS_DIAGNOSTIC_PROVIDER=openai$' "$REPO_DIR/dashboard/.env"
 grep -q '^ASK_HOMEOPS_LIMITER_BACKEND=redis$' "$REPO_DIR/dashboard/.env"
 grep -q '^ASK_HOMEOPS_OIDC_AUDIENCE_CLAIM=client_id$' "$REPO_DIR/dashboard/.env"
 printf '%s\n' "PASS: runtime environment refresh writes protected auth/Valkey settings"
+
+observability_targets $'dashboard/backend/main.py\nservices/consumer/metrics.py'
+[[ "$PROMETHEUS_CONFIG_CHANGED" == "0" ]]
+[[ "$GRAFANA_PROVISIONING_CHANGED" == "0" ]]
+[[ "$GRAFANA_DASHBOARDS_CHANGED" == "0" ]]
+
+observability_targets $'dashboard/prometheus/prometheus.yml'
+[[ "$PROMETHEUS_CONFIG_CHANGED" == "1" ]]
+[[ "$GRAFANA_PROVISIONING_CHANGED" == "0" ]]
+[[ "$GRAFANA_DASHBOARDS_CHANGED" == "0" ]]
+
+observability_targets $'dashboard/grafana/dashboards/daily-summary.json'
+[[ "$PROMETHEUS_CONFIG_CHANGED" == "0" ]]
+[[ "$GRAFANA_PROVISIONING_CHANGED" == "0" ]]
+[[ "$GRAFANA_DASHBOARDS_CHANGED" == "1" ]]
+
+observability_targets $'dashboard/grafana/provisioning/datasources/prometheus.yml'
+[[ "$PROMETHEUS_CONFIG_CHANGED" == "0" ]]
+[[ "$GRAFANA_PROVISIONING_CHANGED" == "1" ]]
+[[ "$GRAFANA_DASHBOARDS_CHANGED" == "0" ]]
+
+observability_targets $'dashboard/docker-compose.yml'
+[[ "$PROMETHEUS_CONFIG_CHANGED" == "1" ]]
+[[ "$GRAFANA_PROVISIONING_CHANGED" == "1" ]]
+printf '%s\n' "PASS: observability changed-path targeting"
+
+unset -f curl sleep docker
+observability_docker_commands=()
+curl() {
+  return 0
+}
+sleep() {
+  :
+}
+docker() {
+  observability_docker_commands+=("$*")
+}
+
+HOMEOPS_PROMETHEUS_READINESS_ATTEMPTS=1
+HOMEOPS_GRAFANA_READINESS_ATTEMPTS=1
+activate_observability 1 1 0
+[[ "${observability_docker_commands[0]}" == "compose run --rm --no-deps --entrypoint promtool prometheus check config /etc/prometheus/prometheus.yml" ]]
+[[ "${observability_docker_commands[1]}" == "compose up -d --force-recreate prometheus" ]]
+[[ "${observability_docker_commands[2]}" == "compose up -d --force-recreate grafana" ]]
+printf '%s\n' "PASS: observability services validate, recreate, and become ready"
+
+observability_docker_commands=()
+activate_observability 0 0 1
+[[ "${#observability_docker_commands[@]}" == "0" ]]
+[[ "$OBSERVABILITY_SUMMARY" == "grafana-dashboard-provider" ]]
+printf '%s\n' "PASS: dashboard JSON keeps the file-provider reload path"
+
+curl() {
+  return 7
+}
+HOMEOPS_PROMETHEUS_READINESS_ATTEMPTS=1
+if activate_observability 1 0 0; then
+  echo "Prometheus readiness failure unexpectedly passed" >&2
+  exit 1
+fi
+[[ "${observability_docker_commands[2]}" == "compose ps prometheus" ]]
+[[ "${observability_docker_commands[3]}" == "compose logs --tail=100 prometheus" ]]
+printf '%s\n' "PASS: Prometheus readiness failure fails closed"

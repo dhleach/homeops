@@ -17,10 +17,16 @@ concurrency group. A push to `master` runs:
    workflow falls back to the current public EIP `32.194.69.77` only when the
    private interface cannot be resolved.
    - It fast-forwards `/home/ubuntu/homeops`.
+   - It compares the old and new revisions and activates only the affected
+     observability inputs: Prometheus configuration is validated and the
+     Prometheus service is recreated; Grafana provisioning or Compose changes
+     recreate Grafana; dashboard JSON remains on the file-provider reload path.
    - It rebuilds/recreates the FastAPI backend container.
-   - It checks the container, waits with a bounded retry loop for
+   - It checks the affected services and backend, waits with bounded retry
+     loops for their readiness, checks
      `http://127.0.0.1:8000/health`, and checks Nginx syntax. If the backend
-     never becomes ready, it prints the container state and recent backend logs.
+     or an activated observability service never becomes ready, it prints the
+     relevant container state and recent logs.
 4. `scripts/deploy_smoke_check.py` verifies the public frontend, API,
    telemetry, Grafana, and Prometheus interfaces. Pass
    `--check-bob-evaluation` after the CloudFront route is provisioned to also
@@ -157,8 +163,9 @@ fingerprint before rerunning the release workflow.
 
 - A Pi failure stops the sequence before EC2 is changed.
 - An EC2 host-local health failure stops before the public smoke check. The
-  backend readiness check tolerates a cold Uvicorn start but fails closed after
-  its bounded retry window, including recent container diagnostics.
+  Prometheus/Grafana activation checks and backend readiness check tolerate
+  cold starts but fail closed after their bounded retry windows, including
+  recent container diagnostics.
 - A public smoke failure fails the GitHub Actions run even if the SSH commands
   completed. Inspect the failing URL, then check the deployed SHA and service
   status on the affected host.
