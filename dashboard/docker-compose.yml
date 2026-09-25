@@ -36,6 +36,9 @@ services:
       - OPENAI_INPUT_COST_USD_PER_MILLION_TOKENS
       - OPENAI_OUTPUT_COST_USD_PER_MILLION_TOKENS
       - FLEET_DEPLOY_STATE_PATH=/var/lib/homeops/deploy-demo/fleet-state.sqlite3
+      # Dedicated Fleet Deploy Lab management credential; never expose this
+      # backend-only value to the browser or reuse a HomeOps/HA credential.
+      - FLEET_DEPLOY_API_KEY
     volumes:
       - fleet_deploy_state:/var/lib/homeops/deploy-demo
 

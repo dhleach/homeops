@@ -12,6 +12,12 @@ interface at `https://api.homeops.now`.
 | `GET /health` | Process liveness; returns `{"status":"ok"}` |
 | `GET /api/current-temps` | Current floor/outdoor temperatures, setpoints, heating/cooling calls, inferred AC state, per-zone action, and freshness timestamp |
 | `POST /api/diagnostic` | Authenticated GPT-5.6 Luna-backed HVAC diagnostic using live Prometheus context |
+| `GET /deploy/api/health` | Read-only Fleet Deploy Lab simulator readiness |
+| `GET /deploy/api/fleet` | Anonymous desired/observed state for all twelve explicitly simulated targets |
+| `GET /deploy/api/fleet/{target_id}` | Anonymous read of one simulated target |
+| `GET /deploy/api/deployments/{deployment_id}` | Anonymous fresh deployment state and verification result |
+| `POST /deploy/api/deployments` | Protected desired-state queue operation |
+| `POST /deploy/api/deployments/{deployment_id}/apply` | Protected simulator apply/observation operation; safe to replay |
 | `GET /metrics` | Internal diagnostic abuse/cost metrics for EC2-local Prometheus; not a public route |
 | `GET /openapi.json` | Generated API contract |
 
@@ -112,6 +118,31 @@ started by Compose. Configure OIDC with `ASK_HOMEOPS_OIDC_ISSUER`,
 `ASK_HOMEOPS_TRUSTED_PROXY_IPS` and the hop count with
 `ASK_HOMEOPS_TRUSTED_PROXY_HOPS`.
 
+## Fleet Deploy Lab API boundary
+
+The Fleet Deploy Lab is a separate simulator control plane. Every fleet read
+returns `simulated: true`, `target_kind: "simulated"`, and explicit target
+labels (`TEST-01` through `PROD-04`). Each target keeps `desired` and
+`observed` profiles, their SHA-256 digests, deployment status, and the active
+deployment ID separate so a queued or failed operation cannot look successful.
+
+The management endpoints accept only
+`Authorization: Bearer <FLEET_DEPLOY_API_KEY>`. The backend reads that value
+from the dedicated `FLEET_DEPLOY_API_KEY` environment variable and fails closed
+with `503` when it is not configured; invalid or missing credentials receive
+`401`. This is deliberately not the Cognito/OIDC diagnostic credential, a Home
+Assistant token, or a normal Pi/EC2 deployment secret. Compose passes the value
+only to the backend; it is not a frontend/Vite variable and must never reach a
+browser.
+
+`POST /deploy/api/deployments` validates the exact shared `DeploymentSpec`
+contract and records desired state. The protected `/apply` operation moves the
+simulator through `applying` and atomically copies desired profiles to observed
+profiles. Replaying an already successful apply is a read-only idempotent
+response. Public deployment reads expose `verification: "pending"`,
+`"verified"`, or `"failed"` plus the fresh target snapshots for a deployer or
+UI to verify digest, color, shape, and status.
+
 The active production topology, ports, public routes, internal scrape target, and release checks are
 documented in [`docs/architecture.md`](../../docs/architecture.md) and
 [`docs/deployment.md`](../../docs/deployment.md).
@@ -124,6 +155,6 @@ image from the repository root so the package is present in the backend image,
 mounts the named `fleet_deploy_state` volume at
 `/var/lib/homeops/deploy-demo`, and sets
 `FLEET_DEPLOY_STATE_PATH` to the SQLite file inside that volume. This is a
-demo control-plane store only; PR 03 does not expose routes or alter HVAC,
-telemetry, diagnostic, or normal HomeOps deployment behavior. The state store
-must never be moved to an image-local path or an unpersisted Valkey key.
+demo control-plane store only; the Fleet API does not alter HVAC, telemetry,
+diagnostic, or normal HomeOps deployment behavior. The state store must never
+be moved to an image-local path or an unpersisted Valkey key.
