@@ -200,3 +200,15 @@ Infrastructure contract for this PR:
   remains the merge authority.
 - Safety gate: no deployment workflow changes and no production resource
   replacement.
+
+## PR 02 — canonical deployment contract
+
+PR 02 adds the dependency-free `deploy_demo.deployment_spec` package and its
+focused regression suite. It is the single validator/serializer that later
+API, workflow, deployer, and UI work must reuse. The human-readable contract,
+target inventory, enum compatibility, canonical JSON examples, provenance
+boundary, and browser trust boundary are documented in
+[`deployment-contract.md`](deployment-contract.md).
+
+This PR does not add a public route, persistence, credentials, GitHub Actions
+workflow, deployer behavior, Terraform, or production deployment behavior.
