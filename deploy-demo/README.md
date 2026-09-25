@@ -1,9 +1,9 @@
 # Fleet Deploy Lab integration map
 
-Status: PR 01 discovery snapshot
+Status: PR 03 durable simulated-fleet state boundary
 Repository: `dhleach/homeops`
 Default branch: `master`
-Snapshot commit: `20e540b`
+Base integration snapshot: `d4ecae1`
 GitHub issue: https://github.com/dhleach/homeops/issues/328
 
 This document records the real HomeOps integration points for the Fleet Deploy
@@ -77,7 +77,7 @@ frontend workflow; it must not be published as an unrelated static site.
 | Concern | Source of truth | Production path |
 | --- | --- | --- |
 | FastAPI application | `dashboard/backend/main.py` | Uvicorn on port 8000 inside host-networked Docker Compose |
-| Backend image | `dashboard/backend/Dockerfile` | Currently copies only `main.py` and `security.py`; new modules require an explicit Dockerfile update |
+| Backend image | `dashboard/backend/Dockerfile` | Explicitly copies the FastAPI files and shared `deploy_demo` package from the repository-root build context |
 | Backend Compose | `dashboard/docker-compose.yml` | `backend`, `valkey`, `prometheus`, and `grafana` services |
 | Public edge | `dashboard/nginx/api.homeops.now.conf` | TLS Nginx on `api.homeops.now`, default location proxies to `localhost:8000` |
 | Backend deployment | `deploy/deploy-ec2.sh` | Fast-forward EC2 checkout, refresh runtime env, rebuild/recreate backend, wait for `/health`, validate Nginx |
@@ -130,15 +130,10 @@ must therefore be explicitly verified before enabling public dispatch.
 
 ## State and persistence findings
 
-The existing Compose file persists Prometheus and Grafana data in named Docker
-volumes. The backend has no data volume. Valkey is configured with snapshots and
-AOF disabled, so it is not a durable store for deployment records or simulator
-state.
-
-PR 03 must choose and test one of these explicit boundaries:
-
-- a named Docker volume for a small SQLite deployment/simulator store; or
-- an explicitly host-managed state directory outside the Git checkout.
+The original integration snapshot had no backend data volume. PR 03 now uses a
+named Docker volume for a small SQLite deployment/simulator store. Valkey is
+configured with snapshots and AOF disabled, so it remains unsuitable as the
+durable store for deployment records or simulator state.
 
 The state must survive backend/container recreation and preserve pending,
 desired, observed, failed, and rollback states. A database file inside the
@@ -184,7 +179,8 @@ Terraform action in its PR and handoff.
   credential; do not describe master as protected until the repository setting
   is verified.
 - The current backend Dockerfile and CI workflow use explicit file lists, so
-  later demo modules and tests must be materialized into both surfaces.
+  later demo modules and tests must be materialized into both surfaces. PR 03
+  adds the state module and its focused tests to those lists.
 
 ## PR 01 disposition
 
@@ -212,3 +208,37 @@ boundary, and browser trust boundary are documented in
 
 This PR does not add a public route, persistence, credentials, GitHub Actions
 workflow, deployer behavior, Terraform, or production deployment behavior.
+
+## PR 03 — durable simulated-fleet state
+
+PR 03 adds the dependency-free [`deploy_demo.fleet_state`](../deploy_demo/fleet_state.py)
+store. It seeds twelve fixed logical vehicles—`TEST-01` through `PROD-04`—with
+readable baseline profiles and keeps the requested (`desired`) profile separate
+from the last confirmed (`observed`) profile.
+
+The store records deployment IDs, canonical profile SHA-256 digests, target
+sets, queued/applying/succeeded/failed status, and bounded failure text. A
+queue operation and its target updates run in one SQLite `BEGIN IMMEDIATE`
+transaction. Replaying the same deployment ID and profile digest is a no-op;
+reusing the ID with a different profile or target set fails closed. A failed
+deployment leaves observed state unchanged so a pending or failed card can
+honestly show the desired/observed divergence. A successful transition copies
+desired profiles to observed state atomically.
+
+The production Compose wiring mounts the database at the named
+`fleet_deploy_state` volume and passes
+`FLEET_DEPLOY_STATE_PATH=/var/lib/homeops/deploy-demo/fleet-state.sqlite3` to
+the backend. The backend image copies the shared `deploy_demo` package from
+the repository root. Recreating the backend container therefore reopens the
+same database instead of creating an image-local file. The state module remains
+API-independent; PR 04 adds the public read and protected management routes.
+
+## PR 03 disposition
+
+- Terraform apply required: **No**
+- Manual console setup: **None**
+- Terraform resources changed: **None**
+- Sequence and owner: Derek reviews and merges the implementation PR; the
+  named Docker volume is created by Compose on the normal backend deployment.
+- Safety gate: no Home Assistant, thermostat, production deployment, public
+  route, credential, or Terraform behavior changes.

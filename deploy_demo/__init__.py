@@ -15,6 +15,23 @@ from .deployment_spec import (
     expand_targets,
     validate_deployment_spec,
 )
+from .fleet_state import (
+    DEFAULT_STATE_PATH,
+    DEPLOYMENT_STATUSES,
+    STATE_PATH_ENV,
+    STATE_SCHEMA_VERSION,
+    VEHICLE_STATUSES,
+    DeploymentConflictError,
+    DeploymentState,
+    FleetProfile,
+    FleetStateError,
+    FleetStateStore,
+    InvalidStateTransitionError,
+    QueueResult,
+    UnknownDeploymentError,
+    UnknownTargetError,
+    VehicleState,
+)
 
 __all__ = [
     "COLORS",
@@ -30,4 +47,19 @@ __all__ = [
     "canonicalize_deployment_spec",
     "expand_targets",
     "validate_deployment_spec",
+    "DEFAULT_STATE_PATH",
+    "DEPLOYMENT_STATUSES",
+    "STATE_PATH_ENV",
+    "STATE_SCHEMA_VERSION",
+    "VEHICLE_STATUSES",
+    "DeploymentConflictError",
+    "DeploymentState",
+    "FleetProfile",
+    "FleetStateError",
+    "FleetStateStore",
+    "InvalidStateTransitionError",
+    "QueueResult",
+    "UnknownDeploymentError",
+    "UnknownTargetError",
+    "VehicleState",
 ]
