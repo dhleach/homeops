@@ -13,13 +13,23 @@ import hmac
 import logging
 import os
 import sqlite3
+import sys
+from pathlib import Path
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, ConfigDict, Field
 
-from deploy_demo import (
+# The backend is imported as a top-level module by the CI test runner and by
+# local ``uvicorn main:app`` commands.  Make the repository-root package
+# importable in that mode while remaining a no-op inside the `/app` image,
+# where `deploy_demo` already sits beside this module.
+_REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+if (_REPOSITORY_ROOT / "deploy_demo").is_dir() and str(_REPOSITORY_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPOSITORY_ROOT))
+
+from deploy_demo import (  # noqa: E402
     DeploymentConflictError,
     DeploymentSpecError,
     DeploymentState,
