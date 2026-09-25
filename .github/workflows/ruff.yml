@@ -35,6 +35,8 @@ jobs:
             services/insights/rules/tests/test_outdoor_temperature_storm.py \
             services/insights/rules/tests/test_rule_enablement.py \
             dashboard/backend/main.py dashboard/backend/security.py dashboard/backend/tests/test_security.py \
+            deploy_demo/__init__.py deploy_demo/__main__.py deploy_demo/deployment_spec.py \
+            deploy_demo/tests/test_deployment_spec.py \
             scripts/deploy_smoke_check.py scripts/test_counts.py scripts/validate_anomalies.py \
             scripts/analyze_multi_zone_impact.py scripts/floor_hourly_heatmap.py scripts/floor_runtime_trend.py \
             scripts/furnace_temp_scatter.py scripts/generate_report.py scripts/runtime_temp_anomalies.py \
@@ -77,6 +79,8 @@ jobs:
             services/insights/rules/tests/test_outdoor_temperature_storm.py \
             services/insights/rules/tests/test_rule_enablement.py \
             dashboard/backend/main.py dashboard/backend/security.py dashboard/backend/tests/test_security.py \
+            deploy_demo/__init__.py deploy_demo/__main__.py deploy_demo/deployment_spec.py \
+            deploy_demo/tests/test_deployment_spec.py \
             scripts/deploy_smoke_check.py scripts/test_counts.py scripts/validate_anomalies.py \
             scripts/analyze_multi_zone_impact.py scripts/floor_hourly_heatmap.py scripts/floor_runtime_trend.py \
             scripts/furnace_temp_scatter.py scripts/generate_report.py scripts/runtime_temp_anomalies.py \
@@ -136,6 +140,7 @@ jobs:
             services/consumer/tests \
             services/insights/rules/tests \
             dashboard/backend/tests \
+            deploy_demo/tests \
             scripts/tests
       - name: Run frontend tests
         working-directory: dashboard/frontend
