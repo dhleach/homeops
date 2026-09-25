@@ -1,10 +1,10 @@
 # Fleet Deploy Lab integration map
 
-Status: PR 04 public reads and protected simulated-fleet management API
+Status: PR 05 responsive `/deploy` fleet view on top of the merged PR 04 API
 Repository: `dhleach/homeops`
 Default branch: `master`
-Latest integration snapshot: `57473f5`
-GitHub issue: https://github.com/dhleach/homeops/issues/334
+Latest integration snapshot: `dbfcf80`
+GitHub issue: https://github.com/dhleach/homeops/issues/336
 
 This document records the real HomeOps integration points for the Fleet Deploy
 Lab as the implementation advances. It is deliberately specific about what
@@ -27,9 +27,9 @@ normal HomeOps Pi, EC2, frontend, and observability deployments remain separate.
 
 | Surface | Current path | Current owner | Current behavior | Fleet Deploy Lab target |
 | --- | --- | --- | --- | --- |
-| Public frontend | `https://homeops.now/deploy` | CloudFront → private S3 → React/Vite SPA | Returns HTTP 200 and the existing SPA shell. `App.jsx` does not currently route on `window.location.pathname`, so it renders the existing HVAC dashboard. | PR 05 adds a route-aware Fleet Deploy view without changing existing routes. |
+| Public frontend | `https://homeops.now/deploy` | CloudFront → private S3 → React/Vite SPA | CloudFront already serves the SPA shell for this path. PR 05 adds route-aware rendering, a read-only fleet snapshot, and responsive TEST/STAGE/PROD cards without changing the existing HVAC route. | The frontend build publishes the Fleet Deploy view after PR 05 merges. |
 | Existing backend liveness | `https://api.homeops.now/health` | Nginx → FastAPI | Returns `{"status":"ok"}`. | Remains the process liveness check. |
-| Fleet demo health | `https://api.homeops.now/deploy/api/health` | Nginx → FastAPI | Implemented in the PR 04 backend; production remains 404 until this PR is merged and deployed. | Public simulator readiness and target-count check. |
+| Fleet demo health | `https://api.homeops.now/deploy/api/health` | Nginx → FastAPI | Implemented by merged PR 04; availability follows the normal backend deployment. | Public simulator readiness and target-count check. |
 | Existing telemetry | `https://api.homeops.now/api/current-temps` | FastAPI → EC2-local Prometheus | Current production telemetry contract. | Must remain unchanged. |
 | Existing diagnostic | `https://api.homeops.now/api/diagnostic` | FastAPI → authenticated provider path | Authenticated, quota-limited, read-only HVAC diagnostics. | Must remain separate from Fleet Deploy credentials and state. |
 
@@ -42,8 +42,9 @@ configuration. Nginx already proxies the default API location and allows
 ### Route smoke contract
 
 The following checks are the intended public smoke contract. The first two are
-valid now; the Fleet route is implemented in this branch but remains 404 on the
-currently deployed production backend until PR 04 is merged and deployed.
+valid now; the Fleet route becomes the read-only view from this PR after the
+frontend deployment, while the API availability follows the merged PR 04
+backend deployment.
 
 ```bash
 curl -fsS https://homeops.now/deploy >/dev/null
@@ -52,9 +53,9 @@ curl -fsS https://api.homeops.now/deploy/api/health
 ```
 
 For a discovery-only run against the current production deployment, the third
-check should be recorded as “not yet implemented,” not silently treated as a
-working endpoint. After PR 04 is deployed, it becomes a required 200/readiness
-check, followed by the anonymous `/deploy/api/fleet` read.
+check should be recorded as unavailable only when the backend deployment has
+not yet completed. Once PR 04 is deployed, it is a required 200/readiness check,
+followed by the anonymous `/deploy/api/fleet` read.
 
 ## Frontend and hosting boundary
 
@@ -68,11 +69,11 @@ check, followed by the anonymous `/deploy/api/fleet` read.
 | SPA routing | CloudFront Function `homeops-spa-router-production` | Extensionless paths are rewritten to `/index.html`; `/bob/evals` has an explicit static exception |
 | Frontend smoke | `scripts/deploy_smoke_check.py` | Runs after the frontend workflow and checks the public site/API surfaces |
 
-CloudFront already makes `/deploy` reachable as an SPA path; PR 01 does not
-need a new DNS record, S3 origin, certificate, or Terraform route. The
-frontend application still needs explicit route-aware rendering. A new
-frontend module or route must be included in the existing Vite build and
-frontend workflow; it must not be published as an unrelated static site.
+CloudFront already makes `/deploy` reachable as an SPA path; no new DNS record,
+S3 origin, certificate, or Terraform route is needed. The frontend application
+now performs the explicit route-aware rendering in `App.jsx` and
+`FleetDeployView.jsx`. The module is included in the existing Vite build and
+frontend workflow; it is not published as an unrelated static site.
 
 ## Backend and API boundary
 

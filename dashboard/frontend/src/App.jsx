@@ -19,6 +19,7 @@ import { AskHvac } from "./components/AskHvac.jsx";
 import { LiveSummary } from "./components/LiveSummary.jsx";
 import { useAuth } from "./hooks/useAuth.js";
 import { toZoneTelemetry, ZONE_ORDER } from "./hvac.js";
+import { FleetDeployView } from "./components/FleetDeployView.jsx";
 
 const GRAFANA_BASE = import.meta.env.VITE_GRAFANA_URL ?? "https://api.homeops.now/grafana";
 const GRAFANA_URL = `${GRAFANA_BASE}/d/homeops-temps`;
@@ -31,6 +32,14 @@ const DASHBOARDS = [
   { uid: "homeops-daily",       title: "Daily Summary + Heating/Cooling History", description: "Heating/cooling session history and floor-2 long-call events" },
 ];
 export default function App() {
+  if (window.location.pathname === "/deploy" || window.location.pathname === "/deploy/") {
+    return <FleetDeployView apiUrl={API_URL} />;
+  }
+
+  return <HvacDashboard />;
+}
+
+function HvacDashboard() {
   const { data, loading, error, lastUpdated, refresh } = useTemps();
   const auth = useAuth();
   const telemetryStale = Boolean(error || data?.error);
@@ -73,6 +82,12 @@ export default function App() {
               className="hidden rounded-xl border border-slate-600/60 px-4 py-2 text-sm font-medium text-slate-300 transition-colors hover:border-blue-500/50 hover:text-blue-300 sm:block"
             >
               Bob / evals ↗
+            </a>
+            <a
+              href="/deploy"
+              className="hidden rounded-xl border border-slate-600/60 px-4 py-2 text-sm font-medium text-slate-300 transition-colors hover:border-blue-500/50 hover:text-blue-300 sm:block"
+            >
+              Fleet lab
             </a>
             <a
               href={GRAFANA_URL}
