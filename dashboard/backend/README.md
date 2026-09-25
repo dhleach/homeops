@@ -115,3 +115,15 @@ started by Compose. Configure OIDC with `ASK_HOMEOPS_OIDC_ISSUER`,
 The active production topology, ports, public routes, internal scrape target, and release checks are
 documented in [`docs/architecture.md`](../../docs/architecture.md) and
 [`docs/deployment.md`](../../docs/deployment.md).
+
+## Fleet Deploy Lab state boundary
+
+The separate Fleet Deploy Lab uses the shared dependency-free `deploy_demo`
+package for its simulated-fleet contract and state store. Compose builds this
+image from the repository root so the package is present in the backend image,
+mounts the named `fleet_deploy_state` volume at
+`/var/lib/homeops/deploy-demo`, and sets
+`FLEET_DEPLOY_STATE_PATH` to the SQLite file inside that volume. This is a
+demo control-plane store only; PR 03 does not expose routes or alter HVAC,
+telemetry, diagnostic, or normal HomeOps deployment behavior. The state store
+must never be moved to an image-local path or an unpersisted Valkey key.

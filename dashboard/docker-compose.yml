@@ -1,6 +1,8 @@
 services:
   backend:
-    build: ./backend
+    build:
+      context: ..
+      dockerfile: dashboard/backend/Dockerfile
     # network_mode: host lets the container reach localhost:9090 (Prometheus)
     # on the EC2 host without extra networking config.
     network_mode: host
@@ -33,6 +35,9 @@ services:
       - GEMINI_OUTPUT_COST_USD_PER_MILLION_TOKENS
       - OPENAI_INPUT_COST_USD_PER_MILLION_TOKENS
       - OPENAI_OUTPUT_COST_USD_PER_MILLION_TOKENS
+      - FLEET_DEPLOY_STATE_PATH=/var/lib/homeops/deploy-demo/fleet-state.sqlite3
+    volumes:
+      - fleet_deploy_state:/var/lib/homeops/deploy-demo
 
   # Shared quota state for the single EC2 deployment. The loopback-only port
   # binding prevents public access; the backend reaches it through host mode.
@@ -81,5 +86,6 @@ services:
     restart: always
 
 volumes:
+  fleet_deploy_state:
   prometheus_data:
   grafana_data:
