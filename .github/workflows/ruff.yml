@@ -34,7 +34,8 @@ jobs:
             services/insights/rules/time_of_day_pattern.py services/insights/rules/tests/test_config.py \
             services/insights/rules/tests/test_outdoor_temperature_storm.py \
             services/insights/rules/tests/test_rule_enablement.py \
-            dashboard/backend/main.py dashboard/backend/security.py dashboard/backend/tests/test_security.py \
+            dashboard/backend/fleet_api.py dashboard/backend/main.py dashboard/backend/security.py \
+            dashboard/backend/tests/test_fleet_api.py dashboard/backend/tests/test_security.py \
             deploy_demo/__init__.py deploy_demo/__main__.py deploy_demo/deployment_spec.py \
             deploy_demo/fleet_state.py deploy_demo/tests/test_deployment_spec.py \
             deploy_demo/tests/test_fleet_state.py \
@@ -79,7 +80,8 @@ jobs:
             services/insights/rules/time_of_day_pattern.py services/insights/rules/tests/test_config.py \
             services/insights/rules/tests/test_outdoor_temperature_storm.py \
             services/insights/rules/tests/test_rule_enablement.py \
-            dashboard/backend/main.py dashboard/backend/security.py dashboard/backend/tests/test_security.py \
+            dashboard/backend/fleet_api.py dashboard/backend/main.py dashboard/backend/security.py \
+            dashboard/backend/tests/test_fleet_api.py dashboard/backend/tests/test_security.py \
             deploy_demo/__init__.py deploy_demo/__main__.py deploy_demo/deployment_spec.py \
             deploy_demo/fleet_state.py deploy_demo/tests/test_deployment_spec.py \
             deploy_demo/tests/test_fleet_state.py \

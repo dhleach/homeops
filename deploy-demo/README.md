@@ -1,14 +1,15 @@
 # Fleet Deploy Lab integration map
 
-Status: PR 03 durable simulated-fleet state boundary
+Status: PR 04 public reads and protected simulated-fleet management API
 Repository: `dhleach/homeops`
 Default branch: `master`
-Base integration snapshot: `d4ecae1`
-GitHub issue: https://github.com/dhleach/homeops/issues/328
+Latest integration snapshot: `57473f5`
+GitHub issue: https://github.com/dhleach/homeops/issues/334
 
 This document records the real HomeOps integration points for the Fleet Deploy
-Lab before implementation. It is deliberately specific about what exists now,
-what is planned for later PRs, and what still needs an operator decision.
+Lab as the implementation advances. It is deliberately specific about what
+exists now, what is planned for later PRs, and what still needs an operator
+decision.
 
 ## Purpose and boundary
 
@@ -28,7 +29,7 @@ normal HomeOps Pi, EC2, frontend, and observability deployments remain separate.
 | --- | --- | --- | --- | --- |
 | Public frontend | `https://homeops.now/deploy` | CloudFront → private S3 → React/Vite SPA | Returns HTTP 200 and the existing SPA shell. `App.jsx` does not currently route on `window.location.pathname`, so it renders the existing HVAC dashboard. | PR 05 adds a route-aware Fleet Deploy view without changing existing routes. |
 | Existing backend liveness | `https://api.homeops.now/health` | Nginx → FastAPI | Returns `{"status":"ok"}`. | Remains the process liveness check. |
-| Fleet demo health | `https://api.homeops.now/deploy/api/health` | Nginx → FastAPI | Currently HTTP 404; no Fleet Deploy routes exist yet. | PR 04 adds a public read-only demo health/state boundary. |
+| Fleet demo health | `https://api.homeops.now/deploy/api/health` | Nginx → FastAPI | Implemented in the PR 04 backend; production remains 404 until this PR is merged and deployed. | Public simulator readiness and target-count check. |
 | Existing telemetry | `https://api.homeops.now/api/current-temps` | FastAPI → EC2-local Prometheus | Current production telemetry contract. | Must remain unchanged. |
 | Existing diagnostic | `https://api.homeops.now/api/diagnostic` | FastAPI → authenticated provider path | Authenticated, quota-limited, read-only HVAC diagnostics. | Must remain separate from Fleet Deploy credentials and state. |
 
@@ -41,8 +42,8 @@ configuration. Nginx already proxies the default API location and allows
 ### Route smoke contract
 
 The following checks are the intended public smoke contract. The first two are
-valid now; the third is expected to remain 404 until PR 04 is merged and
-deployed.
+valid now; the Fleet route is implemented in this branch but remains 404 on the
+currently deployed production backend until PR 04 is merged and deployed.
 
 ```bash
 curl -fsS https://homeops.now/deploy >/dev/null
@@ -50,9 +51,10 @@ curl -fsS https://api.homeops.now/health
 curl -fsS https://api.homeops.now/deploy/api/health
 ```
 
-For a discovery-only run, the third check should be recorded as “not yet
-implemented,” not silently treated as a working endpoint. After PR 04, it must
-become a required 200/readiness check.
+For a discovery-only run against the current production deployment, the third
+check should be recorded as “not yet implemented,” not silently treated as a
+working endpoint. After PR 04 is deployed, it becomes a required 200/readiness
+check, followed by the anonymous `/deploy/api/fleet` read.
 
 ## Frontend and hosting boundary
 
@@ -81,7 +83,7 @@ frontend workflow; it must not be published as an unrelated static site.
 | Backend Compose | `dashboard/docker-compose.yml` | `backend`, `valkey`, `prometheus`, and `grafana` services |
 | Public edge | `dashboard/nginx/api.homeops.now.conf` | TLS Nginx on `api.homeops.now`, default location proxies to `localhost:8000` |
 | Backend deployment | `deploy/deploy-ec2.sh` | Fast-forward EC2 checkout, refresh runtime env, rebuild/recreate backend, wait for `/health`, validate Nginx |
-| Current routes | `dashboard/backend/main.py` | `/health`, `/metrics`, `/api/current-temps`, `/api/diagnostic` |
+| Current routes | `dashboard/backend/main.py`, `dashboard/backend/fleet_api.py` | `/health`, `/metrics`, `/api/current-temps`, `/api/diagnostic`, `/deploy/api/health`, `/deploy/api/fleet`, `/deploy/api/fleet/{target_id}`, `/deploy/api/deployments/{deployment_id}`, and protected deployment queue/apply routes |
 
 The demo management API is a new authorization boundary. Public reads may be
 anonymous, but desired-state/apply/verification writes must require a
@@ -169,8 +171,9 @@ Terraform action in its PR and handoff.
   asset is the existing HomeOps SPA shell and the source `App.jsx` has no
   `/deploy` route.
 - `https://api.homeops.now/health` currently returns HTTP 200.
-- `https://api.homeops.now/deploy/api/health` currently returns HTTP 404 because
-  PR 04 has not been implemented.
+- `https://api.homeops.now/deploy/api/health` remains HTTP 404 on the currently
+  deployed production backend because PR 04 is implemented in this branch but
+  has not yet been merged and deployed.
 - The `fleet-deployments` branch does not currently exist.
 - The current public repository secret names are limited to the existing AWS,
   Pi/EC2 SSH, and Tailnet deployment credentials; no Fleet Deploy credential is
@@ -180,7 +183,8 @@ Terraform action in its PR and handoff.
   is verified.
 - The current backend Dockerfile and CI workflow use explicit file lists, so
   later demo modules and tests must be materialized into both surfaces. PR 03
-  adds the state module and its focused tests to those lists.
+  adds the state module and PR 04 adds the API module plus backend contract
+  tests to those lists.
 
 ## PR 01 disposition
 
@@ -242,3 +246,32 @@ API-independent; PR 04 adds the public read and protected management routes.
   named Docker volume is created by Compose on the normal backend deployment.
 - Safety gate: no Home Assistant, thermostat, production deployment, public
   route, credential, or Terraform behavior changes.
+
+## PR 04 — public reads and protected management API
+
+PR 04 adds `dashboard/backend/fleet_api.py` and mounts it under
+`/deploy/api`. Anonymous reads expose simulator health, all twelve target
+snapshots, individual target state, and deployment readback. Every response
+marks the target kind as `simulated` and keeps desired profiles/digests
+separate from observed profiles/digests.
+
+The protected contract queues a validated shared `DeploymentSpec` and applies
+it through a dedicated `FLEET_DEPLOY_API_KEY` bearer credential. Applying a
+queued deployment models the `applying` transition and then atomically updates
+observed state; reapplying a successful deployment is an idempotent readback.
+The response includes explicit deployment ID, desired digest, status, target
+state, and `pending`/`verified`/`failed` verification.
+
+The credential is backend-only and is not provisioned, copied to the frontend,
+or reused from Home Assistant, Ask HomeOps, Pi deploy, or EC2 deploy secrets.
+Missing configuration and invalid credentials fail closed. This API remains a
+simulator boundary and does not write Home Assistant, thermostats, telemetry,
+or normal production deployment state.
+
+## PR 04 disposition
+
+- Terraform apply required: **No**
+- Manual console setup: **None for this PR**; the later supporting-prerequisite task owns secret provisioning and rotation.
+- Terraform resources changed: **None**
+- Sequence and owner: Derek reviews and merges the implementation PR; the backend receives `FLEET_DEPLOY_API_KEY` only when the separately planned credential boundary is provisioned.
+- Safety gate: no EC2 replacement, Elastic IP replacement, IAM change, Home Assistant write, thermostat write, telemetry mutation, or normal production deployment behavior.

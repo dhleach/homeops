@@ -49,6 +49,7 @@ import httpx
 from fastapi import Depends, FastAPI, Request, Response
 from fastapi.responses import JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from fleet_api import router as fleet_api_router
 from prometheus_client import (
     CONTENT_TYPE_LATEST,
     CollectorRegistry,
@@ -535,9 +536,13 @@ app = FastAPI(
     version="0.1.0",
     description=(
         "Live HVAC data served from EC2-local Prometheus. Ask HomeOps requires "
-        "a verified bearer identity and bounded request quotas."
+        "a verified bearer identity and bounded request quotas. The separate "
+        "Fleet Deploy Lab exposes explicitly simulated targets and protected "
+        "management writes."
     ),
 )
+
+app.include_router(fleet_api_router)
 
 # CORS is handled entirely by Nginx (api.homeops.now.conf).
 # Do NOT add FastAPI CORSMiddleware here — duplicate Access-Control-Allow-Origin
