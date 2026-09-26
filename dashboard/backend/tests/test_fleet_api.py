@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from pathlib import Path
 
 import fleet_api
 import main
@@ -28,6 +29,13 @@ def valid_payload(**overrides: object) -> dict[str, object]:
     }
     payload.update(overrides)
     return payload
+
+
+def test_import_bootstrap_handles_flattened_container_path(monkeypatch) -> None:
+    """The production ``/app/fleet_api.py`` path has only two ancestors."""
+    monkeypatch.setattr(fleet_api.importlib.util, "find_spec", lambda _: None)
+
+    fleet_api._ensure_deploy_demo_importable(Path("/app/fleet_api.py"))
 
 
 @pytest.fixture
