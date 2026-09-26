@@ -32,8 +32,8 @@ def valid_spec(**overrides: object):
         "environment": "test",
         "profile": {"color": "purple", "shape": "hexagon"},
         "implementation": "python",
-        "strategy": "rolling",
-        "failure_mode": "rollback",
+        "strategy": "all_at_once",
+        "failure_mode": "abort",
     }
     payload.update(overrides)
     if "target_ids" in overrides:
@@ -283,8 +283,8 @@ def test_invalid_target_is_rejected_by_shared_contract_before_network() -> None:
         "target_ids": ["test-vehicle-99"],
         "profile": {"color": "blue", "shape": "circle"},
         "implementation": "python",
-        "strategy": "rolling",
-        "failure_mode": "rollback",
+        "strategy": "all_at_once",
+        "failure_mode": "abort",
     }
     artifact = DeploymentArtifact.from_bytes(b'{"color":"blue","shape":"circle"}')
     client = FakeClient({}, {}, {})

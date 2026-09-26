@@ -29,7 +29,11 @@ React + Vite + Tailwind single-page dashboard for `homeops.now`.
   for reloads and safe retries, and rotates it when a visitor starts a new
   deployment or edits an already-submitted attempt. Repeating an unchanged
   attempt is therefore safe at the backend's idempotent boundary. It never
-  sends a GitHub or protected fleet-management credential to the browser.
+  sends a GitHub or protected fleet-management credential to the browser. The
+  form consumes the backend-published capability matrix and exposes only the
+  verified Python/Ansible + all-at-once/abort paths; rolling, canary, and
+  rollback remain visibly unavailable until their execution semantics are
+  implemented and proven.
 
 The production build is created by
 `.github/workflows/frontend-deploy.yml`, synced to the private S3 frontend

@@ -543,6 +543,7 @@ export function FleetDeployView({ apiUrl }) {
           <div data-testid="deployment-config-column">
             <DeploymentSpecForm
               apiUrl={apiUrl}
+              capabilities={data?.capabilities}
               onNewAttempt={handleNewAttempt}
               onSubmitted={handleSubmitted}
             />

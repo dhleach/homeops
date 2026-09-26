@@ -30,6 +30,17 @@ IMPLEMENTATIONS = ("python", "ansible")
 STRATEGIES = ("all_at_once", "rolling", "canary")
 FAILURE_MODES = ("abort", "rollback")
 
+# Only these combinations have a real, exercised execution path today.  Keep
+# the reserved enum values in the contract so a later rollout can add them
+# deliberately, but do not let the API or UI claim behavior the deployers do
+# not implement yet.
+CAPABILITY_MATRIX = (
+    ("python", "all_at_once", "abort"),
+    ("ansible", "all_at_once", "abort"),
+)
+DEFAULT_IMPLEMENTATION, DEFAULT_STRATEGY, DEFAULT_FAILURE_MODE = CAPABILITY_MATRIX[0]
+_SUPPORTED_CAPABILITIES = frozenset(CAPABILITY_MATRIX)
+
 TARGETS_BY_ENVIRONMENT: dict[str, tuple[str, ...]] = {
     "test": tuple(f"test-vehicle-{index:02d}" for index in range(1, 5)),
     "stage": tuple(f"stage-vehicle-{index:02d}" for index in range(1, 5)),
@@ -171,6 +182,12 @@ class DeploymentSpec:
                 "failure_mode",
                 f"{self.strategy!r} strategy supports only: {allowed}",
             )
+        if (self.implementation, self.strategy, self.failure_mode) not in _SUPPORTED_CAPABILITIES:
+            raise _error(
+                "capability",
+                "unsupported implementation/strategy/failure-mode combination: "
+                f"{self.implementation}/{self.strategy}/{self.failure_mode}",
+            )
 
         has_environment = self.environment is not None
         has_target_ids = self.target_ids is not None
@@ -270,6 +287,18 @@ def validate_deployment_spec(value: object) -> DeploymentSpec:
         schema_version=schema_version,
         environment=environment,
         target_ids=target_ids,
+    )
+
+
+def supported_capabilities() -> tuple[dict[str, str], ...]:
+    """Return a JSON-friendly copy of the verified execution matrix."""
+    return tuple(
+        {
+            "implementation": implementation,
+            "strategy": strategy,
+            "failure_mode": failure_mode,
+        }
+        for implementation, strategy, failure_mode in CAPABILITY_MATRIX
     )
 
 

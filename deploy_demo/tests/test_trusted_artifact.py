@@ -27,11 +27,11 @@ def manifest_bytes(**overrides: object) -> bytes:
     value: dict[str, object] = {
         "deployment_id": "demo-trusted-001",
         "environment": "test",
-        "failure_mode": "rollback",
+        "failure_mode": "abort",
         "implementation": "python",
         "profile": {"color": "purple", "shape": "hexagon"},
         "schema_version": 1,
-        "strategy": "rolling",
+        "strategy": "all_at_once",
     }
     value.update(overrides)
     return (

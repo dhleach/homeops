@@ -1,10 +1,10 @@
 # Fleet Deploy Lab integration map
 
-Status: REV 04 live-deploy layout merged; REV 05 generated-attempt work in progress
+Status: REV 05 generated-attempt work merged; REV 06 capability-matrix work in progress
 Repository: `dhleach/homeops`
 Default branch: `master`
-Latest merged integration snapshot: `be29c22`
-Active GitHub issue: https://github.com/dhleach/homeops/issues/370
+Latest merged integration snapshot: `ef9d903`
+Active GitHub issue: https://github.com/dhleach/homeops/issues/372
 
 This document records the real HomeOps integration points for the Fleet Deploy
 Lab as the implementation advances. It is deliberately specific about what
@@ -115,6 +115,22 @@ This is a frontend/API behavior change only:
 - Safety gate: no browser credential, repository path, arbitrary command,
   Home Assistant state, thermostat, Pi/EC2 deployment, or normal release path
   is changed.
+
+## REV 06 — expose only supported method and strategy combinations
+
+REV 06 closes the gap between the finite request vocabulary and the behavior
+that the two deployers actually execute. The shared contract now publishes a
+capability matrix with two verified paths: Python + all-at-once + abort and
+Ansible + all-at-once + abort. The anonymous fleet response carries that matrix
+to the frontend, which hides unproven rolling, canary, and rollback choices.
+The same shared validator rejects those combinations at the backend boundary,
+including when a caller bypasses the browser.
+
+- Terraform apply required: **No**
+- Manual console/setup: **None**
+- Terraform resources changed: **None**
+- Safety gate: the simulator remains atomic and readback-verified; no UI or
+  API claim is made for rollout/rollback semantics that are not implemented.
 
 ## Fleet Deploy form safety boundary
 

@@ -144,8 +144,11 @@ response. Public deployment reads expose `verification: "pending"`,
 `"verified"`, or `"failed"` plus the fresh target snapshots for a deployer or
 UI to verify digest, color, shape, and status.
 
-`POST /deploy/api/deployments/submit` accepts only the shared closed
-`DeploymentSpec` JSON. It never accepts a repository, branch, path, URL,
+`GET /deploy/api/fleet` includes the same verified implementation/strategy/
+failure-mode capability matrix rendered by the frontend. `POST /deploy/api/deployments/submit`
+accepts only the shared closed `DeploymentSpec`
+JSON and rejects combinations outside that matrix before any manifest or
+workflow side effect. It never accepts a repository, branch, path, URL,
 command, or credential from the browser. The backend creates the durable
 pending row under SQLite's global admission transaction, enforcing the
 per-client-IP cooldown and active-deployment limit, then writes the canonical

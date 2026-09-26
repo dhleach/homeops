@@ -36,8 +36,8 @@ def valid_spec(**overrides: object) -> DeploymentSpec:
         "environment": "test",
         "profile": {"color": "purple", "shape": "hexagon"},
         "implementation": "python",
-        "strategy": "rolling",
-        "failure_mode": "rollback",
+        "strategy": "all_at_once",
+        "failure_mode": "abort",
     }
     payload.update(overrides)
     if "target_ids" in overrides:
