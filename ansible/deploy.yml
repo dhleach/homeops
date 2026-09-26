@@ -114,7 +114,9 @@
           - queue_response.json.target_ids == validated_target_ids
           - queue_response.json.desired == validated_profile
           - queue_response.json.desired_digest == validated_artifact_sha256
-          - queue_response.json.status in ['queued', 'succeeded']
+          # A concurrent public status poll may reconcile the in-flight
+          # workflow to applying before this protected queue response returns.
+          - queue_response.json.status in ['queued', 'applying', 'succeeded']
         fail_msg: Queue response did not match the validated Ansible deployment.
 
     - name: Apply the queued deployment through the protected simulator API
