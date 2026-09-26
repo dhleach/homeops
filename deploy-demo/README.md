@@ -1,10 +1,10 @@
 # Fleet Deploy Lab integration map
 
-Status: PR 12 run-state reconciliation on top of the merged PR 11 trusted deployment path
+Status: PR 13 Ansible parity on top of the merged PR 12 run-state and PR 11 trusted deployment paths
 Repository: `dhleach/homeops`
 Default branch: `master`
-Latest integration snapshot: `e517b0f`
-GitHub issue: https://github.com/dhleach/homeops/issues/354
+Latest integration snapshot: `5cd9758`
+GitHub issue: https://github.com/dhleach/homeops/issues/356
 
 This document records the real HomeOps integration points for the Fleet Deploy
 Lab as the implementation advances. It is deliberately specific about what
@@ -291,6 +291,30 @@ recover the same run.
 - Terraform resources changed: **None**
 - Sequence and owner: Derek reviews and merges PR12; the existing credential/IAM prerequisite remains separate.
 - Safety gate: GitHub workflow/job state and observed simulator state are read and reconciled fail-closed; no Home Assistant, thermostat, Pi, EC2, or normal production deployment path is changed.
+
+## PR 13 — implement the same operation in Ansible
+
+PR 13 adds a real Ansible playbook at `ansible/deploy.yml`. The controller
+validates the exact canonical DeploymentSpec and profile artifact through the
+same Python parser and artifact identity checks used by the Python deployer.
+Ansible then resolves the selected logical vehicle IDs through
+`ansible/inventory.yml`, queues and applies through the protected simulator
+API with `ansible.builtin.uri`, and performs a fresh unauthenticated
+readback before reporting success.
+
+The inventory names are logical simulator identifiers only. The playbook runs
+on localhost and does not SSH to, create, or imply twelve real hosts. API
+credentials are read from `FLEET_DEPLOY_API_KEY`, hidden on protected URI
+tasks, and never sent to the browser. Syntax, API failure, artifact mismatch,
+inventory mismatch, and observed-state mismatch all fail nonzero.
+
+### PR 13 disposition
+
+- Terraform apply required: **No**
+- Manual console/setup required: **None beyond the existing Fleet Deploy simulator/API credentials**
+- Terraform resources changed: **None**
+- Sequence and owner: Derek reviews and merges PR13; PR14 owns connecting the implementation selector to the CI workflow and source view.
+- Safety gate: local/synthetic Ansible tests only; no real hosts, Home Assistant, thermostat, Pi, EC2, or normal production deployment mutation is included.
 
 ## Backend and API boundary
 
