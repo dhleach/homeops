@@ -1,10 +1,10 @@
 # Fleet Deploy Lab integration map
 
-Status: PR 08 local simulator/deployer integration suite on top of the merged PR 07 Python deployer
+Status: PR 09 trusted master-only artifact workflow on top of the merged PR 08 simulator/deployer integration suite
 Repository: `dhleach/homeops`
 Default branch: `master`
-Latest integration snapshot: `44de721`
-GitHub issue: https://github.com/dhleach/homeops/issues/346
+Latest integration snapshot: `d9f5f70`
+GitHub issue: https://github.com/dhleach/homeops/issues/348
 
 This document records the real HomeOps integration points for the Fleet Deploy
 Lab as the implementation advances. It is deliberately specific about what
@@ -27,7 +27,7 @@ normal HomeOps Pi, EC2, frontend, and observability deployments remain separate.
 
 | Surface | Current path | Current owner | Current behavior | Fleet Deploy Lab target |
 | --- | --- | --- | --- | --- |
-| Public frontend | `https://homeops.now/deploy` | CloudFront → private S3 → React/Vite SPA | CloudFront serves the SPA shell. The merged PR 05 renders the read-only fleet snapshot and responsive TEST/STAGE/PROD cards; PR 06 adds a preview-only constrained form and canonical DeploymentSpec view without enabling submission. | A later trusted workflow connects the disabled Deploy control; this PR changes no deployment path. |
+| Public frontend | `https://homeops.now/deploy` | CloudFront → private S3 → React/Vite SPA | CloudFront serves the SPA shell. The merged PR 05 renders the read-only fleet snapshot and responsive TEST/STAGE/PROD cards; PR 06 adds a preview-only constrained form and canonical DeploymentSpec view without enabling submission. | PR 09 builds the trusted profile artifact but does not connect the disabled Deploy control; PR 10 owns manifest submission/dispatch. |
 | Existing backend liveness | `https://api.homeops.now/health` | Nginx → FastAPI | Returns `{"status":"ok"}`. | Remains the process liveness check. |
 | Fleet demo health | `https://api.homeops.now/deploy/api/health` | Nginx → FastAPI | Implemented by merged PR 04; availability follows the normal backend deployment. | Public simulator readiness and target-count check. |
 | Existing telemetry | `https://api.homeops.now/api/current-temps` | FastAPI → EC2-local Prometheus | Current production telemetry contract. | Must remain unchanged. |
@@ -174,6 +174,40 @@ state, or normal HomeOps deployment path.
 - Sequence and owner: Derek reviews and merges the local integration-test PR; later workflow work owns trusted artifact execution.
 - Safety gate: all writes are against an isolated test store and the local FastAPI simulator; production routes and deployment actions are not invoked.
 
+## PR 09 — trusted workflow and immutable profile artifact
+
+PR 09 adds `.github/workflows/fleet-deploy.yml`, which is a build-and-evidence
+workflow only. It accepts `deployment_id` and a full `event_commit_sha` through
+`workflow_dispatch`, and it fails unless the dispatch ref is protected
+`master`. The runner checks out trusted `master` code, fetches the
+`fleet-deployments` branch only as Git objects, verifies that the event commit
+is an ancestor of that branch, and reads exactly
+`manifests/<deployment_id>.json` with `git show`. It never checks out or
+executes the writable manifest branch.
+
+The trusted `deploy_demo.trusted_artifact` module reuses the shared
+`DeploymentSpec` validator, rejects duplicate keys and non-canonical manifest
+bytes, and binds the requested deployment ID and event commit SHA to the
+selected file. Validation runs before the workflow installs lint/test tools or
+builds an artifact. A later step creates exact canonical `profile.json` bytes,
+prints their SHA-256 digest, and uploads the profile alongside separate
+`profile-provenance.json` metadata. The event commit SHA is recorded as source
+provenance and is never treated as the profile digest.
+
+The workflow deliberately has only `contents: read` permission and does not
+contain a Fleet API credential, deployer invocation, workflow dispatch, or
+production side effect. It will fail closed until the later manifest-branch
+task provides `fleet-deployments` and a reviewed manifest. The static workflow
+readiness test is included in the ordinary CI test and Ruff surfaces.
+
+## PR 09 disposition
+
+- Terraform apply required: **No**
+- Manual console setup: **None for this PR**; the later credential/prerequisite task owns repository and Fleet API secrets.
+- Terraform resources changed: **None**
+- Sequence and owner: Derek reviews and merges the trusted workflow/artifact PR; PR 10 owns manifest commits and trusted workflow dispatch.
+- Safety gate: manifest data is read at an exact, ancestry-checked commit; invalid data blocks before lint, tests, or artifact generation; no deployment is executed.
+
 ## Backend and API boundary
 
 | Concern | Source of truth | Production path |
@@ -216,12 +250,15 @@ public API/OIDC variables, syncs `dashboard/frontend/dist/` to the private S3
 bucket, invalidates CloudFront, and runs the public smoke check. It does not
 deploy the FastAPI backend.
 
-### Future Fleet Deploy workflow
+### Trusted Fleet Deploy workflow
 
-The planned `deploy-demo.yml` must run from trusted `master`, accept only the
-deployment ID and event commit SHA as dispatch inputs, and treat the manifest
-commit as untrusted data. It must never check out or execute code from the
-writable manifest branch.
+PR 09 implements `.github/workflows/fleet-deploy.yml` from trusted `master`.
+It accepts only the deployment ID and event commit SHA as dispatch inputs,
+treats the manifest commit as untrusted data, and never checks out or executes
+code from the writable manifest branch. The workflow reads
+`manifests/<deployment_id>.json` at the exact event commit, validates it with
+the shared contract, and produces profile/provenance artifacts without
+deploying. PR 10 owns committing manifests and dispatching this workflow.
 
 The current repository has no `fleet-deployments` branch. PR 10 must either
 create it through an explicitly reviewed setup step or fail closed until an
