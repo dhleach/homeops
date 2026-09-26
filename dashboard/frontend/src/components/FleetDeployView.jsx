@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { DeploymentSpecForm } from "./DeploymentSpecForm.jsx";
 
 const REFRESH_INTERVAL_MS = 30_000;
 const ENVIRONMENTS = ["test", "stage", "prod"];
@@ -281,6 +282,8 @@ export function FleetDeployView({ apiUrl }) {
             </p>
           </div>
         </div>
+
+        <DeploymentSpecForm />
 
         {error && (
           <div

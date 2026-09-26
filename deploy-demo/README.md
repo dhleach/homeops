@@ -1,10 +1,10 @@
 # Fleet Deploy Lab integration map
 
-Status: PR 05 responsive `/deploy` fleet view on top of the merged PR 04 API
+Status: PR 06 preview-only constrained `/deploy` controls on top of the merged PR 05 fleet view and PR 04 API
 Repository: `dhleach/homeops`
 Default branch: `master`
-Latest integration snapshot: `dbfcf80`
-GitHub issue: https://github.com/dhleach/homeops/issues/336
+Latest integration snapshot: `62699de`
+GitHub issue: https://github.com/dhleach/homeops/issues/342
 
 This document records the real HomeOps integration points for the Fleet Deploy
 Lab as the implementation advances. It is deliberately specific about what
@@ -27,7 +27,7 @@ normal HomeOps Pi, EC2, frontend, and observability deployments remain separate.
 
 | Surface | Current path | Current owner | Current behavior | Fleet Deploy Lab target |
 | --- | --- | --- | --- | --- |
-| Public frontend | `https://homeops.now/deploy` | CloudFront → private S3 → React/Vite SPA | CloudFront already serves the SPA shell for this path. PR 05 adds route-aware rendering, a read-only fleet snapshot, and responsive TEST/STAGE/PROD cards without changing the existing HVAC route. | The frontend build publishes the Fleet Deploy view after PR 05 merges. |
+| Public frontend | `https://homeops.now/deploy` | CloudFront → private S3 → React/Vite SPA | CloudFront serves the SPA shell. The merged PR 05 renders the read-only fleet snapshot and responsive TEST/STAGE/PROD cards; PR 06 adds a preview-only constrained form and canonical DeploymentSpec view without enabling submission. | A later trusted workflow connects the disabled Deploy control; this PR changes no deployment path. |
 | Existing backend liveness | `https://api.homeops.now/health` | Nginx → FastAPI | Returns `{"status":"ok"}`. | Remains the process liveness check. |
 | Fleet demo health | `https://api.homeops.now/deploy/api/health` | Nginx → FastAPI | Implemented by merged PR 04; availability follows the normal backend deployment. | Public simulator readiness and target-count check. |
 | Existing telemetry | `https://api.homeops.now/api/current-temps` | FastAPI → EC2-local Prometheus | Current production telemetry contract. | Must remain unchanged. |
@@ -41,10 +41,9 @@ configuration. Nginx already proxies the default API location and allows
 
 ### Route smoke contract
 
-The following checks are the intended public smoke contract. The first two are
-valid now; the Fleet route becomes the read-only view from this PR after the
-frontend deployment, while the API availability follows the merged PR 04
-backend deployment.
+The following checks are the intended public smoke contract. All three are
+valid after the merged PR 04 backend deployment and PR 05 frontend deployment;
+the PR 06 form is client-side preview state only.
 
 ```bash
 curl -fsS https://homeops.now/deploy >/dev/null
@@ -74,6 +73,28 @@ S3 origin, certificate, or Terraform route is needed. The frontend application
 now performs the explicit route-aware rendering in `App.jsx` and
 `FleetDeployView.jsx`. The module is included in the existing Vite build and
 frontend workflow; it is not published as an unrelated static site.
+
+## PR 06 — constrained controls and read-only DeploymentSpec preview
+
+PR 06 adds `DeploymentSpecForm.jsx` to the public `/deploy` route. The form
+offers only the finite environments, simulated target IDs, profile colors and
+shapes, Python/Ansible implementations, strategies, and failure modes defined
+by the shared `deploy_demo.deployment_spec` contract. It validates the visible
+deployment ID and strategy/failure-mode combinations, then renders the exact
+field names and current values as a read-only JSON preview.
+
+The Deploy button remains disabled. The browser makes no write request and
+accepts no repository path, URL, command, arbitrary code, or credential. A
+later PR owns the trusted manifest/workflow path and may enable submission only
+after that boundary is reviewed.
+
+## PR 06 disposition
+
+- Terraform apply required: **No**
+- Manual console setup: **None**
+- Terraform resources changed: **None**
+- Sequence and owner: Derek reviews and merges the frontend-only PR; a later trusted workflow PR owns deployment submission.
+- Safety gate: no backend/API write, credential, GitHub Actions dispatch, Home Assistant, thermostat, normal production deployment, or infrastructure behavior changes.
 
 ## Backend and API boundary
 
