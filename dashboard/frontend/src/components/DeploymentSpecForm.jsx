@@ -216,7 +216,8 @@ export function DeploymentSpecForm({ apiUrl, onSubmitted }) {
   return (
     <section
       aria-labelledby="deployment-spec-heading"
-      className="mb-10 rounded-2xl border border-blue-400/30 bg-blue-400/5 p-5 shadow-lg shadow-slate-950/10 sm:p-6"
+      className="rounded-2xl border border-blue-400/30 bg-blue-400/5 p-5 shadow-lg shadow-slate-950/10 sm:p-6"
+      data-testid="deployment-config-panel"
     >
       <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
         <div>
@@ -237,7 +238,7 @@ export function DeploymentSpecForm({ apiUrl, onSubmitted }) {
       </div>
 
       <form
-        className="mt-6 grid gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(18rem,0.8fr)]"
+        className="mt-6 space-y-6"
         onSubmit={submitDeployment}
       >
         <div className="space-y-6">
@@ -369,22 +370,28 @@ export function DeploymentSpecForm({ apiUrl, onSubmitted }) {
           </fieldset>
         </div>
 
-        <aside className="flex flex-col rounded-xl border border-border bg-slate-950/50 p-4">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">
-              Deployment specification
-            </p>
-            <p className="mt-1 text-xs text-slate-500">
-              This is the exact validated payload submitted when you deploy.
-            </p>
-          </div>
-          <pre
-            aria-label="DeploymentSpec preview"
-            data-testid="deployment-spec-preview"
-            className="mt-4 min-h-[19rem] overflow-x-auto rounded-lg border border-border bg-slate-950 p-4 text-xs leading-6 text-emerald-200"
+        <aside className="space-y-4">
+          <details
+            className="rounded-xl border border-border bg-slate-950/50 p-4"
+            data-testid="deployment-spec-disclosure"
           >
-            {JSON.stringify(preview, null, 2)}
-          </pre>
+            <summary className="cursor-pointer list-none text-xs font-semibold uppercase tracking-wider text-slate-400 marker:hidden">
+              <span className="inline-flex items-center gap-2">
+                <span aria-hidden="true" className="text-slate-500">▸</span>
+                DeploymentSpec JSON
+              </span>
+              <span className="mt-1 block normal-case tracking-normal text-slate-500">
+                Expand to inspect the exact validated payload submitted when you deploy.
+              </span>
+            </summary>
+            <pre
+              aria-label="DeploymentSpec preview"
+              data-testid="deployment-spec-preview"
+              className="mt-4 max-h-80 overflow-auto rounded-lg border border-border bg-slate-950 p-4 text-xs leading-6 text-emerald-200"
+            >
+              {JSON.stringify(preview, null, 2)}
+            </pre>
+          </details>
 
           {Object.keys(errors).length > 0 && (
             <div

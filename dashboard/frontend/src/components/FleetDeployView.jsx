@@ -327,7 +327,7 @@ function FleetLoadingState() {
   return (
     <div
       aria-label="Loading simulated fleet"
-      className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3"
+      className="grid grid-cols-1 gap-4 sm:grid-cols-2"
       data-testid="fleet-loading"
     >
       {[...Array(12)].map((_, index) => (
@@ -513,7 +513,7 @@ export function FleetDeployView({ apiUrl }) {
         </div>
       </header>
 
-      <main className="mx-auto w-full max-w-6xl px-6 py-10">
+      <main className="mx-auto w-full max-w-7xl px-6 py-10">
         <div className="mb-10 grid grid-cols-1 gap-3 sm:grid-cols-3">
           <div className="rounded-xl border border-border bg-card/70 p-4">
             <p className="text-xs uppercase tracking-wider text-slate-500">Targets</p>
@@ -531,57 +531,70 @@ export function FleetDeployView({ apiUrl }) {
           </div>
         </div>
 
-        <DeploymentSpecForm apiUrl={apiUrl} onSubmitted={handleSubmitted} />
-
-        {deployment.data && (
-          <DeploymentRunPanel
-            deployment={deployment.data}
-            error={deployment.error}
-            onRefresh={deployment.refresh}
-          />
-        )}
-
-        {error && (
-          <div
-            role="alert"
-            className="mb-8 rounded-xl border border-amber-400/30 bg-amber-400/10 px-4 py-3 text-sm text-amber-100"
-          >
-            {data ? `Fleet refresh failed: ${error}. Showing the last successful snapshot.` : error}
+        <div
+          className="grid items-start gap-8 lg:grid-cols-[minmax(22rem,0.82fr)_minmax(0,1.18fr)]"
+          data-testid="fleet-deploy-layout"
+        >
+          <div data-testid="deployment-config-column">
+            <DeploymentSpecForm apiUrl={apiUrl} onSubmitted={handleSubmitted} />
           </div>
-        )}
 
-        {loading && <FleetLoadingState />}
+          <div className="min-w-0 space-y-8" data-testid="fleet-state-column">
+            {deployment.data && (
+              <DeploymentRunPanel
+                deployment={deployment.data}
+                error={deployment.error}
+                onRefresh={deployment.refresh}
+              />
+            )}
 
-        {!loading && data && (
-          <div className="space-y-12">
-            {groups.map(({ environment, targets }) => (
-              <section key={environment} aria-labelledby={`fleet-environment-${environment}`}>
-                <div className="mb-4 flex items-end justify-between gap-4">
-                  <div>
-                    <p className="text-xs font-semibold uppercase tracking-[0.22em] text-blue-300">
-                      Environment
-                    </p>
-                    <h2 id={`fleet-environment-${environment}`} className="mt-1 text-xl font-semibold uppercase text-white">
-                      {environment}
-                    </h2>
-                  </div>
-                  <p className="text-sm text-slate-500">{targets.length} simulated targets</p>
-                </div>
-                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
-                  {targets.map((target) => (
-                    <FleetTargetCard key={target.target_id} target={target} />
-                  ))}
-                </div>
-              </section>
-            ))}
+            {error && (
+              <div
+                role="alert"
+                className="rounded-xl border border-amber-400/30 bg-amber-400/10 px-4 py-3 text-sm text-amber-100"
+              >
+                {data ? `Fleet refresh failed: ${error}. Showing the last successful snapshot.` : error}
+              </div>
+            )}
+
+            {loading && <FleetLoadingState />}
+
+            {!loading && data && (
+              <div className="space-y-8">
+                {groups.map(({ environment, targets }) => (
+                  <section
+                    key={environment}
+                    aria-labelledby={`fleet-environment-${environment}`}
+                    data-testid={`fleet-environment-${environment}`}
+                  >
+                    <div className="mb-4 flex items-end justify-between gap-4">
+                      <div>
+                        <p className="text-xs font-semibold uppercase tracking-[0.22em] text-blue-300">
+                          Environment
+                        </p>
+                        <h2 id={`fleet-environment-${environment}`} className="mt-1 text-xl font-semibold uppercase text-white">
+                          {environment}
+                        </h2>
+                      </div>
+                      <p className="text-sm text-slate-500">{targets.length} simulated targets</p>
+                    </div>
+                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                      {targets.map((target) => (
+                        <FleetTargetCard key={target.target_id} target={target} />
+                      ))}
+                    </div>
+                  </section>
+                ))}
+              </div>
+            )}
+
+            {!loading && !data && !error && (
+              <p className="rounded-xl border border-border bg-card p-6 text-center text-sm text-slate-400">
+                No fleet snapshot is available yet.
+              </p>
+            )}
           </div>
-        )}
-
-        {!loading && !data && !error && (
-          <p className="rounded-xl border border-border bg-card p-6 text-center text-sm text-slate-400">
-            No fleet snapshot is available yet.
-          </p>
-        )}
+        </div>
       </main>
     </div>
   );

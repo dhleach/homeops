@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "../../App.jsx";
 import { FleetDeployView } from "../FleetDeployView.jsx";
@@ -104,10 +104,27 @@ describe("FleetDeployView", () => {
     expect(preview).toHaveTextContent('"strategy": "rolling"');
     expect(preview).toHaveTextContent('"failure_mode": "rollback"');
     expect(screen.getByRole("heading", { name: "Configure a deployment" })).toBeInTheDocument();
-    expect(screen.getByText("Deployment specification")).toBeInTheDocument();
+    expect(screen.getByText("DeploymentSpec JSON")).toBeInTheDocument();
     expect(screen.getByText("Public simulated control plane")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Deploy to 4 test vehicles" })).not.toBeDisabled();
     expect(screen.getByText("Simulated fleet")).toBeInTheDocument();
+  });
+
+  it("keeps configuration, the selected fleet, and the run context in a responsive layout", async () => {
+    render(<FleetDeployView apiUrl="https://api.homeops.now" />);
+
+    await screen.findAllByTestId("fleet-target-card");
+    const layout = screen.getByTestId("fleet-deploy-layout");
+    expect(layout).toContainElement(screen.getByTestId("deployment-config-column"));
+    expect(layout).toContainElement(screen.getByTestId("fleet-state-column"));
+
+    const testEnvironment = screen.getByTestId("fleet-environment-test");
+    expect(within(testEnvironment).getAllByTestId("fleet-target-card")).toHaveLength(4);
+    const specDisclosure = screen.getByTestId("deployment-spec-disclosure");
+    expect(specDisclosure).toHaveProperty("open", false);
+    expect(screen.getByText("DeploymentSpec JSON")).toBeInTheDocument();
+    fireEvent.click(screen.getByText("DeploymentSpec JSON"));
+    expect(specDisclosure).toHaveProperty("open", true);
   });
 
   it("submits only the canonical constrained payload without a browser credential", async () => {
@@ -248,6 +265,8 @@ describe("FleetDeployView", () => {
       "href",
       deployment.manifest_commit_url,
     );
+    expect(screen.getByTestId("fleet-state-column")).toContainElement(screen.getByTestId("deployment-run-state"));
+    expect(screen.getByTestId("fleet-state-column")).toContainElement(screen.getByTestId("fleet-environment-test"));
     expect(fetchMock).toHaveBeenCalledWith(
       "https://api.homeops.now/deploy/api/deployments/demo-reload-001",
       expect.objectContaining({ cache: "no-store" }),
