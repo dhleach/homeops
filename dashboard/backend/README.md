@@ -150,7 +150,8 @@ documented in [`docs/architecture.md`](../../docs/architecture.md) and
 ## Fleet Deploy Lab state boundary
 
 The separate Fleet Deploy Lab uses the shared dependency-free `deploy_demo`
-package for its simulated-fleet contract and state store. Compose builds this
+package for its simulated-fleet contract, state store, and trusted Python
+deployer client. Compose builds this
 image from the repository root so the package is present in the backend image,
 mounts the named `fleet_deploy_state` volume at
 `/var/lib/homeops/deploy-demo`, and sets

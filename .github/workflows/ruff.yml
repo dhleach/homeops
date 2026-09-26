@@ -37,7 +37,8 @@ jobs:
             dashboard/backend/fleet_api.py dashboard/backend/main.py dashboard/backend/security.py \
             dashboard/backend/tests/test_fleet_api.py dashboard/backend/tests/test_security.py \
             deploy_demo/__init__.py deploy_demo/__main__.py deploy_demo/deployment_spec.py \
-            deploy_demo/fleet_state.py deploy_demo/tests/test_deployment_spec.py \
+            deploy_demo/deployer.py deploy_demo/fleet_state.py \
+            deploy_demo/tests/test_deployer.py deploy_demo/tests/test_deployment_spec.py \
             deploy_demo/tests/test_fleet_state.py \
             scripts/deploy_smoke_check.py scripts/test_counts.py scripts/validate_anomalies.py \
             scripts/analyze_multi_zone_impact.py scripts/floor_hourly_heatmap.py scripts/floor_runtime_trend.py \
@@ -83,7 +84,8 @@ jobs:
             dashboard/backend/fleet_api.py dashboard/backend/main.py dashboard/backend/security.py \
             dashboard/backend/tests/test_fleet_api.py dashboard/backend/tests/test_security.py \
             deploy_demo/__init__.py deploy_demo/__main__.py deploy_demo/deployment_spec.py \
-            deploy_demo/fleet_state.py deploy_demo/tests/test_deployment_spec.py \
+            deploy_demo/deployer.py deploy_demo/fleet_state.py \
+            deploy_demo/tests/test_deployer.py deploy_demo/tests/test_deployment_spec.py \
             deploy_demo/tests/test_fleet_state.py \
             scripts/deploy_smoke_check.py scripts/test_counts.py scripts/validate_anomalies.py \
             scripts/analyze_multi_zone_impact.py scripts/floor_hourly_heatmap.py scripts/floor_runtime_trend.py \

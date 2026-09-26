@@ -1,5 +1,7 @@
 """Shared, dependency-free contracts for the HomeOps Fleet Deploy Lab."""
 
+import importlib
+
 from .deployment_spec import (
     COLORS,
     ENVIRONMENTS,
@@ -33,6 +35,38 @@ from .fleet_state import (
     VehicleState,
 )
 
+_DEPLOYER_EXPORTS = frozenset(
+    {
+        "API_BASE_URL_ENV",
+        "API_KEY_ENV",
+        "ArtifactIdentityError",
+        "DeploymentApi",
+        "DeploymentArtifact",
+        "DeploymentEvent",
+        "DeploymentEventType",
+        "DeploymentResult",
+        "DeploymentVerificationError",
+        "DeployerError",
+        "FleetApiClient",
+        "FleetApiError",
+        "FleetDeployer",
+        "ProfileArtifact",
+        "PythonDeployer",
+        "deploy",
+    }
+)
+
+
+def __getattr__(name: str):
+    """Load deployer exports only when imported directly by a caller."""
+    if name not in _DEPLOYER_EXPORTS:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    module = importlib.import_module(".deployer", __name__)
+    value = getattr(module, name)
+    globals()[name] = value
+    return value
+
+
 __all__ = [
     "COLORS",
     "ENVIRONMENTS",
@@ -62,4 +96,20 @@ __all__ = [
     "UnknownDeploymentError",
     "UnknownTargetError",
     "VehicleState",
+    "API_BASE_URL_ENV",
+    "API_KEY_ENV",
+    "ArtifactIdentityError",
+    "DeploymentApi",
+    "DeploymentArtifact",
+    "DeploymentEvent",
+    "DeploymentEventType",
+    "DeploymentResult",
+    "DeploymentVerificationError",
+    "DeployerError",
+    "FleetApiClient",
+    "FleetApiError",
+    "FleetDeployer",
+    "ProfileArtifact",
+    "PythonDeployer",
+    "deploy",
 ]
