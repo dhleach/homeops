@@ -21,6 +21,7 @@ def test_workflow_is_dispatchable_only_with_bounded_identity_inputs() -> None:
     assert "type: string" in WORKFLOW
     assert "MANIFEST_BRANCH: fleet-deployments" in WORKFLOW
     assert "MANIFEST_PATH: manifests/${{ inputs.deployment_id }}.json" in WORKFLOW
+    assert "run-name: Fleet deployment ${{ inputs.deployment_id }}" in WORKFLOW
 
 
 def test_workflow_checks_out_master_and_never_checks_out_manifest_branch() -> None:

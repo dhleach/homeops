@@ -2,6 +2,8 @@ import { useCallback, useEffect, useState } from "react";
 import { DeploymentSpecForm } from "./DeploymentSpecForm.jsx";
 
 const REFRESH_INTERVAL_MS = 30_000;
+const DEPLOYMENT_REFRESH_INTERVAL_MS = 2_000;
+const ACTIVE_DEPLOYMENT_STORAGE_KEY = "homeops.activeFleetDeploymentId";
 const ENVIRONMENTS = ["test", "stage", "prod"];
 
 const PROFILE_COLORS = {
@@ -22,12 +24,26 @@ const STATUS_LABELS = {
   applying: "Applying",
   failed: "Failed",
   pending: "Pending",
+  queued: "Queued",
   ready: "Ready",
   succeeded: "Succeeded",
 };
 
+const WORKFLOW_STATUS_LABELS = {
+  completed: "Completed",
+  in_progress: "Running",
+  pending: "Pending",
+  queued: "Queued",
+  requested: "Requested",
+  waiting: "Waiting",
+};
+
 function fleetApiUrl(apiUrl) {
   return `${apiUrl.replace(/\/$/, "")}/deploy/api/fleet`;
+}
+
+function deploymentApiUrl(apiUrl, deploymentId) {
+  return `${apiUrl.replace(/\/$/, "")}/deploy/api/deployments/${encodeURIComponent(deploymentId)}`;
 }
 
 function displayStatus(status) {
@@ -103,7 +119,103 @@ export function useFleet(apiUrl) {
     };
   }, [refresh]);
 
-  return { data, loading, error, lastUpdated, refresh: () => refresh() };
+  const refreshFleet = useCallback(() => refresh(), [refresh]);
+
+  return { data, loading, error, lastUpdated, refresh: refreshFleet };
+}
+
+function readStoredDeploymentId() {
+  try {
+    return window.localStorage.getItem(ACTIVE_DEPLOYMENT_STORAGE_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function storeDeploymentId(deploymentId) {
+  try {
+    if (deploymentId) {
+      window.localStorage.setItem(ACTIVE_DEPLOYMENT_STORAGE_KEY, deploymentId);
+    } else {
+      window.localStorage.removeItem(ACTIVE_DEPLOYMENT_STORAGE_KEY);
+    }
+  } catch {
+    // Private browsing and disabled storage should not block the demo.
+  }
+}
+
+export function useDeployment(apiUrl) {
+  const [deploymentId, setDeploymentId] = useState(readStoredDeploymentId);
+  const [data, setData] = useState(null);
+  const [error, setError] = useState(null);
+
+  const refresh = useCallback(async () => {
+    if (!deploymentId) return null;
+    try {
+      const response = await fetch(deploymentApiUrl(apiUrl, deploymentId), {
+        cache: "no-store",
+        headers: { Accept: "application/json" },
+      });
+      if (!response.ok) {
+        throw new Error(`Deployment API returned HTTP ${response.status}`);
+      }
+      const payload = await response.json();
+      if (
+        payload?.simulated !== true
+        || payload?.deployment_id !== deploymentId
+        || !Array.isArray(payload?.targets)
+      ) {
+        throw new Error("Deployment API returned an incomplete run snapshot");
+      }
+      setData(payload);
+      setError(null);
+      return payload;
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : "Unable to read deployment state");
+      return null;
+    }
+  }, [apiUrl, deploymentId]);
+
+  useEffect(() => {
+    if (!deploymentId) {
+      setData(null);
+      setError(null);
+      return undefined;
+    }
+
+    let disposed = false;
+    let timer;
+    const poll = async () => {
+      const payload = await refresh();
+      if (disposed) return;
+      if (!payload) return;
+      const terminal = payload?.status === "succeeded" || payload?.status === "failed";
+      if (!terminal) {
+        timer = window.setTimeout(poll, DEPLOYMENT_REFRESH_INTERVAL_MS);
+      }
+    };
+    poll();
+
+    return () => {
+      disposed = true;
+      window.clearTimeout(timer);
+    };
+  }, [deploymentId, refresh]);
+
+  const trackDeployment = useCallback((nextDeploymentId) => {
+    storeDeploymentId(nextDeploymentId);
+    setDeploymentId(nextDeploymentId || null);
+    setData(null);
+    setError(null);
+  }, []);
+
+  return {
+    data,
+    deploymentId,
+    error,
+    refresh,
+    trackDeployment,
+  };
 }
 
 function ProfileGlyph({ profile, label }) {
@@ -123,7 +235,7 @@ function ProfileGlyph({ profile, label }) {
 function StatusPill({ status }) {
   const statusClass = status === "failed"
     ? "border-red-400/30 bg-red-400/10 text-red-300"
-    : status === "applying" || status === "pending"
+    : status === "queued" || status === "applying" || status === "pending"
       ? "border-amber-400/30 bg-amber-400/10 text-amber-200"
       : "border-emerald-400/30 bg-emerald-400/10 text-emerald-300";
 
@@ -225,9 +337,144 @@ function FleetLoadingState() {
   );
 }
 
+function formatTimestamp(value) {
+  if (!value) return "Unavailable";
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString();
+}
+
+function deploymentStatusLabel(deployment) {
+  if (deployment.workflow?.status) {
+    return WORKFLOW_STATUS_LABELS[deployment.workflow.status] ?? displayStatus(deployment.status);
+  }
+  return displayStatus(deployment.status);
+}
+
+function DeploymentRunPanel({ deployment, error, onRefresh }) {
+  const verifiedTargets = deployment.targets.filter(
+    (target) => deployment.target_ids.includes(target.target_id)
+      && target.desired_digest === target.observed_digest,
+  );
+  const jobs = deployment.workflow?.jobs ?? [];
+
+  return (
+    <section
+      aria-labelledby="deployment-run-heading"
+      className="mb-10 rounded-2xl border border-border bg-card/70 p-5 shadow-lg shadow-slate-950/10 sm:p-6"
+      data-testid="deployment-run-state"
+    >
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-[0.22em] text-blue-300">
+            Deployment run
+          </p>
+          <h2 id="deployment-run-heading" className="mt-1 font-mono text-xl font-semibold text-white">
+            {deployment.deployment_id}
+          </h2>
+          <p className="mt-2 text-sm text-slate-400">
+            State is reconstructed from GitHub Actions and the observed simulated fleet.
+          </p>
+        </div>
+        <div className="flex items-center gap-3">
+          <StatusPill status={deployment.status} />
+          <button
+            type="button"
+            onClick={onRefresh}
+            className="rounded-lg border border-border px-3 py-2 text-xs font-medium text-slate-300 hover:border-blue-500/50 hover:text-blue-300"
+          >
+            Refresh run
+          </button>
+        </div>
+      </div>
+
+      <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="rounded-lg border border-border bg-slate-950/30 p-3">
+          <p className="text-xs uppercase tracking-wider text-slate-500">Workflow state</p>
+          <p className="mt-1 text-sm font-semibold text-slate-200">{deploymentStatusLabel(deployment)}</p>
+          {deployment.workflow?.conclusion && (
+            <p className="mt-1 text-xs text-slate-500">Conclusion: {deployment.workflow.conclusion}</p>
+          )}
+        </div>
+        <div className="rounded-lg border border-border bg-slate-950/30 p-3">
+          <p className="text-xs uppercase tracking-wider text-slate-500">Verified targets</p>
+          <p className="mt-1 text-sm font-semibold text-slate-200">
+            {verifiedTargets.length} / {deployment.target_ids.length}
+          </p>
+        </div>
+        <div className="rounded-lg border border-border bg-slate-950/30 p-3">
+          <p className="text-xs uppercase tracking-wider text-slate-500">Created</p>
+          <p className="mt-1 text-sm text-slate-300">{formatTimestamp(deployment.workflow_created_at ?? deployment.created_at)}</p>
+        </div>
+        <div className="rounded-lg border border-border bg-slate-950/30 p-3">
+          <p className="text-xs uppercase tracking-wider text-slate-500">Last updated</p>
+          <p className="mt-1 text-sm text-slate-300">{formatTimestamp(deployment.workflow_updated_at ?? deployment.updated_at)}</p>
+        </div>
+      </div>
+
+      <div className="mt-5 flex flex-wrap gap-3 text-sm">
+        {deployment.manifest_commit_url && (
+          <a
+            href={deployment.manifest_commit_url}
+            target="_blank"
+            rel="noreferrer"
+            className="text-blue-300 underline"
+          >
+            Manifest commit
+          </a>
+        )}
+        {deployment.workflow_url && (
+          <a
+            href={deployment.workflow_url}
+            target="_blank"
+            rel="noreferrer"
+            className="text-blue-300 underline"
+          >
+            GitHub Actions run
+          </a>
+        )}
+      </div>
+
+      {(deployment.error || deployment.workflow_error || error) && (
+        <div role="alert" className="mt-5 rounded-lg border border-red-400/30 bg-red-400/10 p-3 text-sm text-red-200">
+          {deployment.error || deployment.workflow_error || error}
+        </div>
+      )}
+
+      {jobs.length > 0 && (
+        <div className="mt-5 border-t border-border/70 pt-4">
+          <h3 className="text-sm font-semibold text-slate-200">Workflow jobs</h3>
+          <ul className="mt-3 space-y-2 text-xs text-slate-300">
+            {jobs.map((job) => (
+              <li key={job.id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border bg-slate-950/30 px-3 py-2">
+                <span>{job.name}</span>
+                <span className={job.conclusion === "success" ? "text-emerald-300" : job.conclusion ? "text-red-300" : "text-amber-200"}>
+                  {job.conclusion ?? job.status}
+                  {job.failed_step ? ` — ${job.failed_step}` : ""}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </section>
+  );
+}
+
 export function FleetDeployView({ apiUrl }) {
   const { data, loading, error, lastUpdated, refresh } = useFleet(apiUrl);
+  const deployment = useDeployment(apiUrl);
   const groups = groupTargets(data?.targets ?? []);
+
+  const handleSubmitted = useCallback((submission) => {
+    deployment.trackDeployment(submission?.deployment_id);
+    refresh();
+  }, [deployment, refresh]);
+
+  useEffect(() => {
+    if (deployment.data?.status === "succeeded" || deployment.data?.status === "failed") {
+      refresh();
+    }
+  }, [deployment.data?.status, refresh]);
 
   return (
     <div className="min-h-screen bg-surface text-slate-100">
@@ -283,7 +530,15 @@ export function FleetDeployView({ apiUrl }) {
           </div>
         </div>
 
-        <DeploymentSpecForm apiUrl={apiUrl} onSubmitted={() => refresh()} />
+        <DeploymentSpecForm apiUrl={apiUrl} onSubmitted={handleSubmitted} />
+
+        {deployment.data && (
+          <DeploymentRunPanel
+            deployment={deployment.data}
+            error={deployment.error}
+            onRefresh={deployment.refresh}
+          />
+        )}
 
         {error && (
           <div

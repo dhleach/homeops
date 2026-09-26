@@ -881,6 +881,53 @@ class FleetStateStore:
             assert updated is not None
             return self._deployment_from_row(updated)
 
+    def record_workflow_run(
+        self,
+        deployment_id: str,
+        workflow_run_id: int,
+        workflow_url: str | None = None,
+    ) -> DeploymentState:
+        """Persist the exact Actions run identity discovered after dispatch."""
+        if (
+            not isinstance(workflow_run_id, int)
+            or isinstance(workflow_run_id, bool)
+            or workflow_run_id < 1
+        ):
+            raise ValueError("workflow run ID must be positive")
+        if workflow_url is not None and (
+            len(workflow_url) > 512 or not workflow_url.startswith("https://")
+        ):
+            raise ValueError("workflow URL must be a bounded HTTPS URL")
+        timestamp = _now_iso(self._clock)
+        with self._transaction() as connection:
+            row = connection.execute(
+                "SELECT * FROM fleet_deployments WHERE deployment_id = ?",
+                (deployment_id,),
+            ).fetchone()
+            if row is None:
+                raise UnknownDeploymentError(f"unknown deployment: {deployment_id}")
+            existing = self._deployment_from_row(row)
+            if existing.workflow_run_id is not None and existing.workflow_run_id != workflow_run_id:
+                raise FleetStateError("deployment already has a different workflow run")
+            stored_url = workflow_url or existing.workflow_url
+            if existing.workflow_run_id == workflow_run_id and existing.workflow_url == stored_url:
+                return existing
+            connection.execute(
+                """
+                UPDATE fleet_deployments
+                SET workflow_run_id = ?, workflow_url = ?, dispatch_status = 'dispatched',
+                    updated_at = ?
+                WHERE deployment_id = ?
+                """,
+                (workflow_run_id, stored_url, timestamp, deployment_id),
+            )
+            updated = connection.execute(
+                "SELECT * FROM fleet_deployments WHERE deployment_id = ?",
+                (deployment_id,),
+            ).fetchone()
+            assert updated is not None
+            return self._deployment_from_row(updated)
+
     def record_dispatch_failure(
         self,
         deployment_id: str,

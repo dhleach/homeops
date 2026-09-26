@@ -15,7 +15,7 @@ interface at `https://api.homeops.now`.
 | `GET /deploy/api/health` | Read-only Fleet Deploy Lab simulator readiness |
 | `GET /deploy/api/fleet` | Anonymous desired/observed state for all twelve explicitly simulated targets |
 | `GET /deploy/api/fleet/{target_id}` | Anonymous read of one simulated target |
-| `GET /deploy/api/deployments/{deployment_id}` | Anonymous fresh deployment state and verification result |
+| `GET /deploy/api/deployments/{deployment_id}` | Anonymous fresh deployment state, GitHub Actions run/jobs, timestamps, and verification result |
 | `POST /deploy/api/deployments/submit` | Anonymous constrained submission; commits one manifest and dispatches the trusted workflow through the server-only GitHub adapter |
 | `POST /deploy/api/deployments` | Protected desired-state queue operation |
 | `POST /deploy/api/deployments/{deployment_id}/apply` | Protected simulator apply/observation operation; safe to replay |
@@ -154,11 +154,20 @@ branch and dispatches `.github/workflows/fleet-deploy.yml` from trusted
 `master`. The server expects `FLEET_DEPLOY_GITHUB_TOKEN` and fails closed when
 it is absent; that token never appears in logs or responses.
 
-The response records the manifest commit SHA and any workflow run metadata
-GitHub actually returns. A dispatch failure stores a safe operation code and
-leaves the exact commit available for a retry of the same deployment ID, so a
-recovery request cannot create a second manifest commit. The backend does not
-guess a workflow-run URL when the dispatch endpoint returns `204`.
+The response records the manifest commit SHA and URL plus any workflow run
+metadata GitHub actually returns. A dispatch failure stores a safe operation
+code and leaves the exact commit available for a retry of the same deployment
+ID, so a recovery request cannot create a second manifest commit. The backend
+does not guess a workflow-run URL when the dispatch endpoint returns `204`;
+the read route resolves the exact `run-name`-identified run after GitHub creates
+it and then reads the run's jobs.
+
+The public deployment read reconciles Actions state with the simulator on every
+poll. It shows real run/job statuses, conclusions, timestamps, and failed-step
+details. A completed Actions failure marks the deployment failed without
+copying desired profiles into observed state. A completed Actions success is
+accepted only when the observed simulator digests already match every target;
+the API never advances a run because a client timer elapsed.
 
 The trusted workflow's downstream deploy job consumes only the validated
 profile/provenance artifact and the separate `FLEET_DEPLOY_API_KEY` Actions

@@ -12,6 +12,8 @@ on:
         required: true
         type: string
 
+run-name: Fleet deployment ${{ inputs.deployment_id }}
+
 # This workflow can read repository data and upload its bounded result.  It
 # deliberately has no permission to write contents or dispatch workflows.  The
 # separate deploy job receives only the simulator write credential.

@@ -48,6 +48,8 @@ class GitHubHarness:
         self.dispatch_body = dispatch_body
         self.manifest: bytes | None = None
         self.existing_commit: str | None = None
+        self.workflow_run: dict[str, object] | None = None
+        self.workflow_jobs: list[dict[str, object]] = []
 
     def __call__(self, request: Request, *, timeout: float) -> FakeResponse:
         del timeout
@@ -62,6 +64,15 @@ class GitHubHarness:
             return FakeResponse(200, json.dumps(payload).encode(), {})
         if request.method == "GET" and "/commits?" in request.full_url:
             return FakeResponse(200, json.dumps([{"sha": self.existing_commit}]).encode(), {})
+        if request.method == "GET" and "/actions/workflows/" in request.full_url:
+            runs = [] if self.workflow_run is None else [self.workflow_run]
+            return FakeResponse(200, json.dumps({"workflow_runs": runs}).encode(), {})
+        if request.method == "GET" and "/actions/runs/" in request.full_url:
+            if request.full_url.endswith("/jobs?per_page=100"):
+                return FakeResponse(200, json.dumps({"jobs": self.workflow_jobs}).encode(), {})
+            if self.workflow_run is None:
+                return FakeResponse(404, b'{"message":"Not Found"}', {})
+            return FakeResponse(200, json.dumps(self.workflow_run).encode(), {})
         if request.method == "PUT":
             payload = json.loads(request.data.decode())
             self.manifest = base64.b64decode(payload["content"])
@@ -170,3 +181,40 @@ def test_missing_branch_or_provider_error_does_not_leak_response_body() -> None:
         adapter.dispatch_workflow("demo-005", COMMIT_SHA)
     assert "forbidden" not in str(caught.value)
     assert "server-side-test-token" not in str(caught.value)
+
+
+def test_workflow_run_lookup_requires_exact_run_name_and_reads_jobs() -> None:
+    harness = GitHubHarness()
+    harness.workflow_run = {
+        "id": 9876,
+        "display_title": "Fleet deployment demo-006",
+        "html_url": "https://github.com/dhleach/homeops/actions/runs/9876",
+        "status": "in_progress",
+        "conclusion": None,
+        "created_at": "2026-09-26T12:00:00Z",
+        "updated_at": "2026-09-26T12:00:10Z",
+    }
+    harness.workflow_jobs = [
+        {
+            "id": 123,
+            "name": "Deploy immutable artifact to simulator",
+            "status": "in_progress",
+            "conclusion": None,
+            "started_at": "2026-09-26T12:00:05Z",
+            "completed_at": None,
+            "html_url": "https://github.com/dhleach/homeops/actions/runs/9876/job/123",
+            "steps": [],
+        }
+    ]
+
+    receipt = client(harness).find_workflow_run("demo-006")
+
+    assert receipt is not None
+    assert receipt.workflow_run_id == 9876
+    assert receipt.status == "in_progress"
+    assert receipt.jobs[0].name == "Deploy immutable artifact to simulator"
+    assert receipt.jobs[0].status == "in_progress"
+    assert any(
+        "/actions/workflows/" in request.full_url and "event=workflow_dispatch" in request.full_url
+        for request in harness.requests
+    )

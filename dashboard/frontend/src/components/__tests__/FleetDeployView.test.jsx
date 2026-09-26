@@ -41,6 +41,7 @@ describe("FleetDeployView", () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
+    window.localStorage.removeItem("homeops.activeFleetDeploymentId");
     window.history.replaceState({}, "", "/");
   });
 
@@ -143,6 +144,7 @@ describe("FleetDeployView", () => {
     }));
     expect(options.body).not.toContain("Authorization");
     expect(await screen.findByRole("status")).toHaveTextContent("accepted");
+    expect(window.localStorage.getItem("homeops.activeFleetDeploymentId")).toBe("demo-preview-001");
   });
 
   it("validates explicit targets and strategy failure combinations", async () => {
@@ -165,5 +167,85 @@ describe("FleetDeployView", () => {
     );
     fireEvent.change(screen.getByLabelText("Failure mode"), { target: { value: "abort" } });
     expect(screen.queryByText("all at once supports: abort.")).not.toBeInTheDocument();
+  });
+
+  it("reconstructs a persisted deployment run from Actions and simulator state", async () => {
+    const deployment = {
+      simulated: true,
+      target_kind: "simulated",
+      deployment_id: "demo-reload-001",
+      target_ids: [
+        "test-vehicle-01",
+        "test-vehicle-02",
+        "test-vehicle-03",
+        "test-vehicle-04",
+      ],
+      desired: { color: "green", shape: "square" },
+      desired_digest: "green-square-digest",
+      status: "succeeded",
+      error: null,
+      created_at: "2026-09-26T12:00:00Z",
+      updated_at: "2026-09-26T12:00:30Z",
+      verification: "verified",
+      verified: true,
+      targets: fleetSnapshot().targets.slice(0, 4).map((target) => ({
+        ...target,
+        desired: { color: "green", shape: "square" },
+        desired_digest: "green-square-digest",
+        observed: { color: "green", shape: "square" },
+        observed_digest: "green-square-digest",
+        status: "succeeded",
+      })),
+      manifest_commit_sha: "e".repeat(40),
+      manifest_commit_url: "https://github.com/dhleach/homeops/commit/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      workflow_run_id: 789,
+      workflow_url: "https://github.com/dhleach/homeops/actions/runs/789",
+      workflow_status: "completed",
+      workflow_conclusion: "success",
+      workflow_created_at: "2026-09-26T12:00:01Z",
+      workflow_updated_at: "2026-09-26T12:00:30Z",
+      workflow: {
+        id: 789,
+        url: "https://github.com/dhleach/homeops/actions/runs/789",
+        status: "completed",
+        conclusion: "success",
+        created_at: "2026-09-26T12:00:01Z",
+        updated_at: "2026-09-26T12:00:30Z",
+        jobs: [{
+          id: 1,
+          name: "Deploy immutable artifact to simulator",
+          status: "completed",
+          conclusion: "success",
+          started_at: "2026-09-26T12:00:10Z",
+          completed_at: "2026-09-26T12:00:29Z",
+          url: "https://github.com/dhleach/homeops/actions/runs/789/job/1",
+          failed_step: null,
+        }],
+      },
+      dispatch_status: "dispatched",
+      dispatch_error: null,
+    };
+    window.localStorage.setItem("homeops.activeFleetDeploymentId", "demo-reload-001");
+    const fetchMock = vi.fn((url) => {
+      if (url.includes("/deploy/api/deployments/")) {
+        return Promise.resolve({ ok: true, json: async () => deployment });
+      }
+      return Promise.resolve({ ok: true, json: async () => fleetSnapshot() });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<FleetDeployView apiUrl="https://api.homeops.now" />);
+
+    expect(await screen.findByTestId("deployment-run-state")).toBeInTheDocument();
+    expect(screen.getByText("4 / 4")).toBeInTheDocument();
+    expect(screen.getByText("Deploy immutable artifact to simulator")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Manifest commit" })).toHaveAttribute(
+      "href",
+      deployment.manifest_commit_url,
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.homeops.now/deploy/api/deployments/demo-reload-001",
+      expect.objectContaining({ cache: "no-store" }),
+    );
   });
 });

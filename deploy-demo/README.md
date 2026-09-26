@@ -1,10 +1,10 @@
 # Fleet Deploy Lab integration map
 
-Status: PR 11 trusted GitHub Actions deployment on top of the merged PR 10 manifest/dispatch path
+Status: PR 12 run-state reconciliation on top of the merged PR 11 trusted deployment path
 Repository: `dhleach/homeops`
 Default branch: `master`
-Latest integration snapshot: `a9d37a6`
-GitHub issue: https://github.com/dhleach/homeops/issues/352
+Latest integration snapshot: `e517b0f`
+GitHub issue: https://github.com/dhleach/homeops/issues/354
 
 This document records the real HomeOps integration points for the Fleet Deploy
 Lab as the implementation advances. It is deliberately specific about what
@@ -264,6 +264,33 @@ and workflow remain outside this path.
 - Terraform resources changed: **None**
 - Sequence and owner: Derek reviews and merges PR11; the supporting credential/IAM prerequisite owns secret entry and rotation.
 - Safety gate: the deploy job is downstream of manifest validation, lint, tests, artifact generation, and provenance revalidation; it writes only to the simulated Fleet API and never to Home Assistant, thermostats, Pi state, or the normal production deployment path.
+
+## PR 12 — show actual deployment run state in the UI
+
+PR 12 makes the public `/deploy` page reconstruct a deployment from the real
+GitHub Actions run and the simulator's observed state. The workflow now uses
+the deterministic run name `Fleet deployment <deployment_id>`, allowing the
+server to resolve the run created by GitHub's otherwise metadata-free `204`
+dispatch response without guessing based on recency. The server reads the run
+and bounded job state, exposes the manifest commit URL, run URL, timestamps,
+job conclusions, and actionable failure details, and reconciles only proven
+state transitions.
+
+An in-progress Actions run maps to `applying`; a completed failure marks the
+deployment failed while leaving observed profiles unchanged; a completed
+success is accepted only when the simulator readback already proves every
+requested target converged. The frontend polls these APIs for state rather
+than advancing a client-side timer, refreshes the fleet cards after terminal
+state, and keeps the active deployment ID in browser storage so a reload can
+recover the same run.
+
+### PR 12 disposition
+
+- Terraform apply required: **No for the code PR**
+- Manual console/setup required: **None beyond the existing PR10/PR11 GitHub and simulator credentials**
+- Terraform resources changed: **None**
+- Sequence and owner: Derek reviews and merges PR12; the existing credential/IAM prerequisite remains separate.
+- Safety gate: GitHub workflow/job state and observed simulator state are read and reconciled fail-closed; no Home Assistant, thermostat, Pi, EC2, or normal production deployment path is changed.
 
 ## Backend and API boundary
 
