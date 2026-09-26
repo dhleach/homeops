@@ -32,6 +32,10 @@ def test_workflow_checks_out_master_and_never_checks_out_manifest_branch() -> No
     assert "refs/heads/${MANIFEST_BRANCH}:refs/remotes/origin/${MANIFEST_BRANCH}" in WORKFLOW
     assert 'git show "${EVENT_COMMIT_SHA}:${MANIFEST_PATH}"' in WORKFLOW
     assert "git merge-base --is-ancestor" in WORKFLOW
+    assert "printf 'x-access-token:%s'" in WORKFLOW
+    assert "base64 --wrap=0" in WORKFLOW
+    assert "http.extraHeader=Authorization: Basic ${AUTH_HEADER}" in WORKFLOW
+    assert "http.extraHeader=Authorization: Bearer ${GITHUB_TOKEN}" not in WORKFLOW
     assert "ref: ${{ env.MANIFEST_BRANCH }}" not in WORKFLOW
     assert "git checkout" not in WORKFLOW
 

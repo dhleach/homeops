@@ -70,7 +70,10 @@ jobs:
           set -euo pipefail
           # Fetch branch objects for ancestry verification only.  Never check
           # out or execute code from this writable manifest branch.
-          git -c "http.extraHeader=Authorization: Bearer ${GITHUB_TOKEN}" fetch \
+          # GitHub's Git-over-HTTPS transport expects Basic authentication;
+          # the REST API's Bearer form is not accepted by git fetch.
+          AUTH_HEADER="$(printf 'x-access-token:%s' "${GITHUB_TOKEN}" | base64 --wrap=0)"
+          git -c "http.extraHeader=Authorization: Basic ${AUTH_HEADER}" fetch \
             --no-tags --prune origin \
             "refs/heads/${MANIFEST_BRANCH}:refs/remotes/origin/${MANIFEST_BRANCH}"
           git cat-file -e "${EVENT_COMMIT_SHA}^{commit}"
