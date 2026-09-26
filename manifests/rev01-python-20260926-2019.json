@@ -1,0 +1,1 @@
+{"deployment_id":"rev01-python-20260926-2019","failure_mode":"rollback","implementation":"python","profile":{"color":"green","shape":"square"},"schema_version":1,"strategy":"rolling","target_ids":["test-vehicle-01"]}
