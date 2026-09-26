@@ -1,10 +1,10 @@
 # Fleet Deploy Lab integration map
 
-Status: PR 10 manifest admission and trusted workflow dispatch on top of the merged PR 09 artifact boundary
+Status: PR 11 trusted GitHub Actions deployment on top of the merged PR 10 manifest/dispatch path
 Repository: `dhleach/homeops`
 Default branch: `master`
-Latest integration snapshot: `54ceb19`
-GitHub issue: https://github.com/dhleach/homeops/issues/350
+Latest integration snapshot: `a9d37a6`
+GitHub issue: https://github.com/dhleach/homeops/issues/352
 
 This document records the real HomeOps integration points for the Fleet Deploy
 Lab as the implementation advances. It is deliberately specific about what
@@ -179,7 +179,8 @@ state, or normal HomeOps deployment path.
 PR 09 adds `.github/workflows/fleet-deploy.yml`, which is a build-and-evidence
 workflow only. It accepts `deployment_id` and a full `event_commit_sha` through
 `workflow_dispatch`, and it fails unless the dispatch ref is protected
-`master`. The runner checks out trusted `master` code, fetches the
+`master`. The runner pins both jobs to the trusted master commit selected at
+dispatch, fetches the
 `fleet-deployments` branch only as Git objects, verifies that the event commit
 is an ancestor of that branch, and reads exactly
 `manifests/<deployment_id>.json` with `git show`. It never checks out or
@@ -237,6 +238,32 @@ the protected Fleet API key are backend-only values.
 - Terraform resources changed: **None**
 - Sequence and owner: Derek reviews and merges PR10; the credential/IAM prerequisite owns secret entry, rotation, and any later Terraform apply. The backend intentionally does not auto-create the manifest branch.
 - Safety gate: missing branch/credential fails closed; the browser cannot provide a repository, path, URL, command, or credential; commit-success/dispatch-failure remains recoverable from durable state.
+
+## PR 11 — deploy the validated artifact from GitHub Actions
+
+PR 11 extends the trusted workflow with a separate simulator-deployment job.
+The read-only job validates the exact manifest before installing tools, runs its
+lint and focused tests, builds the canonical profile, and uploads the validated
+deployment spec beside the profile and provenance files. The deploy job runs
+only after that job succeeds, downloads the immutable artifact, revalidates the
+manifest/artifact/provenance binding, and invokes the dependency-free Python
+deployer against the protected `/deploy/api` simulator API.
+
+The deploy job receives only the separate `FLEET_DEPLOY_API_KEY` GitHub Actions
+secret, uses a static concurrency group so simulator writes cannot overlap, and
+fails before any write when the credential is absent or artifact verification
+fails. The deployer queues desired state, applies it, and performs a fresh
+readback that must prove all requested TEST targets succeeded; STAGE and PROD
+remain untouched for the TEST environment. The normal Pi/EC2 deployment secret
+and workflow remain outside this path.
+
+### PR 11 disposition
+
+- Terraform apply required: **No for the code PR**
+- Manual console/setup required before a live submission: **Yes** — provision the separate GitHub Actions `FLEET_DEPLOY_API_KEY` secret and ensure the protected simulator API is reachable at `https://api.homeops.now/deploy/api`.
+- Terraform resources changed: **None**
+- Sequence and owner: Derek reviews and merges PR11; the supporting credential/IAM prerequisite owns secret entry and rotation.
+- Safety gate: the deploy job is downstream of manifest validation, lint, tests, artifact generation, and provenance revalidation; it writes only to the simulated Fleet API and never to Home Assistant, thermostats, Pi state, or the normal production deployment path.
 
 ## Backend and API boundary
 

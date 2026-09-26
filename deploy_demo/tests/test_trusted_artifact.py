@@ -15,6 +15,7 @@ from deploy_demo.trusted_artifact import (
     main,
     parse_manifest_bytes,
     profile_artifact,
+    verify_artifacts,
     write_artifacts,
 )
 
@@ -128,6 +129,84 @@ def test_write_artifacts_keeps_event_commit_separate_from_profile_digest(tmp_pat
     assert provenance["artifact_sha256"] == artifact.sha256
     assert provenance["event_commit_sha"] != provenance["artifact_sha256"]
     assert provenance["artifact_size_bytes"] == len(artifact.content)
+
+
+def test_verify_artifacts_rebinds_downloaded_files_to_manifest_provenance(
+    tmp_path: Path,
+) -> None:
+    """The write job must recheck artifact, manifest, and event identities together."""
+    manifest = write_manifest(tmp_path)
+    trusted = load_manifest(
+        manifest,
+        deployment_id="demo-trusted-001",
+        event_commit_sha=EVENT_SHA,
+    )
+    artifact_path = tmp_path / "profile.json"
+    provenance_path = tmp_path / "profile-provenance.json"
+    expected = write_artifacts(
+        trusted,
+        artifact_path=artifact_path,
+        provenance_path=provenance_path,
+    )
+
+    actual = verify_artifacts(
+        manifest,
+        artifact_path,
+        provenance_path,
+        deployment_id="demo-trusted-001",
+        event_commit_sha=EVENT_SHA,
+    )
+
+    assert actual == expected
+    provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
+    provenance["event_commit_sha"] = "b" * 40
+    provenance_path.write_text(json.dumps(provenance), encoding="utf-8")
+    with pytest.raises(TrustedArtifactError, match="event_commit_sha"):
+        verify_artifacts(
+            manifest,
+            artifact_path,
+            provenance_path,
+            deployment_id="demo-trusted-001",
+            event_commit_sha=EVENT_SHA,
+        )
+
+
+def test_cli_verify_reports_the_bound_artifact_identity(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The trusted workflow can verify downloaded artifacts without shell parsing."""
+    manifest = write_manifest(tmp_path)
+    trusted = load_manifest(
+        manifest,
+        deployment_id="demo-trusted-001",
+        event_commit_sha=EVENT_SHA,
+    )
+    artifact = tmp_path / "profile.json"
+    provenance = tmp_path / "profile-provenance.json"
+    write_artifacts(trusted, artifact_path=artifact, provenance_path=provenance)
+
+    assert (
+        main(
+            [
+                "verify",
+                "--manifest",
+                str(manifest),
+                "--deployment-id",
+                "demo-trusted-001",
+                "--event-commit-sha",
+                EVENT_SHA,
+                "--artifact",
+                str(artifact),
+                "--provenance",
+                str(provenance),
+            ]
+        )
+        == 0
+    )
+    output = json.loads(capsys.readouterr().out)
+
+    assert output["status"] == "verified"
+    assert output["artifact_sha256"] == hashlib.sha256(artifact.read_bytes()).hexdigest()
 
 
 def test_conflicting_existing_output_is_not_overwritten(tmp_path: Path) -> None:

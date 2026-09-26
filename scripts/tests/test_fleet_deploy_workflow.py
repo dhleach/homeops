@@ -25,7 +25,8 @@ def test_workflow_is_dispatchable_only_with_bounded_identity_inputs() -> None:
 
 def test_workflow_checks_out_master_and_never_checks_out_manifest_branch() -> None:
     """Writable manifest data is fetched as Git objects and read with git show."""
-    assert "ref: master" in WORKFLOW
+    assert "ref: ${{ github.sha }}" in WORKFLOW
+    assert "GITHUB_REF" in WORKFLOW
     assert "persist-credentials: false" in WORKFLOW
     assert "refs/heads/${MANIFEST_BRANCH}:refs/remotes/origin/${MANIFEST_BRANCH}" in WORKFLOW
     assert 'git show "${EVENT_COMMIT_SHA}:${MANIFEST_PATH}"' in WORKFLOW
@@ -47,14 +48,33 @@ def test_manifest_validation_precedes_lint_tests_and_artifact_generation() -> No
     assert "deploy_demo.trusted_artifact build" in WORKFLOW
 
 
-def test_workflow_has_read_only_permissions_and_no_deployer_side_effect() -> None:
-    """PR09 builds evidence only; the deployer belongs to a later workflow."""
+def test_workflow_separates_read_only_validation_from_simulator_write_job() -> None:
+    """Only the post-gate job receives the separate simulator write boundary."""
     assert "permissions:\n  contents: read" in WORKFLOW
     assert "permissions:\n      contents: read" in WORKFLOW
     assert "actions/upload-artifact@v4" in WORKFLOW
-    assert "FLEET_DEPLOY_API_KEY" not in WORKFLOW
-    assert "deploy_demo.deployer" not in WORKFLOW
-    assert "FleetApiClient" not in WORKFLOW
+    trusted_job, deploy_job = WORKFLOW.split("  deploy-simulator:", maxsplit=1)
+    assert "FLEET_DEPLOY_API_KEY" not in trusted_job
+    assert "needs: trusted-artifact" in deploy_job
+    assert "concurrency:" in deploy_job
+    assert "group: fleet-deploy-write" in deploy_job
+    assert "actions/download-artifact@v4" in deploy_job
+    assert "FLEET_DEPLOY_API_KEY: ${{ secrets.FLEET_DEPLOY_API_KEY }}" in deploy_job
+    assert "deploy_demo.trusted_artifact verify" in deploy_job
+    assert "deploy_demo.deployer" in deploy_job
+    assert "FleetApiClient" not in deploy_job
+
+
+def test_deployment_job_writes_only_after_artifact_verification() -> None:
+    """No simulator write can occur before the downloaded artifact is rechecked."""
+    deploy_job = WORKFLOW.split("  deploy-simulator:", maxsplit=1)[1]
+    verification = deploy_job.index("- name: Verify downloaded artifact provenance")
+    credential = deploy_job.index("- name: Require simulator write credential")
+    deployer = deploy_job.index("- name: Deploy artifact and verify fresh API readback")
+
+    assert verification < credential < deployer
+    assert '--artifact "${RUNNER_TEMP}/fleet-artifact/profile.json"' in deploy_job
+    assert '--provenance "${RUNNER_TEMP}/fleet-artifact/profile-provenance.json"' in deploy_job
 
 
 def test_workflow_displays_event_sha_separately_from_profile_digest() -> None:
