@@ -97,7 +97,8 @@ class FleetMockHandler(BaseHTTPRequestHandler):
             self._send(503, {"detail": "synthetic queue failure"})
             return
         if self.path.endswith("/deployments"):
-            self._send(200, _response_body(body, status="queued", verified=False))
+            queue_status = "applying" if self.server.failure_mode == "applying" else "queued"
+            self._send(200, _response_body(body, status=queue_status, verified=False))
             return
         if self.path.endswith("/apply"):
             self._send(200, _response_body(self.server.spec, status="succeeded", verified=True))
@@ -230,6 +231,24 @@ def test_playbook_sends_shared_spec_and_verifies_fresh_readback(
     assert server.requests[1][2] == "Bearer synthetic-secret"
     assert server.requests[2][2] is None
     assert server.requests[0][3] == spec
+
+
+def test_playbook_accepts_concurrent_applying_queue_state(
+    ansible_playbook: list[str], tmp_path: Path
+) -> None:
+    spec = valid_spec()
+    server, thread = _start_server(spec, failure_mode="applying")
+    try:
+        result = _run_playbook(ansible_playbook, tmp_path, server, spec)
+    finally:
+        _stop_server(server, thread)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert [request[0:2] for request in server.requests] == [
+        ("POST", "/deploy/api/deployments"),
+        ("POST", "/deploy/api/deployments/ansible-playbook-001/apply"),
+        ("GET", "/deploy/api/deployments/ansible-playbook-001"),
+    ]
 
 
 def test_playbook_fails_nonzero_on_protected_api_failure(
