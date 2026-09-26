@@ -10,6 +10,7 @@ Home Assistant, Ask HomeOps, or normal Pi/EC2 deployment credentials.
 from __future__ import annotations
 
 import hmac
+import importlib.util
 import logging
 import os
 import sqlite3
@@ -21,13 +22,28 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, ConfigDict, Field
 
-# The backend is imported as a top-level module by the CI test runner and by
-# local ``uvicorn main:app`` commands.  Make the repository-root package
-# importable in that mode while remaining a no-op inside the `/app` image,
-# where `deploy_demo` already sits beside this module.
-_REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
-if (_REPOSITORY_ROOT / "deploy_demo").is_dir() and str(_REPOSITORY_ROOT) not in sys.path:
-    sys.path.insert(0, str(_REPOSITORY_ROOT))
+
+def _ensure_deploy_demo_importable(module_file: Path) -> None:
+    """Make the source-tree package importable without assuming a layout.
+
+    CI imports this module as a top-level file while the production image
+    copies it to ``/app/fleet_api.py`` beside the ``deploy_demo`` package.
+    Search ancestors only when the package is not already importable; this
+    keeps the flattened image path from indexing beyond the filesystem root.
+    """
+    if importlib.util.find_spec("deploy_demo") is not None:
+        return
+
+    for candidate in module_file.resolve().parents:
+        repository_root = candidate / "deploy_demo"
+        if (repository_root / "__init__.py").is_file():
+            root_string = str(candidate)
+            if root_string not in sys.path:
+                sys.path.insert(0, root_string)
+            return
+
+
+_ensure_deploy_demo_importable(Path(__file__))
 
 from deploy_demo import (  # noqa: E402
     DeploymentConflictError,
