@@ -21,7 +21,7 @@ the current GitHub Actions deploy workflow.
 | IAM role + profile | CloudWatch agent + S3 read for EC2 |
 | Cognito user pool | OIDC managed login for the browser-facing Ask HomeOps demo |
 | Cognito resource server | `https://api.homeops.now/diagnostic:read` API scope |
-| SSM runtime parameters | OIDC and loopback Valkey settings consumed by the EC2 deploy script |
+| SSM runtime parameters | OIDC, loopback Valkey, and Fleet Deploy backend settings consumed by the EC2 deploy script |
 
 ## Prerequisites
 

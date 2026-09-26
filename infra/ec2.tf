@@ -224,6 +224,26 @@ if [ -f /home/ubuntu/homeops/dashboard/docker-compose.yml ]; then
     echo "[WARN] GEMINI_API_KEY not found in SSM — backend container will fail. Add to SSM: /homeops/${var.environment}/gemini-api-key" >> $LOG
   fi
 
+  FLEET_DEPLOY_GITHUB_TOKEN=$(/usr/local/bin/aws ssm get-parameter \
+    --name "/homeops/${var.environment}/fleet-deploy-github-token" \
+    --with-decryption \
+    --query 'Parameter.Value' \
+    --output text \
+    --region ${var.aws_region} 2>/dev/null)
+  if [ -z "$FLEET_DEPLOY_GITHUB_TOKEN" ]; then
+    echo "[WARN] FLEET_DEPLOY_GITHUB_TOKEN not found in SSM — public Fleet Deploy submissions will remain unavailable. Add to SSM: /homeops/${var.environment}/fleet-deploy-github-token" >> $LOG
+  fi
+
+  FLEET_DEPLOY_API_KEY=$(/usr/local/bin/aws ssm get-parameter \
+    --name "/homeops/${var.environment}/fleet-deploy-api-key" \
+    --with-decryption \
+    --query 'Parameter.Value' \
+    --output text \
+    --region ${var.aws_region} 2>/dev/null)
+  if [ -z "$FLEET_DEPLOY_API_KEY" ]; then
+    echo "[WARN] FLEET_DEPLOY_API_KEY not found in SSM — public Fleet Deploy submissions will remain unavailable. Add to SSM: /homeops/${var.environment}/fleet-deploy-api-key" >> $LOG
+  fi
+
   ASK_HOMEOPS_OIDC_ISSUER=$(/usr/local/bin/aws ssm get-parameter --name "/homeops/${var.environment}/ask-homeops-oidc-issuer" --with-decryption --query 'Parameter.Value' --output text --region ${var.aws_region} 2>/dev/null)
   ASK_HOMEOPS_OIDC_AUDIENCE=$(/usr/local/bin/aws ssm get-parameter --name "/homeops/${var.environment}/ask-homeops-oidc-audience" --with-decryption --query 'Parameter.Value' --output text --region ${var.aws_region} 2>/dev/null)
   ASK_HOMEOPS_OIDC_AUDIENCE_CLAIM=$(/usr/local/bin/aws ssm get-parameter --name "/homeops/${var.environment}/ask-homeops-oidc-audience-claim" --with-decryption --query 'Parameter.Value' --output text --region ${var.aws_region} 2>/dev/null)
@@ -236,6 +256,8 @@ if [ -f /home/ubuntu/homeops/dashboard/docker-compose.yml ]; then
   cat > .env << ENVEOF
 OPENAI_API_KEY=$OPENAI_API_KEY
 GEMINI_API_KEY=$GEMINI_API_KEY
+FLEET_DEPLOY_GITHUB_TOKEN=$FLEET_DEPLOY_GITHUB_TOKEN
+FLEET_DEPLOY_API_KEY=$FLEET_DEPLOY_API_KEY
 ASK_HOMEOPS_DIAGNOSTIC_PROVIDER=openai
 ASK_HOMEOPS_OIDC_ISSUER=$ASK_HOMEOPS_OIDC_ISSUER
 ASK_HOMEOPS_OIDC_AUDIENCE=$ASK_HOMEOPS_OIDC_AUDIENCE
