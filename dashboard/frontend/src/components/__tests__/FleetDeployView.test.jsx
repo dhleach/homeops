@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "../../App.jsx";
 import { FleetDeployView } from "../FleetDeployView.jsx";
@@ -52,7 +52,7 @@ describe("FleetDeployView", () => {
     expect(screen.getByRole("heading", { name: "stage" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "prod" })).toBeInTheDocument();
     expect(screen.getAllByText("Simulated target")).toHaveLength(12);
-    expect(screen.getByText("test-vehicle-01")).toBeInTheDocument();
+    expect(screen.getAllByText("test-vehicle-01").length).toBeGreaterThan(0);
     expect(screen.getAllByText("blue circle")).toHaveLength(6);
     expect(screen.getAllByText("Desired = observed")).toHaveLength(12);
   });
@@ -90,5 +90,41 @@ describe("FleetDeployView", () => {
 
     await waitFor(() => expect(screen.getByRole("heading", { name: "Fleet Deploy Lab" })).toBeInTheDocument());
     expect(screen.queryByText("What's the temperature right now?")).not.toBeInTheDocument();
+  });
+
+  it("renders a read-only DeploymentSpec preview and keeps deploy disabled", async () => {
+    render(<FleetDeployView apiUrl="https://api.homeops.now" />);
+
+    await screen.findAllByTestId("fleet-target-card");
+    const preview = screen.getByTestId("deployment-spec-preview");
+    expect(preview).toHaveTextContent('"deployment_id": "demo-preview-001"');
+    expect(preview).toHaveTextContent('"environment": "test"');
+    expect(preview).toHaveTextContent('"implementation": "python"');
+    expect(preview).toHaveTextContent('"strategy": "rolling"');
+    expect(preview).toHaveTextContent('"failure_mode": "rollback"');
+    expect(screen.getByTestId("deploy-submit")).toBeDisabled();
+    expect(screen.getByText("Preview only")).toBeInTheDocument();
+  });
+
+  it("validates explicit targets and strategy failure combinations", async () => {
+    render(<FleetDeployView apiUrl="https://api.homeops.now" />);
+
+    await screen.findAllByTestId("fleet-target-card");
+    fireEvent.click(screen.getByRole("radio", { name: /individual targets/i }));
+    expect(screen.getByTestId("deployment-validation-errors")).toHaveTextContent(
+      "Select at least one simulated target",
+    );
+
+    fireEvent.click(screen.getByRole("checkbox", { name: "test-vehicle-01" }));
+    expect(screen.queryByText("Select at least one simulated target.")).not.toBeInTheDocument();
+    expect(screen.getByTestId("deployment-spec-preview")).toHaveTextContent('"target_ids": [');
+    expect(screen.getByTestId("deployment-spec-preview")).toHaveTextContent('"test-vehicle-01"');
+
+    fireEvent.change(screen.getByLabelText("Strategy"), { target: { value: "all_at_once" } });
+    expect(screen.getByTestId("deployment-validation-errors")).toHaveTextContent(
+      "all at once supports: abort",
+    );
+    fireEvent.change(screen.getByLabelText("Failure mode"), { target: { value: "abort" } });
+    expect(screen.queryByText("all at once supports: abort.")).not.toBeInTheDocument();
   });
 });
