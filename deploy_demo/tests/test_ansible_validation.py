@@ -19,8 +19,8 @@ def valid_spec(**overrides: object) -> dict[str, object]:
         "environment": "test",
         "profile": {"color": "purple", "shape": "hexagon"},
         "implementation": "ansible",
-        "strategy": "rolling",
-        "failure_mode": "rollback",
+        "strategy": "all_at_once",
+        "failure_mode": "abort",
     }
     payload.update(overrides)
     return payload

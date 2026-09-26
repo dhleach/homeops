@@ -3,7 +3,11 @@
 import importlib
 
 from .deployment_spec import (
+    CAPABILITY_MATRIX,
     COLORS,
+    DEFAULT_FAILURE_MODE,
+    DEFAULT_IMPLEMENTATION,
+    DEFAULT_STRATEGY,
     ENVIRONMENTS,
     FAILURE_MODES,
     IMPLEMENTATIONS,
@@ -15,6 +19,7 @@ from .deployment_spec import (
     DeploymentSpecError,
     canonicalize_deployment_spec,
     expand_targets,
+    supported_capabilities,
     validate_deployment_spec,
 )
 from .fleet_state import (
@@ -89,7 +94,11 @@ def __getattr__(name: str):
 
 
 __all__ = [
+    "CAPABILITY_MATRIX",
     "COLORS",
+    "DEFAULT_FAILURE_MODE",
+    "DEFAULT_IMPLEMENTATION",
+    "DEFAULT_STRATEGY",
     "ENVIRONMENTS",
     "FAILURE_MODES",
     "IMPLEMENTATIONS",
@@ -101,6 +110,7 @@ __all__ = [
     "DeploymentSpecError",
     "canonicalize_deployment_spec",
     "expand_targets",
+    "supported_capabilities",
     "validate_deployment_spec",
     "DEFAULT_STATE_PATH",
     "DEPLOYMENT_STATUSES",

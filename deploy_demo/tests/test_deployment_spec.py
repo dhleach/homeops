@@ -10,11 +10,13 @@ from copy import deepcopy
 import pytest
 
 from deploy_demo.deployment_spec import (
+    CAPABILITY_MATRIX,
     TARGETS_BY_ENVIRONMENT,
     DeploymentSpecError,
     canonicalize_deployment_spec,
     expand_targets,
     main,
+    supported_capabilities,
     validate_deployment_spec,
 )
 
@@ -26,8 +28,8 @@ def valid_spec(**overrides: object) -> dict[str, object]:
         "environment": "test",
         "profile": {"color": "blue", "shape": "circle"},
         "implementation": "python",
-        "strategy": "rolling",
-        "failure_mode": "rollback",
+        "strategy": "all_at_once",
+        "failure_mode": "abort",
     }
     spec.update(overrides)
     if overrides.get("environment", "__missing__") is None:
@@ -46,6 +48,42 @@ def test_valid_environment_spec_expands_to_four_known_targets() -> None:
     assert len(spec.expanded_target_ids) == 4
 
 
+def test_capability_matrix_exposes_only_verified_execution_paths() -> None:
+    assert CAPABILITY_MATRIX == (
+        ("python", "all_at_once", "abort"),
+        ("ansible", "all_at_once", "abort"),
+    )
+    assert supported_capabilities() == (
+        {"implementation": "python", "strategy": "all_at_once", "failure_mode": "abort"},
+        {"implementation": "ansible", "strategy": "all_at_once", "failure_mode": "abort"},
+    )
+
+
+@pytest.mark.parametrize(
+    ("implementation", "strategy", "failure_mode"),
+    [
+        ("python", "rolling", "rollback"),
+        ("python", "canary", "abort"),
+        ("ansible", "rolling", "rollback"),
+    ],
+)
+def test_unproven_capability_combinations_are_rejected(
+    implementation: str,
+    strategy: str,
+    failure_mode: str,
+) -> None:
+    with pytest.raises(
+        DeploymentSpecError, match="unsupported implementation/strategy/failure-mode"
+    ):
+        validate_deployment_spec(
+            valid_spec(
+                implementation=implementation,
+                strategy=strategy,
+                failure_mode=failure_mode,
+            )
+        )
+
+
 def test_explicit_target_selection_is_normalized_to_stable_order() -> None:
     target_ids = ["prod-vehicle-02", "test-vehicle-01", "stage-vehicle-04"]
 
@@ -59,9 +97,9 @@ def test_explicit_target_selection_is_normalized_to_stable_order() -> None:
 def test_canonical_json_is_stable_for_equivalent_input_orderings() -> None:
     first = valid_spec(environment=None, target_ids=["prod-vehicle-01", "test-vehicle-02"])
     second = {
-        "failure_mode": "rollback",
+        "failure_mode": "abort",
         "target_ids": ["test-vehicle-02", "prod-vehicle-01"],
-        "strategy": "rolling",
+        "strategy": "all_at_once",
         "profile": {"shape": "circle", "color": "blue"},
         "implementation": "python",
         "deployment_id": "demo-20260925-001",
@@ -77,9 +115,9 @@ def test_canonical_json_is_one_line_sorted_json() -> None:
     assert "\n" not in canonical
     assert canonical == (
         '{"deployment_id":"demo-20260925-001","environment":"test",'
-        '"failure_mode":"rollback","implementation":"python",'
+        '"failure_mode":"abort","implementation":"python",'
         '"profile":{"color":"blue","shape":"circle"},"schema_version":1,'
-        '"strategy":"rolling"}'
+        '"strategy":"all_at_once"}'
     )
     assert json.loads(canonical) == validate_deployment_spec(valid_spec()).to_dict()
 

@@ -68,6 +68,7 @@ from deploy_demo import (  # noqa: E402
     VehicleState,
     WorkflowJobReceipt,
     WorkflowRunReceipt,
+    supported_capabilities,
     validate_deployment_spec,
 )
 
@@ -131,6 +132,16 @@ class FleetTargetResponse(BaseModel):
     updated_at: str
 
 
+class FleetCapabilityResponse(BaseModel):
+    """One implementation/strategy/failure-mode combination proven by CI."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    implementation: str
+    strategy: str
+    failure_mode: str
+
+
 class FleetReadResponse(BaseModel):
     """The anonymous fleet snapshot consumed by the future demo frontend."""
 
@@ -139,6 +150,7 @@ class FleetReadResponse(BaseModel):
     simulated: Literal[True] = True
     target_kind: Literal["simulated"] = "simulated"
     targets: list[FleetTargetResponse]
+    capabilities: list[FleetCapabilityResponse]
 
 
 class FleetHealthResponse(BaseModel):
@@ -576,7 +588,10 @@ def read_fleet(store: FleetStoreDependency) -> FleetReadResponse:
         vehicles = store.list_vehicles()
     except (OSError, sqlite3.Error, FleetStateError) as exc:
         _state_unavailable(exc)
-    return FleetReadResponse(targets=[_target_response(vehicle) for vehicle in vehicles])
+    return FleetReadResponse(
+        targets=[_target_response(vehicle) for vehicle in vehicles],
+        capabilities=[FleetCapabilityResponse(**item) for item in supported_capabilities()],
+    )
 
 
 @router.get("/fleet/{target_id}", response_model=FleetTargetResponse)
@@ -801,6 +816,7 @@ def apply_deployment(
 __all__ = [
     "FLEET_API_PREFIX",
     "FLEET_MANAGEMENT_KEY_ENV",
+    "FleetCapabilityResponse",
     "FleetDeploymentResponse",
     "FleetHealthResponse",
     "FleetReadResponse",

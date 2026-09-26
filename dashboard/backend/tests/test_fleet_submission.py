@@ -24,8 +24,8 @@ SUBMISSION = {
     "target_ids": ["test-vehicle-01"],
     "profile": {"color": "purple", "shape": "hexagon"},
     "implementation": "python",
-    "strategy": "rolling",
-    "failure_mode": "rollback",
+    "strategy": "all_at_once",
+    "failure_mode": "abort",
 }
 
 
@@ -150,6 +150,18 @@ def test_submission_rejects_extra_browser_fields_before_external_calls(submissio
     response = client.post("/deploy/api/deployments/submit", json=payload)
 
     assert response.status_code == 422
+    assert github.commit_calls == []
+    assert github.dispatch_calls == []
+
+
+def test_submission_rejects_unproven_capability_before_external_calls(submission_harness) -> None:
+    client, _store, github = submission_harness
+    payload = {**SUBMISSION, "strategy": "rolling", "failure_mode": "rollback"}
+
+    response = client.post("/deploy/api/deployments/submit", json=payload)
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "invalid_deployment_spec"
     assert github.commit_calls == []
     assert github.dispatch_calls == []
 

@@ -28,7 +28,15 @@ function fleetSnapshot() {
     })
   ));
 
-  return { simulated: true, target_kind: "simulated", targets };
+  return {
+    simulated: true,
+    target_kind: "simulated",
+    capabilities: [
+      { implementation: "python", strategy: "all_at_once", failure_mode: "abort" },
+      { implementation: "ansible", strategy: "all_at_once", failure_mode: "abort" },
+    ],
+    targets,
+  };
 }
 
 describe("FleetDeployView", () => {
@@ -104,10 +112,11 @@ describe("FleetDeployView", () => {
     expect(preview).toHaveTextContent(`"deployment_id": "${attemptId}"`);
     expect(preview).toHaveTextContent('"environment": "test"');
     expect(preview).toHaveTextContent('"implementation": "python"');
-    expect(preview).toHaveTextContent('"strategy": "rolling"');
-    expect(preview).toHaveTextContent('"failure_mode": "rollback"');
+    expect(preview).toHaveTextContent('"strategy": "all_at_once"');
+    expect(preview).toHaveTextContent('"failure_mode": "abort"');
     expect(screen.getByRole("heading", { name: "Configure a deployment" })).toBeInTheDocument();
     expect(screen.getByText("DeploymentSpec JSON")).toBeInTheDocument();
+    expect(screen.getByTestId("deployment-capability-note")).toHaveTextContent("Rolling, canary, and rollback");
     expect(screen.getByText("Public simulated control plane")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Deploy to 4 test vehicles" })).not.toBeDisabled();
     expect(screen.getByText("Simulated fleet")).toBeInTheDocument();
@@ -165,8 +174,8 @@ describe("FleetDeployView", () => {
       deployment_id: expect.stringMatching(/^demo-[a-z0-9-]+$/),
       environment: "test",
       implementation: "python",
-      strategy: "rolling",
-      failure_mode: "rollback",
+      strategy: "all_at_once",
+      failure_mode: "abort",
     }));
     expect(options.body).not.toContain("Authorization");
     expect(await screen.findByRole("status")).toHaveTextContent("accepted");
@@ -231,7 +240,7 @@ describe("FleetDeployView", () => {
     expect(screen.getByTestId("deployment-attempt-id").textContent).not.toBe(firstId);
   });
 
-  it("validates explicit targets and strategy failure combinations", async () => {
+  it("validates explicit targets and exposes only supported capabilities", async () => {
     render(<FleetDeployView apiUrl="https://api.homeops.now" />);
 
     await screen.findAllByTestId("fleet-target-card");
@@ -247,12 +256,14 @@ describe("FleetDeployView", () => {
     expect(screen.getByTestId("deployment-spec-preview")).toHaveTextContent('"test-vehicle-01"');
     expect(screen.getByRole("button", { name: "Deploy to 1 selected vehicle" })).not.toBeDisabled();
 
-    fireEvent.change(screen.getByLabelText("Strategy"), { target: { value: "all_at_once" } });
-    expect(screen.getByTestId("deployment-validation-errors")).toHaveTextContent(
-      "all at once supports: abort",
-    );
-    fireEvent.change(screen.getByLabelText("Failure mode"), { target: { value: "abort" } });
-    expect(screen.queryByText("all at once supports: abort.")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Strategy")).toHaveValue("all_at_once");
+    expect(screen.getByLabelText("Failure mode")).toHaveValue("abort");
+    expect(screen.queryByRole("option", { name: "rolling" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "canary" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "rollback" })).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Implementation"), { target: { value: "ansible" } });
+    expect(screen.getByTestId("deployment-spec-preview")).toHaveTextContent('"implementation": "ansible"');
+    expect(screen.getByRole("button", { name: "Deploy to 1 selected vehicle" })).not.toBeDisabled();
   });
 
   it("reconstructs a persisted deployment run from Actions and simulator state", async () => {

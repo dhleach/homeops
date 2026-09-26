@@ -1,7 +1,7 @@
 # Fleet Deploy Lab DeploymentSpec
 
-PR 02 defines the single request contract shared by the future FastAPI
-endpoint, trusted GitHub Actions workflow, deployers, and `/deploy` preview.
+PR 02 defines the single request contract shared by the FastAPI endpoint,
+trusted GitHub Actions workflow, deployers, and `/deploy` preview.
 The executable source of truth is the dependency-free
 [`deploy_demo.deployment_spec`](../deploy_demo/deployment_spec.py) module.
 
@@ -10,13 +10,13 @@ The executable source of truth is the dependency-free
 An environment selector expands to the complete deterministic group:
 
 ```json
-{"deployment_id":"demo-20260925-001","environment":"test","failure_mode":"rollback","implementation":"python","profile":{"color":"blue","shape":"circle"},"schema_version":1,"strategy":"rolling"}
+{"deployment_id":"demo-20260925-001","environment":"test","failure_mode":"abort","implementation":"python","profile":{"color":"blue","shape":"circle"},"schema_version":1,"strategy":"all_at_once"}
 ```
 
 An explicit selection uses `target_ids` instead of `environment`:
 
 ```json
-{"deployment_id":"demo-20260925-002","failure_mode":"abort","implementation":"python","profile":{"color":"green","shape":"hexagon"},"schema_version":1,"strategy":"canary","target_ids":["test-vehicle-01","prod-vehicle-02"]}
+{"deployment_id":"demo-20260925-002","failure_mode":"abort","implementation":"ansible","profile":{"color":"green","shape":"hexagon"},"schema_version":1,"strategy":"all_at_once","target_ids":["test-vehicle-01","prod-vehicle-02"]}
 ```
 
 The validator requires exactly one of `environment` or `target_ids`. It rejects
@@ -32,7 +32,21 @@ The known targets are four logical vehicles in each environment:
 | `stage` | `stage-vehicle-01` through `stage-vehicle-04` |
 | `prod` | `prod-vehicle-01` through `prod-vehicle-04` |
 
-Supported values are:
+The currently verified capability matrix is deliberately narrower than the
+reserved enum vocabulary. Both deployers use the simulator's atomic apply path;
+they do not yet implement rolling, canary, or rollback semantics:
+
+| Implementation | Strategy | Failure mode |
+| --- | --- | --- |
+| `python` | `all_at_once` | `abort` |
+| `ansible` | `all_at_once` | `abort` |
+
+The backend publishes this matrix with the anonymous fleet snapshot, and the
+frontend renders only those combinations. The shared validator rejects every
+other combination before manifest admission. The reserved values remain in
+the schema for later, separately verified rollout work.
+
+The complete reserved enum vocabulary is:
 
 | Field | Values |
 | --- | --- |
@@ -42,9 +56,10 @@ Supported values are:
 | `strategy` | `all_at_once`, `rolling`, `canary` |
 | `failure_mode` | `abort`, `rollback` |
 
-`all_at_once` currently accepts only `abort`; `rolling` and `canary` accept
-either failure mode. The failure mode is a reserved contract value in this PR;
-the runtime behavior is implemented by later failure/rollback tasks.
+`all_at_once` currently accepts only `abort`; `rolling`, `canary`, and
+`rollback` are not enabled by the current capability matrix. This explicit
+fail-closed boundary prevents the UI or a bypassed API caller from claiming
+behavior the selected implementation does not provide.
 
 ## Deterministic serialization
 

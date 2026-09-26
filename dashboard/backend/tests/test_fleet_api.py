@@ -24,8 +24,8 @@ def valid_payload(**overrides: object) -> dict[str, object]:
         "target_ids": ["test-vehicle-01"],
         "profile": {"color": "purple", "shape": "hexagon"},
         "implementation": "python",
-        "strategy": "rolling",
-        "failure_mode": "rollback",
+        "strategy": "all_at_once",
+        "failure_mode": "abort",
     }
     payload.update(overrides)
     return payload
@@ -65,6 +65,10 @@ def test_public_fleet_reads_identify_every_target_as_simulated(fleet_store) -> N
     assert body["simulated"] is True
     assert body["target_kind"] == "simulated"
     assert len(body["targets"]) == 12
+    assert body["capabilities"] == [
+        {"implementation": "python", "strategy": "all_at_once", "failure_mode": "abort"},
+        {"implementation": "ansible", "strategy": "all_at_once", "failure_mode": "abort"},
+    ]
     assert body["targets"][0]["label"] == "TEST-01"
     assert all(target["simulated"] is True for target in body["targets"])
     assert all(target["desired_digest"] == target["observed_digest"] for target in body["targets"])
@@ -98,6 +102,20 @@ def test_homeops_diagnostic_token_is_not_a_fleet_management_credential(fleet_sto
 
     assert response.status_code == 401
     assert response.json()["detail"] == fleet_api.FLEET_MANAGEMENT_REQUIRED_ERROR
+
+
+def test_management_rejects_unproven_capability_combinations(fleet_store) -> None:
+    response = client.post(
+        "/deploy/api/deployments",
+        headers=FLEET_HEADERS,
+        json=valid_payload(strategy="rolling", failure_mode="rollback"),
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "invalid_deployment_spec"
+    assert (
+        "unsupported implementation/strategy/failure-mode" in response.json()["detail"]["message"]
+    )
 
 
 def test_management_fails_closed_when_dedicated_credential_is_missing(

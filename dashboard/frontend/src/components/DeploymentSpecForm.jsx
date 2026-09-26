@@ -7,14 +7,10 @@ const DEPLOYMENT_SPEC_VERSION = 1;
 const ENVIRONMENTS = ["test", "stage", "prod"];
 const COLORS = ["blue", "green", "orange", "purple"];
 const SHAPES = ["circle", "hexagon", "square", "triangle"];
-const IMPLEMENTATIONS = ["python", "ansible"];
-const STRATEGIES = ["all_at_once", "rolling", "canary"];
-const FAILURE_MODES = ["abort", "rollback"];
-const FAILURE_MODES_BY_STRATEGY = {
-  all_at_once: ["abort"],
-  rolling: FAILURE_MODES,
-  canary: FAILURE_MODES,
-};
+const DEFAULT_CAPABILITIES = [
+  { implementation: "python", strategy: "all_at_once", failure_mode: "abort" },
+  { implementation: "ansible", strategy: "all_at_once", failure_mode: "abort" },
+];
 const TARGETS_BY_ENVIRONMENT = Object.fromEntries(
   ENVIRONMENTS.map((environment) => [
     environment,
@@ -38,9 +34,39 @@ const DEFAULT_FORM = {
   profile_color: "blue",
   profile_shape: "circle",
   implementation: "python",
-  strategy: "rolling",
-  failure_mode: "rollback",
+  strategy: "all_at_once",
+  failure_mode: "abort",
 };
+
+function normalizeCapabilities(capabilities) {
+  if (!Array.isArray(capabilities) || capabilities.length === 0) return DEFAULT_CAPABILITIES;
+  const normalized = capabilities.filter((capability) => (
+    capability
+    && typeof capability.implementation === "string"
+    && typeof capability.strategy === "string"
+    && typeof capability.failure_mode === "string"
+  ));
+  return normalized.length > 0 ? normalized : DEFAULT_CAPABILITIES;
+}
+
+function capabilitiesFor(capabilities, form) {
+  return capabilities.filter((capability) => (
+    capability.implementation === form.implementation
+    && capability.strategy === form.strategy
+  ));
+}
+
+function supportsCapability(form, capabilities) {
+  return capabilities.some((capability) => (
+    capability.implementation === form.implementation
+    && capability.strategy === form.strategy
+    && capability.failure_mode === form.failure_mode
+  ));
+}
+
+function uniqueCapabilityValues(capabilities, field) {
+  return [...new Set(capabilities.map((capability) => capability[field]))];
+}
 
 function readStoredAttemptId() {
   try {
@@ -134,7 +160,7 @@ function buildDeploymentSpec(form) {
   };
 }
 
-function validateForm(form) {
+function validateForm(form, capabilities) {
   const errors = {};
 
   if (!form.deployment_id) {
@@ -161,14 +187,8 @@ function validateForm(form) {
   if (!COLORS.includes(form.profile_color) || !SHAPES.includes(form.profile_shape)) {
     errors.profile = "Choose a supported color and shape.";
   }
-  if (!IMPLEMENTATIONS.includes(form.implementation)) {
-    errors.implementation = "Choose a supported implementation.";
-  }
-  if (!STRATEGIES.includes(form.strategy)) {
-    errors.strategy = "Choose a supported strategy.";
-  }
-  if (!FAILURE_MODES_BY_STRATEGY[form.strategy]?.includes(form.failure_mode)) {
-    errors.failure_mode = `${labelize(form.strategy)} supports: ${FAILURE_MODES_BY_STRATEGY[form.strategy]?.join(", ") ?? "no failure modes"}.`;
+  if (!supportsCapability(form, capabilities)) {
+    errors.capability = "This implementation, strategy, and failure mode combination is not supported.";
   }
 
   return errors;
@@ -204,13 +224,23 @@ function OptionSelect({ id, label, value, options, onChange, error, disabled = f
   );
 }
 
-export function DeploymentSpecForm({ apiUrl, onSubmitted, onNewAttempt }) {
+export function DeploymentSpecForm({ apiUrl, capabilities, onSubmitted, onNewAttempt }) {
+  const availableCapabilities = useMemo(() => normalizeCapabilities(capabilities), [capabilities]);
   const [form, setForm] = useState(createDefaultForm);
   const [submitting, setSubmitting] = useState(false);
   const [submission, setSubmission] = useState(null);
   const [submitError, setSubmitError] = useState(null);
-  const errors = useMemo(() => validateForm(form), [form]);
+  const errors = useMemo(
+    () => validateForm(form, availableCapabilities),
+    [form, availableCapabilities],
+  );
   const preview = useMemo(() => buildDeploymentSpec(form), [form]);
+  const implementationOptions = uniqueCapabilityValues(availableCapabilities, "implementation");
+  const strategyOptions = uniqueCapabilityValues(
+    availableCapabilities.filter((capability) => capability.implementation === form.implementation),
+    "strategy",
+  );
+  const failureModeOptions = uniqueCapabilityValues(capabilitiesFor(availableCapabilities, form), "failure_mode");
 
   function beginNewAttempt() {
     const deploymentId = createDeploymentId();
@@ -233,12 +263,30 @@ export function DeploymentSpecForm({ apiUrl, onSubmitted, onNewAttempt }) {
 
   function updateField(field) {
     return (event) => {
+      const value = event.target.value;
       const deploymentId = prepareForConfigurationEdit();
-      setForm((current) => ({
-        ...current,
-        [field]: event.target.value,
-        ...(deploymentId ? { deployment_id: deploymentId } : {}),
-      }));
+      setForm((current) => {
+        const next = { ...current, [field]: value };
+        if (field === "implementation") {
+          const nextCapability = availableCapabilities.find(
+            (capability) => capability.implementation === value,
+          );
+          if (nextCapability) {
+            next.strategy = nextCapability.strategy;
+            next.failure_mode = nextCapability.failure_mode;
+          }
+        } else if (field === "strategy") {
+          const nextCapability = availableCapabilities.find(
+            (capability) => (
+              capability.implementation === current.implementation
+              && capability.strategy === value
+            ),
+          );
+          if (nextCapability) next.failure_mode = nextCapability.failure_mode;
+        }
+        if (deploymentId) next.deployment_id = deploymentId;
+        return next;
+      });
     };
   }
 
@@ -388,7 +436,7 @@ export function DeploymentSpecForm({ apiUrl, onSubmitted, onNewAttempt }) {
               id="deployment-implementation"
               label="Implementation"
               value={form.implementation}
-              options={IMPLEMENTATIONS}
+              options={implementationOptions}
               onChange={updateField("implementation")}
               error={errors.implementation}
             />
@@ -396,7 +444,7 @@ export function DeploymentSpecForm({ apiUrl, onSubmitted, onNewAttempt }) {
               id="deployment-strategy"
               label="Strategy"
               value={form.strategy}
-              options={STRATEGIES}
+              options={strategyOptions}
               onChange={updateField("strategy")}
               error={errors.strategy}
             />
@@ -404,7 +452,7 @@ export function DeploymentSpecForm({ apiUrl, onSubmitted, onNewAttempt }) {
               id="deployment-failure-mode"
               label="Failure mode"
               value={form.failure_mode}
-              options={FAILURE_MODES}
+              options={failureModeOptions}
               onChange={updateField("failure_mode")}
               error={errors.failure_mode}
             />
@@ -425,6 +473,10 @@ export function DeploymentSpecForm({ apiUrl, onSubmitted, onNewAttempt }) {
               error={errors.profile}
             />
           </div>
+          <p className="rounded-lg border border-amber-400/20 bg-amber-400/5 p-3 text-xs leading-5 text-amber-100/80" data-testid="deployment-capability-note">
+            Only verified execution paths are enabled. Rolling, canary, and rollback behavior remain
+            unavailable until their implementation paths are exercised and proven.
+          </p>
 
           <fieldset disabled={form.target_selection !== "target_ids"}>
             <legend className="block text-xs font-semibold uppercase tracking-wider text-slate-400">
