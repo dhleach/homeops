@@ -7,7 +7,9 @@ from datetime import UTC, datetime
 import pytest
 
 from deploy_demo import (
+    DeploymentAdmissionLimitError,
     DeploymentConflictError,
+    DeploymentCooldownError,
     FleetStateStore,
     UnknownDeploymentError,
     UnknownTargetError,
@@ -236,3 +238,109 @@ def test_unknown_target_is_rejected_before_state_changes(tmp_path, fixed_clock) 
         store.get_vehicle("test-vehicle-99")
 
     assert store.list_vehicles() == before
+
+
+def test_public_admission_serializes_cooldown_and_active_limit(tmp_path) -> None:
+    now = [datetime(2026, 9, 25, 20, 0, tzinfo=UTC)]
+    store = FleetStateStore(tmp_path / "fleet.sqlite3", clock=lambda: now[0])
+    first_spec = valid_spec(
+        deployment_id="public-first",
+        target_ids=["test-vehicle-01"],
+    )
+    second_spec = valid_spec(
+        deployment_id="public-second",
+        target_ids=["test-vehicle-02"],
+    )
+
+    first = store.admit_public_deployment(
+        first_spec,
+        client_ip="203.0.113.10",
+        manifest_path="manifests/public-first.json",
+        manifest_sha256="a" * 64,
+        cooldown_seconds=60,
+        max_active=1,
+    )
+    assert first.idempotent is False
+    assert first.deployment.dispatch_status == "pending"
+
+    with pytest.raises(DeploymentCooldownError):
+        store.admit_public_deployment(
+            second_spec,
+            client_ip="203.0.113.10",
+            manifest_path="manifests/public-second.json",
+            manifest_sha256="b" * 64,
+            cooldown_seconds=60,
+            max_active=1,
+        )
+
+    replay = store.admit_public_deployment(
+        first_spec,
+        client_ip="203.0.113.10",
+        manifest_path="manifests/public-first.json",
+        manifest_sha256="a" * 64,
+        cooldown_seconds=60,
+        max_active=1,
+    )
+    assert replay.idempotent is True
+
+    now[0] = now[0].replace(minute=1, second=1)
+    with pytest.raises(DeploymentAdmissionLimitError):
+        store.admit_public_deployment(
+            second_spec,
+            client_ip="203.0.113.10",
+            manifest_path="manifests/public-second.json",
+            manifest_sha256="b" * 64,
+            cooldown_seconds=60,
+            max_active=1,
+        )
+
+    store.mark_deployment_status("public-first", "failed", error="dispatch_failed")
+    accepted = store.admit_public_deployment(
+        second_spec,
+        client_ip="203.0.113.10",
+        manifest_path="manifests/public-second.json",
+        manifest_sha256="b" * 64,
+        cooldown_seconds=60,
+        max_active=1,
+    )
+    assert accepted.idempotent is False
+
+
+def test_dispatch_claim_recovery_preserves_manifest_commit(tmp_path, fixed_clock) -> None:
+    store = FleetStateStore(tmp_path / "fleet.sqlite3", clock=fixed_clock)
+    spec = valid_spec(deployment_id="public-recovery", target_ids=["test-vehicle-03"])
+    store.admit_public_deployment(
+        spec,
+        client_ip="203.0.113.11",
+        manifest_path="manifests/public-recovery.json",
+        manifest_sha256="c" * 64,
+        cooldown_seconds=0,
+        max_active=1,
+    )
+
+    claimed = store.claim_dispatch("public-recovery", "claim-one", lease_seconds=300)
+    assert claimed is not None
+    assert store.claim_dispatch("public-recovery", "claim-two", lease_seconds=300) is None
+
+    committed = store.record_manifest_commit("public-recovery", "claim-one", "d" * 40)
+    assert committed.manifest_commit_sha == "d" * 40
+    failed = store.record_dispatch_failure(
+        "public-recovery",
+        "claim-one",
+        error="workflow_dispatch_failed",
+    )
+    assert failed.dispatch_status == "failed"
+    assert failed.manifest_commit_sha == "d" * 40
+
+    retry = store.claim_dispatch("public-recovery", "claim-two", lease_seconds=300)
+    assert retry is not None
+    assert retry.manifest_commit_sha == "d" * 40
+    dispatched = store.record_dispatch_success(
+        "public-recovery",
+        "claim-two",
+        workflow_run_id=123,
+        workflow_url="https://github.com/dhleach/homeops/actions/runs/123",
+    )
+    assert dispatched.dispatch_status == "dispatched"
+    assert dispatched.workflow_run_id == 123
+    assert dispatched.workflow_url.endswith("/123")

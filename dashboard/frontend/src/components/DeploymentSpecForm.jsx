@@ -1,8 +1,8 @@
 import { useMemo, useState } from "react";
 
-// These finite choices mirror deploy_demo/deployment_spec.py. The browser only
-// previews this closed data structure; the backend validator remains the
-// authority when the trusted workflow path is connected.
+// These finite choices mirror deploy_demo/deployment_spec.py. The browser may
+// submit only this closed data structure; the backend validator remains the
+// authority at the trusted workflow boundary.
 const DEPLOYMENT_SPEC_VERSION = 1;
 const ENVIRONMENTS = ["test", "stage", "prod"];
 const COLORS = ["blue", "green", "orange", "purple"];
@@ -24,6 +24,10 @@ const TARGETS_BY_ENVIRONMENT = Object.fromEntries(
 const TARGET_ORDER = ENVIRONMENTS.flatMap((environment) => TARGETS_BY_ENVIRONMENT[environment]);
 const KNOWN_TARGET_IDS = new Set(TARGET_ORDER);
 const DEPLOYMENT_ID_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/;
+
+function submitUrl(apiUrl) {
+  return `${apiUrl.replace(/\/$/, "")}/deploy/api/deployments/submit`;
+}
 
 const DEFAULT_FORM = {
   deployment_id: "demo-preview-001",
@@ -134,8 +138,11 @@ function OptionSelect({ id, label, value, options, onChange, error, disabled = f
   );
 }
 
-export function DeploymentSpecForm() {
+export function DeploymentSpecForm({ apiUrl, onSubmitted }) {
   const [form, setForm] = useState(DEFAULT_FORM);
+  const [submitting, setSubmitting] = useState(false);
+  const [submission, setSubmission] = useState(null);
+  const [submitError, setSubmitError] = useState(null);
   const errors = useMemo(() => validateForm(form), [form]);
   const preview = useMemo(() => buildDeploymentSpec(form), [form]);
 
@@ -156,6 +163,38 @@ export function DeploymentSpecForm() {
     }));
   }
 
+  async function submitDeployment(event) {
+    event.preventDefault();
+    if (Object.keys(errors).length > 0 || submitting) return;
+
+    setSubmitting(true);
+    setSubmitError(null);
+    try {
+      const response = await fetch(submitUrl(apiUrl), {
+        method: "POST",
+        cache: "no-store",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(preview),
+      });
+      const body = await response.json().catch(() => null);
+      if (!response.ok) {
+        const detail = typeof body?.detail === "string"
+          ? body.detail
+          : `Fleet API returned HTTP ${response.status}`;
+        throw new Error(detail);
+      }
+      setSubmission(body);
+      onSubmitted?.(body);
+    } catch (requestError) {
+      setSubmitError(requestError instanceof Error ? requestError.message : "Unable to submit deployment");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
   return (
     <section
       aria-labelledby="deployment-spec-heading"
@@ -170,18 +209,18 @@ export function DeploymentSpecForm() {
             Build a deployment preview
           </h2>
           <p className="mt-2 max-w-2xl text-sm text-slate-400">
-            Choose only from the fixed simulated fleet and finite profile options. This is a read-only preview;
-            no deployment request leaves the browser.
+            Choose only from the fixed simulated fleet and finite profile options. Submission creates one
+            validated manifest and dispatches the trusted workflow; no credential enters the browser.
           </p>
         </div>
-        <span className="w-fit rounded-full border border-amber-400/30 bg-amber-400/10 px-3 py-1 text-xs font-medium text-amber-200">
-          Preview only
+        <span className="w-fit rounded-full border border-emerald-400/30 bg-emerald-400/10 px-3 py-1 text-xs font-medium text-emerald-200">
+          Simulated fleet
         </span>
       </div>
 
       <form
         className="mt-6 grid gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(18rem,0.8fr)]"
-        onSubmit={(event) => event.preventDefault()}
+        onSubmit={submitDeployment}
       >
         <div className="space-y-6">
           <div>
@@ -344,15 +383,36 @@ export function DeploymentSpecForm() {
 
           <button
             type="submit"
-            disabled
+            disabled={submitting || Object.keys(errors).length > 0}
             data-testid="deploy-submit"
-            className="mt-5 w-full cursor-not-allowed rounded-lg border border-slate-600 bg-slate-800 px-4 py-2.5 text-sm font-semibold text-slate-500"
+            className="mt-5 w-full rounded-lg border border-blue-400/40 bg-blue-400/10 px-4 py-2.5 text-sm font-semibold text-blue-200 transition-colors hover:bg-blue-400/20 disabled:cursor-not-allowed disabled:border-slate-600 disabled:bg-slate-800 disabled:text-slate-500"
           >
-            Deploy (not connected)
+            {submitting ? "Submitting…" : "Submit deployment"}
           </button>
-          <p className="mt-2 text-center text-xs text-slate-500">
-            The trusted workflow path must be connected in a later step before this control can be enabled.
-          </p>
+          {submitError && (
+            <p role="alert" className="mt-3 rounded-lg border border-red-400/30 bg-red-400/10 p-3 text-xs text-red-200">
+              {submitError}
+            </p>
+          )}
+          {submission && (
+            <div role="status" className="mt-3 rounded-lg border border-emerald-400/30 bg-emerald-400/10 p-3 text-xs text-emerald-100">
+              <p className="font-semibold">Deployment {submission.deployment_id} accepted</p>
+              <p className="mt-1">Workflow: {submission.dispatch_status}</p>
+              {submission.dispatch_status === "failed" && (
+                <p className="mt-1">The manifest is retained; submit the same ID again to retry dispatch.</p>
+              )}
+              {submission.workflow_url && (
+                <a
+                  href={submission.workflow_url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="mt-2 inline-block text-emerald-200 underline"
+                >
+                  View workflow run
+                </a>
+              )}
+            </div>
+          )}
         </aside>
       </form>
     </section>

@@ -19,10 +19,12 @@ React + Vite + Tailwind single-page dashboard for `homeops.now`.
   `VITE_GRAFANA_URL` (default: `https://api.homeops.now/grafana`).
 - Sends homeowner diagnostic questions to `VITE_API_URL/api/diagnostic`; the
   endpoint requires a Cognito OIDC access token with the diagnostic scope.
-- Renders the existing HVAC dashboard at `/` and the read-only Fleet Deploy Lab
-  at `/deploy`. The fleet route reads `VITE_API_URL/deploy/api/fleet`, groups all
+- Renders the existing HVAC dashboard at `/` and the Fleet Deploy Lab at
+  `/deploy`. The fleet route reads `VITE_API_URL/deploy/api/fleet`, groups all
   twelve explicitly simulated targets by TEST, STAGE, and PROD, and displays
-  desired versus observed profiles, digests, and status. It never sends the
+  desired versus observed profiles, digests, and status. Its constrained form
+  submits only the finite `DeploymentSpec` to
+  `VITE_API_URL/deploy/api/deployments/submit`; it never sends a GitHub or
   protected fleet-management credential to the browser.
 
 The production build is created by

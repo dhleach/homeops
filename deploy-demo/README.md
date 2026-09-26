@@ -1,10 +1,10 @@
 # Fleet Deploy Lab integration map
 
-Status: PR 09 trusted master-only artifact workflow on top of the merged PR 08 simulator/deployer integration suite
+Status: PR 10 manifest admission and trusted workflow dispatch on top of the merged PR 09 artifact boundary
 Repository: `dhleach/homeops`
 Default branch: `master`
-Latest integration snapshot: `d9f5f70`
-GitHub issue: https://github.com/dhleach/homeops/issues/348
+Latest integration snapshot: `54ceb19`
+GitHub issue: https://github.com/dhleach/homeops/issues/350
 
 This document records the real HomeOps integration points for the Fleet Deploy
 Lab as the implementation advances. It is deliberately specific about what
@@ -27,7 +27,7 @@ normal HomeOps Pi, EC2, frontend, and observability deployments remain separate.
 
 | Surface | Current path | Current owner | Current behavior | Fleet Deploy Lab target |
 | --- | --- | --- | --- | --- |
-| Public frontend | `https://homeops.now/deploy` | CloudFront → private S3 → React/Vite SPA | CloudFront serves the SPA shell. The merged PR 05 renders the read-only fleet snapshot and responsive TEST/STAGE/PROD cards; PR 06 adds a preview-only constrained form and canonical DeploymentSpec view without enabling submission. | PR 09 builds the trusted profile artifact but does not connect the disabled Deploy control; PR 10 owns manifest submission/dispatch. |
+| Public frontend | `https://homeops.now/deploy` | CloudFront → private S3 → React/Vite SPA | CloudFront serves the SPA shell. The merged PR 05 renders the read-only fleet snapshot and responsive TEST/STAGE/PROD cards; PR 10 connects the finite DeploymentSpec form to the anonymous backend submit route. | The browser sends only the closed contract; server-side GitHub credentials remain in the backend. |
 | Existing backend liveness | `https://api.homeops.now/health` | Nginx → FastAPI | Returns `{"status":"ok"}`. | Remains the process liveness check. |
 | Fleet demo health | `https://api.homeops.now/deploy/api/health` | Nginx → FastAPI | Implemented by merged PR 04; availability follows the normal backend deployment. | Public simulator readiness and target-count check. |
 | Existing telemetry | `https://api.homeops.now/api/current-temps` | FastAPI → EC2-local Prometheus | Current production telemetry contract. | Must remain unchanged. |
@@ -208,6 +208,36 @@ readiness test is included in the ordinary CI test and Ruff surfaces.
 - Sequence and owner: Derek reviews and merges the trusted workflow/artifact PR; PR 10 owns manifest commits and trusted workflow dispatch.
 - Safety gate: manifest data is read at an exact, ancestry-checked commit; invalid data blocks before lint, tests, or artifact generation; no deployment is executed.
 
+## PR 10 — commit manifests and dispatch the trusted workflow
+
+PR 10 adds `POST /deploy/api/deployments/submit` for the public constrained
+form. The backend reuses the shared `DeploymentSpec` validator, serializes the
+exact canonical manifest bytes, and writes one deterministic
+`manifests/<deployment_id>.json` path to the `fleet-deployments` branch through
+the server-side GitHub Contents API. It then dispatches PR09's workflow from
+`master` with the matching deployment ID and manifest commit SHA.
+
+The SQLite state store creates the pending deployment record before external
+calls under one `BEGIN IMMEDIATE` admission transaction. That transaction
+enforces the per-IP cooldown, global active-deployment limit, and target
+reservation atomically. A per-deployment lease prevents concurrent requests
+from duplicating commit/dispatch work. If dispatch fails after the manifest is
+committed, a retry reuses the stored commit and dispatches again; it does not
+write a second manifest. Workflow run ID/URL fields are populated only when
+the provider actually returns them—PR10 never guesses a run URL.
+
+The public response contains only simulated deployment state, manifest identity,
+safe operation codes, and provider-returned run metadata. The GitHub token and
+the protected Fleet API key are backend-only values.
+
+### PR 10 disposition
+
+- Terraform apply required: **No for the code PR**
+- Manual console/setup required before a live public submission: **Yes** — an operator must create the reviewed `fleet-deployments` branch from the approved base, provision `FLEET_DEPLOY_GITHUB_TOKEN` with repository-scoped Contents/Actions authority, and provision the separate `FLEET_DEPLOY_API_KEY` workflow/backend boundary.
+- Terraform resources changed: **None**
+- Sequence and owner: Derek reviews and merges PR10; the credential/IAM prerequisite owns secret entry, rotation, and any later Terraform apply. The backend intentionally does not auto-create the manifest branch.
+- Safety gate: missing branch/credential fails closed; the browser cannot provide a repository, path, URL, command, or credential; commit-success/dispatch-failure remains recoverable from durable state.
+
 ## Backend and API boundary
 
 | Concern | Source of truth | Production path |
@@ -217,7 +247,7 @@ readiness test is included in the ordinary CI test and Ruff surfaces.
 | Backend Compose | `dashboard/docker-compose.yml` | `backend`, `valkey`, `prometheus`, and `grafana` services |
 | Public edge | `dashboard/nginx/api.homeops.now.conf` | TLS Nginx on `api.homeops.now`, default location proxies to `localhost:8000` |
 | Backend deployment | `deploy/deploy-ec2.sh` | Fast-forward EC2 checkout, refresh runtime env, rebuild/recreate backend, wait for `/health`, validate Nginx |
-| Current routes | `dashboard/backend/main.py`, `dashboard/backend/fleet_api.py` | `/health`, `/metrics`, `/api/current-temps`, `/api/diagnostic`, `/deploy/api/health`, `/deploy/api/fleet`, `/deploy/api/fleet/{target_id}`, `/deploy/api/deployments/{deployment_id}`, and protected deployment queue/apply routes |
+| Current routes | `dashboard/backend/main.py`, `dashboard/backend/fleet_api.py` | `/health`, `/metrics`, `/api/current-temps`, `/api/diagnostic`, `/deploy/api/health`, `/deploy/api/fleet`, `/deploy/api/fleet/{target_id}`, `/deploy/api/deployments/{deployment_id}`, anonymous `/deploy/api/deployments/submit`, and protected deployment queue/apply routes |
 
 The demo management API is a new authorization boundary. Public reads may be
 anonymous, but desired-state/apply/verification writes must require a
@@ -260,12 +290,11 @@ code from the writable manifest branch. The workflow reads
 the shared contract, and produces profile/provenance artifacts without
 deploying. PR 10 owns committing manifests and dispatching this workflow.
 
-The current repository has no `fleet-deployments` branch. PR 10 must either
-create it through an explicitly reviewed setup step or fail closed until an
-operator creates it from the approved base. The current GitHub API credential
-could list workflows and repository secret names, but the Actions policy
-endpoints returned 403; repository Actions policy and branch-protection state
-must therefore be explicitly verified before enabling public dispatch.
+The current repository has no `fleet-deployments` branch. The PR10 backend
+fails closed until an operator creates it from the approved base; it does not
+silently create a branch from a public request. Repository Actions policy and
+branch-protection state must be explicitly verified before enabling public
+dispatch.
 
 ## State and persistence findings
 
@@ -282,13 +311,16 @@ image or an unpersisted Valkey key is not sufficient.
 
 The current EC2 runtime environment is populated by
 `deploy/deploy-ec2.sh` from the existing `/homeops/production/*` SSM paths for
-Ask HomeOps/OpenAI/OIDC/Valkey settings. There is no GitHub Contents/Actions
-credential or Fleet API write credential in the current backend environment.
+Ask HomeOps/OpenAI/OIDC/Valkey settings. PR10 adds no secret or Terraform
+resource. The backend expects the repository-scoped
+`FLEET_DEPLOY_GITHUB_TOKEN` for GitHub Contents writes and workflow dispatch;
+the existing `FLEET_DEPLOY_API_KEY` remains a separate protected simulator
+write credential. Neither value is a Vite variable or browser response field.
 
 The supporting prerequisite task must explicitly cover:
 
-- a repository-scoped server-side credential for manifest Contents writes and
-  workflow dispatch;
+- a repository-scoped server-side `FLEET_DEPLOY_GITHUB_TOKEN` for manifest
+  Contents writes and workflow dispatch;
 - a separate workflow secret for protected simulator writes;
 - SSM parameter names, EC2 IAM read permissions, Compose environment entries,
   and redacted missing-secret behavior;
@@ -300,7 +332,7 @@ The browser must never receive either credential. PR 01 makes no Terraform
 changes and requires no apply; later credential/IAM work must declare its own
 Terraform action in its PR and handoff.
 
-## Verified findings at this snapshot
+## Historical discovery findings at the PR 01 snapshot
 
 - Repository default branch is `master`; `origin/master` is `20e540b`.
 - The repository is public and the existing Actions workflow files are active.

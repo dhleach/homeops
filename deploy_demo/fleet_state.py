@@ -33,13 +33,21 @@ from .deployment_spec import (
 
 STATE_PATH_ENV = "FLEET_DEPLOY_STATE_PATH"
 DEFAULT_STATE_PATH = "/var/lib/homeops/deploy-demo/fleet-state.sqlite3"
-STATE_SCHEMA_VERSION = 1
+STATE_SCHEMA_VERSION = 2
 
 VehicleStatus = Literal["ready", "pending", "applying", "succeeded", "failed"]
 DeploymentStatus = Literal["queued", "applying", "succeeded", "failed"]
 
 VEHICLE_STATUSES = ("ready", "pending", "applying", "succeeded", "failed")
 DEPLOYMENT_STATUSES = ("queued", "applying", "succeeded", "failed")
+DISPATCH_STATUSES = (
+    "not_started",
+    "pending",
+    "committing",
+    "dispatching",
+    "dispatched",
+    "failed",
+)
 _BASELINE_PROFILES = (
     ("blue", "circle"),
     ("green", "square"),
@@ -70,6 +78,22 @@ class UnknownTargetError(FleetStateError):
 
 class InvalidStateTransitionError(FleetStateError):
     """Raised when a deployment status would move backward or after completion."""
+
+
+class DeploymentCooldownError(FleetStateError):
+    """Raised when one client IP submits before its cooldown expires."""
+
+    def __init__(self, retry_after_seconds: int) -> None:
+        self.retry_after_seconds = max(1, retry_after_seconds)
+        super().__init__("deployment submission cooldown is active")
+
+
+class DeploymentAdmissionLimitError(FleetStateError):
+    """Raised when the bounded global active-deployment admission limit is full."""
+
+
+class DispatchClaimError(FleetStateError):
+    """Raised when a dispatch recovery update loses its durable claim."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -163,6 +187,13 @@ class DeploymentState:
     error: str | None
     created_at: str
     updated_at: str
+    manifest_path: str | None = None
+    manifest_sha256: str | None = None
+    manifest_commit_sha: str | None = None
+    workflow_run_id: int | None = None
+    workflow_url: str | None = None
+    dispatch_status: str = "not_started"
+    dispatch_error: str | None = None
 
     def to_dict(self) -> dict[str, object]:
         """Return the JSON-safe deployment status representation."""
@@ -175,6 +206,13 @@ class DeploymentState:
             "error": self.error,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
+            "manifest_path": self.manifest_path,
+            "manifest_sha256": self.manifest_sha256,
+            "manifest_commit_sha": self.manifest_commit_sha,
+            "workflow_run_id": self.workflow_run_id,
+            "workflow_url": self.workflow_url,
+            "dispatch_status": self.dispatch_status,
+            "dispatch_error": self.dispatch_error,
         }
 
 
@@ -323,7 +361,43 @@ class FleetStateStore:
                     error TEXT,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
+                    manifest_path TEXT,
+                    manifest_sha256 TEXT,
+                    manifest_commit_sha TEXT,
+                    workflow_run_id INTEGER,
+                    workflow_url TEXT,
+                    dispatch_status TEXT NOT NULL DEFAULT 'not_started',
+                    dispatch_error TEXT,
+                    dispatch_claim_token TEXT,
+                    dispatch_claimed_at TEXT,
                     UNIQUE(deployment_id, profile_digest)
+                )
+                """
+            )
+            deployment_columns = {
+                row[1] for row in connection.execute("PRAGMA table_info(fleet_deployments)")
+            }
+            migration_columns = (
+                ("manifest_path", "TEXT"),
+                ("manifest_sha256", "TEXT"),
+                ("manifest_commit_sha", "TEXT"),
+                ("workflow_run_id", "INTEGER"),
+                ("workflow_url", "TEXT"),
+                ("dispatch_status", "TEXT NOT NULL DEFAULT 'not_started'"),
+                ("dispatch_error", "TEXT"),
+                ("dispatch_claim_token", "TEXT"),
+                ("dispatch_claimed_at", "TEXT"),
+            )
+            for column, definition in migration_columns:
+                if column not in deployment_columns:
+                    connection.execute(
+                        f"ALTER TABLE fleet_deployments ADD COLUMN {column} {definition}"
+                    )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS fleet_dispatch_admissions (
+                    client_ip TEXT PRIMARY KEY,
+                    last_admitted_at TEXT NOT NULL
                 )
                 """
             )
@@ -339,10 +413,20 @@ class FleetStateStore:
                     "INSERT INTO fleet_state_meta(key, value) VALUES ('schema_version', ?)",
                     (str(STATE_SCHEMA_VERSION),),
                 )
-            elif existing["value"] != str(STATE_SCHEMA_VERSION):
-                raise FleetStateError(
-                    "unsupported fleet state schema version: " + str(existing["value"])
-                )
+            else:
+                try:
+                    version = int(existing["value"])
+                except (TypeError, ValueError) as exc:
+                    raise FleetStateError("invalid fleet state schema version") from exc
+                if version > STATE_SCHEMA_VERSION or version < 1:
+                    raise FleetStateError(
+                        "unsupported fleet state schema version: " + str(existing["value"])
+                    )
+                if version < STATE_SCHEMA_VERSION:
+                    connection.execute(
+                        "UPDATE fleet_state_meta SET value = ? WHERE key = 'schema_version'",
+                        (str(STATE_SCHEMA_VERSION),),
+                    )
             self._seed_missing_vehicles(connection)
 
     def _seed_missing_vehicles(self, connection: sqlite3.Connection) -> None:
@@ -398,6 +482,9 @@ class FleetStateStore:
         status = row["status"]
         if status not in DEPLOYMENT_STATUSES:
             raise FleetStateError(f"unsupported persisted deployment status: {status}")
+        dispatch_status = row["dispatch_status"] or "not_started"
+        if dispatch_status not in DISPATCH_STATUSES:
+            raise FleetStateError(f"unsupported persisted dispatch status: {dispatch_status}")
         target_ids = tuple(json.loads(row["target_ids_json"]))
         return DeploymentState(
             deployment_id=row["deployment_id"],
@@ -408,6 +495,13 @@ class FleetStateStore:
             error=row["error"],
             created_at=row["created_at"],
             updated_at=row["updated_at"],
+            manifest_path=row["manifest_path"],
+            manifest_sha256=row["manifest_sha256"],
+            manifest_commit_sha=row["manifest_commit_sha"],
+            workflow_run_id=row["workflow_run_id"],
+            workflow_url=row["workflow_url"],
+            dispatch_status=dispatch_status,
+            dispatch_error=row["dispatch_error"],
         )
 
     def list_vehicles(self) -> tuple[VehicleState, ...]:
@@ -450,14 +544,99 @@ class FleetStateStore:
         finally:
             connection.close()
 
-    def queue_deployment(self, spec: DeploymentSpec) -> QueueResult:
-        """Atomically persist desired state for a validated deployment spec.
+    @staticmethod
+    def _validate_manifest_metadata(manifest_path: str, manifest_sha256: str) -> None:
+        """Keep persisted manifest identity bounded and path-safe."""
+        if (
+            not manifest_path.startswith("manifests/")
+            or manifest_path.endswith("/")
+            or ".." in manifest_path
+            or "\\" in manifest_path
+        ):
+            raise ValueError("manifest path must be a relative manifests path")
+        if len(manifest_sha256) != 64 or any(
+            character not in "0123456789abcdef" for character in manifest_sha256
+        ):
+            raise ValueError("manifest SHA-256 must be lowercase hexadecimal")
 
-        Replaying the same deployment ID and profile digest returns the original
-        record without changing timestamps or vehicle state.  Reusing a
-        deployment ID with a different digest, or targeting a vehicle that has
-        another active deployment, fails closed.
-        """
+    def _insert_new_deployment(
+        self,
+        connection: sqlite3.Connection,
+        spec: DeploymentSpec,
+        *,
+        profile: FleetProfile,
+        target_ids: tuple[str, ...],
+        timestamp: str,
+        manifest_path: str | None = None,
+        manifest_sha256: str | None = None,
+        dispatch_status: str = "not_started",
+    ) -> DeploymentState:
+        """Insert one deployment and its target intent inside an open transaction."""
+        if dispatch_status not in DISPATCH_STATUSES:
+            raise ValueError("unsupported dispatch status")
+        placeholders = ", ".join("?" for _ in target_ids)
+        active_rows = connection.execute(
+            f"SELECT target_id, active_deployment_id FROM fleet_vehicles "
+            f"WHERE target_id IN ({placeholders}) AND status IN ('pending', 'applying')",
+            target_ids,
+        ).fetchall()
+        conflicts = [f"{row['target_id']} ({row['active_deployment_id']})" for row in active_rows]
+        if conflicts:
+            raise DeploymentConflictError(
+                "target(s) already have active deployment(s): " + ", ".join(conflicts)
+            )
+
+        connection.execute(
+            """
+            INSERT INTO fleet_deployments(
+                deployment_id, target_ids_json, profile_color, profile_shape,
+                profile_digest, status, error, created_at, updated_at,
+                manifest_path, manifest_sha256, dispatch_status
+            ) VALUES (?, ?, ?, ?, ?, 'queued', NULL, ?, ?, ?, ?, ?)
+            """,
+            (
+                spec.deployment_id,
+                json.dumps(target_ids, separators=(",", ":")),
+                profile.color,
+                profile.shape,
+                profile.digest,
+                timestamp,
+                timestamp,
+                manifest_path,
+                manifest_sha256,
+                dispatch_status,
+            ),
+        )
+        updated = connection.execute(
+            f"""
+            UPDATE fleet_vehicles
+            SET desired_color = ?, desired_shape = ?, desired_digest = ?,
+                status = 'pending', active_deployment_id = ?, last_error = NULL,
+                updated_at = ?
+            WHERE target_id IN ({placeholders})
+            """,
+            (
+                profile.color,
+                profile.shape,
+                profile.digest,
+                spec.deployment_id,
+                timestamp,
+                *target_ids,
+            ),
+        )
+        if updated.rowcount != len(target_ids):
+            raise FleetStateError(
+                f"deployment {spec.deployment_id} did not update every target atomically"
+            )
+        row = connection.execute(
+            "SELECT * FROM fleet_deployments WHERE deployment_id = ?",
+            (spec.deployment_id,),
+        ).fetchone()
+        assert row is not None
+        return self._deployment_from_row(row)
+
+    def queue_deployment(self, spec: DeploymentSpec) -> QueueResult:
+        """Atomically persist desired state for a validated internal deployment spec."""
         profile = FleetProfile(spec.profile_color, spec.profile_shape)
         target_ids = _validate_target_ids(spec.expanded_target_ids)
         timestamp = _now_iso(self._clock)
@@ -474,65 +653,270 @@ class FleetStateStore:
                         f"{spec.deployment_id}"
                     )
                 return QueueResult(deployment=existing, idempotent=True)
-
-            placeholders = ", ".join("?" for _ in target_ids)
-            active_rows = connection.execute(
-                f"SELECT target_id, active_deployment_id FROM fleet_vehicles "
-                f"WHERE target_id IN ({placeholders}) AND status IN ('pending', 'applying')",
-                target_ids,
-            ).fetchall()
-            conflicts = [
-                f"{row['target_id']} ({row['active_deployment_id']})" for row in active_rows
-            ]
-            if conflicts:
-                raise DeploymentConflictError(
-                    "target(s) already have active deployment(s): " + ", ".join(conflicts)
-                )
-
-            connection.execute(
-                """
-                INSERT INTO fleet_deployments(
-                    deployment_id, target_ids_json, profile_color, profile_shape,
-                    profile_digest, status, error, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, 'queued', NULL, ?, ?)
-                """,
-                (
-                    spec.deployment_id,
-                    json.dumps(target_ids, separators=(",", ":")),
-                    profile.color,
-                    profile.shape,
-                    profile.digest,
-                    timestamp,
-                    timestamp,
-                ),
+            deployment = self._insert_new_deployment(
+                connection,
+                spec,
+                profile=profile,
+                target_ids=target_ids,
+                timestamp=timestamp,
             )
-            updated = connection.execute(
-                f"""
-                UPDATE fleet_vehicles
-                SET desired_color = ?, desired_shape = ?, desired_digest = ?,
-                    status = 'pending', active_deployment_id = ?, last_error = NULL,
-                    updated_at = ?
-                WHERE target_id IN ({placeholders})
-                """,
-                (
-                    profile.color,
-                    profile.shape,
-                    profile.digest,
-                    spec.deployment_id,
-                    timestamp,
-                    *target_ids,
-                ),
-            )
-            if updated.rowcount != len(target_ids):
-                raise FleetStateError(
-                    f"deployment {spec.deployment_id} did not update every target atomically"
-                )
+            return QueueResult(deployment=deployment, idempotent=False)
+
+    def admit_public_deployment(
+        self,
+        spec: DeploymentSpec,
+        *,
+        client_ip: str,
+        manifest_path: str,
+        manifest_sha256: str,
+        cooldown_seconds: int,
+        max_active: int,
+    ) -> QueueResult:
+        """Admit one browser request under SQLite's cross-process write lock.
+
+        The ``BEGIN IMMEDIATE`` transaction is the global admission lock. It
+        serializes the IP cooldown, active-deployment count, deployment insert,
+        target reservation, and admission timestamp so concurrent backend
+        workers cannot each pass a check against the same old state.
+        """
+        if not client_ip.strip():
+            raise ValueError("client IP must not be blank")
+        if cooldown_seconds < 0 or max_active < 1:
+            raise ValueError("public admission limits are invalid")
+        self._validate_manifest_metadata(manifest_path, manifest_sha256)
+        profile = FleetProfile(spec.profile_color, spec.profile_shape)
+        target_ids = _validate_target_ids(spec.expanded_target_ids)
+        now = self._clock()
+        timestamp = _now_iso(lambda: now)
+
+        with self._transaction() as connection:
             row = connection.execute(
                 "SELECT * FROM fleet_deployments WHERE deployment_id = ?",
                 (spec.deployment_id,),
             ).fetchone()
-            assert row is not None
-            return QueueResult(deployment=self._deployment_from_row(row), idempotent=False)
+            if row is not None:
+                existing = self._deployment_from_row(row)
+                if (
+                    existing.manifest_sha256 != manifest_sha256
+                    or existing.profile_digest != profile.digest
+                    or existing.target_ids != target_ids
+                ):
+                    raise DeploymentConflictError(
+                        "deployment ID already exists with a different manifest: "
+                        f"{spec.deployment_id}"
+                    )
+                return QueueResult(deployment=existing, idempotent=True)
+
+            admission = connection.execute(
+                "SELECT last_admitted_at FROM fleet_dispatch_admissions WHERE client_ip = ?",
+                (client_ip,),
+            ).fetchone()
+            if admission is not None:
+                try:
+                    last_admitted = datetime.fromisoformat(
+                        admission["last_admitted_at"].replace("Z", "+00:00")
+                    )
+                except (AttributeError, TypeError, ValueError) as exc:
+                    raise FleetStateError("invalid fleet admission timestamp") from exc
+                elapsed = (now.astimezone(UTC) - last_admitted.astimezone(UTC)).total_seconds()
+                if elapsed < cooldown_seconds:
+                    raise DeploymentCooldownError(int(cooldown_seconds - elapsed) + 1)
+
+            active_count = connection.execute(
+                "SELECT COUNT(*) AS count FROM fleet_deployments "
+                "WHERE status IN ('queued', 'applying')"
+            ).fetchone()["count"]
+            if active_count >= max_active:
+                raise DeploymentAdmissionLimitError("active deployment limit is reached")
+
+            deployment = self._insert_new_deployment(
+                connection,
+                spec,
+                profile=profile,
+                target_ids=target_ids,
+                timestamp=timestamp,
+                manifest_path=manifest_path,
+                manifest_sha256=manifest_sha256,
+                dispatch_status="pending",
+            )
+            connection.execute(
+                """
+                INSERT INTO fleet_dispatch_admissions(client_ip, last_admitted_at)
+                VALUES (?, ?)
+                ON CONFLICT(client_ip) DO UPDATE SET last_admitted_at = excluded.last_admitted_at
+                """,
+                (client_ip, timestamp),
+            )
+            return QueueResult(deployment=deployment, idempotent=False)
+
+    def claim_dispatch(
+        self,
+        deployment_id: str,
+        claim_token: str,
+        *,
+        lease_seconds: int,
+    ) -> DeploymentState | None:
+        """Claim manifest commit/dispatch work, or return ``None`` when busy."""
+        if not claim_token.strip() or lease_seconds < 1:
+            raise ValueError("dispatch claim parameters are invalid")
+        now = self._clock()
+        timestamp = _now_iso(lambda: now)
+        with self._transaction() as connection:
+            row = connection.execute(
+                "SELECT * FROM fleet_deployments WHERE deployment_id = ?",
+                (deployment_id,),
+            ).fetchone()
+            if row is None:
+                raise UnknownDeploymentError(f"unknown deployment: {deployment_id}")
+            existing = self._deployment_from_row(row)
+            if existing.dispatch_status == "dispatched":
+                return None
+            claimed_at = row["dispatch_claimed_at"]
+            if row["dispatch_claim_token"] and claimed_at:
+                try:
+                    claim_age = (
+                        now.astimezone(UTC)
+                        - datetime.fromisoformat(claimed_at.replace("Z", "+00:00")).astimezone(UTC)
+                    ).total_seconds()
+                except (AttributeError, TypeError, ValueError) as exc:
+                    raise FleetStateError("invalid dispatch claim timestamp") from exc
+                if claim_age < lease_seconds:
+                    return None
+            next_status = "committing" if existing.manifest_commit_sha is None else "dispatching"
+            connection.execute(
+                """
+                UPDATE fleet_deployments
+                SET dispatch_status = ?, dispatch_claim_token = ?, dispatch_claimed_at = ?,
+                    dispatch_error = NULL, updated_at = ?
+                WHERE deployment_id = ?
+                """,
+                (next_status, claim_token, timestamp, timestamp, deployment_id),
+            )
+            updated = connection.execute(
+                "SELECT * FROM fleet_deployments WHERE deployment_id = ?",
+                (deployment_id,),
+            ).fetchone()
+            assert updated is not None
+            return self._deployment_from_row(updated)
+
+    def record_manifest_commit(
+        self,
+        deployment_id: str,
+        claim_token: str,
+        commit_sha: str,
+    ) -> DeploymentState:
+        """Persist the exact manifest commit before any workflow dispatch."""
+        if len(commit_sha) != 40 or any(c not in "0123456789abcdef" for c in commit_sha):
+            raise ValueError("manifest commit SHA must be lowercase hexadecimal")
+        timestamp = _now_iso(self._clock)
+        with self._transaction() as connection:
+            row = connection.execute(
+                "SELECT * FROM fleet_deployments WHERE deployment_id = ?",
+                (deployment_id,),
+            ).fetchone()
+            if row is None:
+                raise UnknownDeploymentError(f"unknown deployment: {deployment_id}")
+            existing = self._deployment_from_row(row)
+            if row["dispatch_claim_token"] != claim_token:
+                raise DispatchClaimError("manifest commit claim is no longer owned")
+            if existing.manifest_commit_sha is not None:
+                if existing.manifest_commit_sha != commit_sha:
+                    raise DispatchClaimError("deployment already has a different manifest commit")
+                return existing
+            connection.execute(
+                """
+                UPDATE fleet_deployments
+                SET manifest_commit_sha = ?, dispatch_status = 'dispatching',
+                    dispatch_error = NULL, updated_at = ?
+                WHERE deployment_id = ? AND dispatch_claim_token = ?
+                """,
+                (commit_sha, timestamp, deployment_id, claim_token),
+            )
+            updated = connection.execute(
+                "SELECT * FROM fleet_deployments WHERE deployment_id = ?",
+                (deployment_id,),
+            ).fetchone()
+            assert updated is not None
+            return self._deployment_from_row(updated)
+
+    def record_dispatch_success(
+        self,
+        deployment_id: str,
+        claim_token: str,
+        *,
+        workflow_run_id: int | None = None,
+        workflow_url: str | None = None,
+    ) -> DeploymentState:
+        """Record a successful dispatch without inventing absent run metadata."""
+        if workflow_run_id is not None and workflow_run_id < 1:
+            raise ValueError("workflow run ID must be positive")
+        if workflow_url is not None and (
+            len(workflow_url) > 512 or not workflow_url.startswith("https://")
+        ):
+            raise ValueError("workflow URL must be a bounded HTTPS URL")
+        timestamp = _now_iso(self._clock)
+        with self._transaction() as connection:
+            row = connection.execute(
+                "SELECT * FROM fleet_deployments WHERE deployment_id = ?",
+                (deployment_id,),
+            ).fetchone()
+            if row is None:
+                raise UnknownDeploymentError(f"unknown deployment: {deployment_id}")
+            if row["dispatch_claim_token"] != claim_token:
+                raise DispatchClaimError("workflow dispatch claim is no longer owned")
+            connection.execute(
+                """
+                UPDATE fleet_deployments
+                SET dispatch_status = 'dispatched', workflow_run_id = ?, workflow_url = ?,
+                    dispatch_error = NULL, dispatch_claim_token = NULL,
+                    dispatch_claimed_at = NULL, updated_at = ?
+                WHERE deployment_id = ? AND dispatch_claim_token = ?
+                """,
+                (workflow_run_id, workflow_url, timestamp, deployment_id, claim_token),
+            )
+            updated = connection.execute(
+                "SELECT * FROM fleet_deployments WHERE deployment_id = ?",
+                (deployment_id,),
+            ).fetchone()
+            assert updated is not None
+            return self._deployment_from_row(updated)
+
+    def record_dispatch_failure(
+        self,
+        deployment_id: str,
+        claim_token: str,
+        *,
+        error: str,
+    ) -> DeploymentState:
+        """Leave the queued deployment recoverable after an external failure."""
+        error = _validate_error(error)
+        if error is None:
+            raise ValueError("dispatch error is required")
+        timestamp = _now_iso(self._clock)
+        with self._transaction() as connection:
+            row = connection.execute(
+                "SELECT * FROM fleet_deployments WHERE deployment_id = ?",
+                (deployment_id,),
+            ).fetchone()
+            if row is None:
+                raise UnknownDeploymentError(f"unknown deployment: {deployment_id}")
+            if row["dispatch_claim_token"] != claim_token:
+                raise DispatchClaimError("workflow dispatch claim is no longer owned")
+            connection.execute(
+                """
+                UPDATE fleet_deployments
+                SET dispatch_status = 'failed', dispatch_error = ?,
+                    dispatch_claim_token = NULL, dispatch_claimed_at = NULL, updated_at = ?
+                WHERE deployment_id = ? AND dispatch_claim_token = ?
+                """,
+                (error, timestamp, deployment_id, claim_token),
+            )
+            updated = connection.execute(
+                "SELECT * FROM fleet_deployments WHERE deployment_id = ?",
+                (deployment_id,),
+            ).fetchone()
+            assert updated is not None
+            return self._deployment_from_row(updated)
 
     def mark_deployment_status(
         self,
@@ -629,11 +1013,15 @@ class FleetStateStore:
 __all__ = [
     "DEFAULT_STATE_PATH",
     "DEPLOYMENT_STATUSES",
+    "DISPATCH_STATUSES",
     "STATE_PATH_ENV",
     "STATE_SCHEMA_VERSION",
     "VEHICLE_STATUSES",
     "DeploymentConflictError",
+    "DeploymentCooldownError",
+    "DeploymentAdmissionLimitError",
     "DeploymentState",
+    "DispatchClaimError",
     "FleetProfile",
     "FleetStateError",
     "FleetStateStore",

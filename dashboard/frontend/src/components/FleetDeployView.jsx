@@ -283,7 +283,7 @@ export function FleetDeployView({ apiUrl }) {
           </div>
         </div>
 
-        <DeploymentSpecForm />
+        <DeploymentSpecForm apiUrl={apiUrl} onSubmitted={() => refresh()} />
 
         {error && (
           <div
