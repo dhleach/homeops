@@ -159,3 +159,15 @@ mounts the named `fleet_deploy_state` volume at
 demo control-plane store only; the Fleet API does not alter HVAC, telemetry,
 diagnostic, or normal HomeOps deployment behavior. The state store must never
 be moved to an image-local path or an unpersisted Valkey key.
+
+The local end-to-end proof suite exercises the real `FleetApiClient` and
+`FleetDeployer` against an isolated FastAPI `TestClient` and temporary SQLite
+store. It covers protected queue/apply/readback behavior, environment target
+expansion, replay idempotence, queue-only web requests, and fail-closed
+verification. Run it from the repository root with:
+
+```bash
+PYTHONPATH=services/consumer:services/observer:services/insights:dashboard/backend:scripts \
+python3 -m pytest --import-mode=importlib \
+  deploy_demo/tests/test_deployer_e2e.py
+```
