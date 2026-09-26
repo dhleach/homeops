@@ -1,4 +1,4 @@
-name: Fleet Deploy Trusted Artifact
+name: Fleet Deploy Trusted Artifact and Simulator
 
 on:
   workflow_dispatch:
@@ -13,8 +13,8 @@ on:
         type: string
 
 # This workflow can read repository data and upload its bounded result.  It
-# deliberately has no permission to write contents, dispatch workflows, or
-# change deployments.
+# deliberately has no permission to write contents or dispatch workflows.  The
+# separate deploy job receives only the simulator write credential.
 permissions:
   contents: read
 
@@ -43,7 +43,9 @@ jobs:
       - name: Checkout trusted master code
         uses: actions/checkout@v4
         with:
-          ref: master
+          # Pin both jobs to the protected master commit selected at dispatch;
+          # a later master push must not change the code that consumes the artifact.
+          ref: ${{ github.sha }}
           fetch-depth: 1
           persist-credentials: false
 
@@ -125,6 +127,11 @@ jobs:
             --artifact-out "${RUNNER_TEMP}/profile.json" \
             --provenance-out "${RUNNER_TEMP}/profile-provenance.json"
 
+      - name: Preserve validated deployment spec
+        run: |
+          set -euo pipefail
+          cp -- "${FLEET_MANIFEST_PATH}" "${RUNNER_TEMP}/deployment-spec.json"
+
       - name: Display separate event and artifact identities
         run: |
           set -euo pipefail
@@ -139,5 +146,80 @@ jobs:
           path: |
             ${{ runner.temp }}/profile.json
             ${{ runner.temp }}/profile-provenance.json
+            ${{ runner.temp }}/deployment-spec.json
           if-no-files-found: error
           retention-days: 30
+
+  deploy-simulator:
+    name: Deploy immutable artifact to simulator
+    needs: trusted-artifact
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    concurrency:
+      group: fleet-deploy-write
+      cancel-in-progress: false
+    permissions:
+      contents: read
+    env:
+      DEPLOYMENT_ID: ${{ inputs.deployment_id }}
+      EVENT_COMMIT_SHA: ${{ inputs.event_commit_sha }}
+      FLEET_DEPLOY_API_URL: https://api.homeops.now/deploy/api
+
+    steps:
+      - name: Checkout trusted master code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Set up trusted Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Download immutable deployment artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: fleet-profile-${{ inputs.deployment_id }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/fleet-artifact
+
+      - name: Verify downloaded artifact provenance
+        run: |
+          set -euo pipefail
+          PYTHONPATH=. python -m deploy_demo.trusted_artifact verify \
+            --manifest "${RUNNER_TEMP}/fleet-artifact/deployment-spec.json" \
+            --deployment-id "${DEPLOYMENT_ID}" \
+            --event-commit-sha "${EVENT_COMMIT_SHA}" \
+            --artifact "${RUNNER_TEMP}/fleet-artifact/profile.json" \
+            --provenance "${RUNNER_TEMP}/fleet-artifact/profile-provenance.json"
+
+      - name: Require simulator write credential
+        env:
+          FLEET_DEPLOY_API_KEY: ${{ secrets.FLEET_DEPLOY_API_KEY }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${FLEET_DEPLOY_API_KEY}" ]]; then
+            echo "FLEET_DEPLOY_API_KEY is not configured" >&2
+            exit 1
+          fi
+
+      - name: Deploy artifact and verify fresh API readback
+        env:
+          FLEET_DEPLOY_API_KEY: ${{ secrets.FLEET_DEPLOY_API_KEY }}
+        run: |
+          set -euo pipefail
+          artifact_sha256="$(python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          provenance_path = Path(os.environ["RUNNER_TEMP"]) / "fleet-artifact" / "profile-provenance.json"
+          print(json.loads(provenance_path.read_text(encoding="utf-8"))["artifact_sha256"])
+          PY
+          )"
+          PYTHONPATH=. python -m deploy_demo.deployer \
+            --api-base-url "${FLEET_DEPLOY_API_URL}" \
+            --spec "${RUNNER_TEMP}/fleet-artifact/deployment-spec.json" \
+            --artifact "${RUNNER_TEMP}/fleet-artifact/profile.json" \
+            --artifact-sha256 "${artifact_sha256}"

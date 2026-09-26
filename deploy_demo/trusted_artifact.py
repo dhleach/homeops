@@ -22,10 +22,22 @@ from .deployment_spec import DeploymentSpec, DeploymentSpecError, validate_deplo
 from .fleet_state import FleetProfile
 
 MAX_MANIFEST_BYTES = 16_384
+MAX_ARTIFACT_BYTES = 16_384
+MAX_PROVENANCE_BYTES = 16_384
 EVENT_COMMIT_SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 DEPLOYMENT_ID_PATTERN = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$")
 PROFILE_ARTIFACT_SCHEMA = "homeops.fleet-deploy.profile-provenance.v1"
+PROVENANCE_KEYS = frozenset(
+    {
+        "artifact_sha256",
+        "artifact_size_bytes",
+        "deployment_id",
+        "event_commit_sha",
+        "manifest_sha256",
+        "schema",
+    }
+)
 
 
 class TrustedArtifactError(ValueError):
@@ -163,6 +175,79 @@ def profile_artifact(manifest: TrustedManifest) -> ProfileArtifact:
     return ProfileArtifact(content=content, sha256=hashlib.sha256(content).hexdigest())
 
 
+def _read_bounded(path: str | Path, *, maximum: int, label: str) -> bytes:
+    """Read one workflow artifact while keeping untrusted input bounded."""
+    try:
+        content = Path(path).read_bytes()
+    except OSError as exc:
+        raise TrustedArtifactError(f"unable to read {label}: {type(exc).__name__}") from exc
+    if len(content) > maximum:
+        raise TrustedArtifactError(f"{label} exceeds the maximum allowed size")
+    return content
+
+
+def _read_provenance(path: str | Path) -> dict[str, object]:
+    """Read the exact provenance object emitted beside the profile artifact."""
+    content = _read_bounded(path, maximum=MAX_PROVENANCE_BYTES, label="provenance")
+    try:
+        value = json.loads(content, object_pairs_hook=_reject_duplicate_keys)
+    except TrustedArtifactError:
+        raise
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise TrustedArtifactError("provenance must contain valid UTF-8 JSON") from exc
+    if not isinstance(value, dict):
+        raise TrustedArtifactError("provenance must be a JSON object")
+    if set(value) != PROVENANCE_KEYS:
+        raise TrustedArtifactError("provenance keys do not match the trusted schema")
+    return value
+
+
+def verify_artifacts(
+    manifest_path: str | Path,
+    artifact_path: str | Path,
+    provenance_path: str | Path,
+    *,
+    deployment_id: str,
+    event_commit_sha: str,
+) -> ProfileArtifact:
+    """Revalidate the downloaded spec, profile, and provenance before writes."""
+    manifest = load_manifest(
+        manifest_path,
+        deployment_id=deployment_id,
+        event_commit_sha=event_commit_sha,
+    )
+    expected = profile_artifact(manifest)
+    artifact_bytes = _read_bounded(
+        artifact_path,
+        maximum=MAX_ARTIFACT_BYTES,
+        label="profile artifact",
+    )
+    artifact = ProfileArtifact(
+        content=artifact_bytes,
+        sha256=hashlib.sha256(artifact_bytes).hexdigest(),
+    )
+    if artifact != expected:
+        raise TrustedArtifactError("profile artifact does not match the validated manifest")
+
+    provenance = _read_provenance(provenance_path)
+    if provenance["schema"] != PROFILE_ARTIFACT_SCHEMA:
+        raise TrustedArtifactError("provenance schema is not trusted")
+    if provenance["deployment_id"] != manifest.deployment_id:
+        raise TrustedArtifactError("provenance deployment_id does not match the manifest")
+    if provenance["event_commit_sha"] != manifest.event_commit_sha:
+        raise TrustedArtifactError("provenance event_commit_sha does not match the dispatch")
+    if provenance["manifest_sha256"] != manifest.manifest_sha256:
+        raise TrustedArtifactError("provenance manifest_sha256 does not match the manifest")
+    if provenance["artifact_sha256"] != artifact.sha256:
+        raise TrustedArtifactError("provenance artifact_sha256 does not match the artifact")
+    artifact_size = provenance["artifact_size_bytes"]
+    if isinstance(artifact_size, bool) or not isinstance(artifact_size, int):
+        raise TrustedArtifactError("provenance artifact_size_bytes must be an integer")
+    if artifact_size != len(artifact.content):
+        raise TrustedArtifactError("provenance artifact_size_bytes does not match the artifact")
+    return artifact
+
+
 def _write_exact(path: str | Path, content: bytes) -> None:
     """Write an output once and refuse a conflicting replacement."""
     destination = Path(path)
@@ -220,7 +305,7 @@ def _load_from_args(args: argparse.Namespace) -> TrustedManifest:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Validate a manifest or build its profile artifact from the command line."""
+    """Validate, build, or verify Fleet Deploy workflow artifacts."""
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -236,6 +321,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     _manifest_arguments(build_parser)
     build_parser.add_argument("--artifact-out", type=Path, required=True)
     build_parser.add_argument("--provenance-out", type=Path, required=True)
+
+    verify_parser = subparsers.add_parser(
+        "verify", help="verify a downloaded profile artifact and its provenance"
+    )
+    _manifest_arguments(verify_parser)
+    verify_parser.add_argument("--artifact", type=Path, required=True)
+    verify_parser.add_argument("--provenance", type=Path, required=True)
 
     try:
         args = parser.parse_args(argv)
@@ -265,6 +357,25 @@ def main(argv: Sequence[str] | None = None) -> int:
                         "manifest_sha256": manifest.manifest_sha256,
                         "profile_sha256": artifact.sha256,
                         "status": "valid",
+                    },
+                    sort_keys=True,
+                )
+            )
+        elif args.command == "verify":
+            artifact = verify_artifacts(
+                args.manifest,
+                args.artifact,
+                args.provenance,
+                deployment_id=args.deployment_id,
+                event_commit_sha=args.event_commit_sha,
+            )
+            print(
+                json.dumps(
+                    {
+                        "artifact_sha256": artifact.sha256,
+                        "deployment_id": manifest.deployment_id,
+                        "event_commit_sha": manifest.event_commit_sha,
+                        "status": "verified",
                     },
                     sort_keys=True,
                 )

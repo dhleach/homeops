@@ -160,6 +160,12 @@ leaves the exact commit available for a retry of the same deployment ID, so a
 recovery request cannot create a second manifest commit. The backend does not
 guess a workflow-run URL when the dispatch endpoint returns `204`.
 
+The trusted workflow's downstream deploy job consumes only the validated
+profile/provenance artifact and the separate `FLEET_DEPLOY_API_KEY` Actions
+secret. It serializes simulator writes, calls the protected queue/apply routes,
+and requires a fresh public readback before reporting success; this workflow
+does not reuse the normal Pi/EC2 deployment credential.
+
 The active production topology, ports, public routes, internal scrape target, and release checks are
 documented in [`docs/architecture.md`](../../docs/architecture.md) and
 [`docs/deployment.md`](../../docs/deployment.md).
