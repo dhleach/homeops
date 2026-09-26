@@ -1,0 +1,1 @@
+{"deployment_id":"rev02-accept-ansible-20260926-1701","failure_mode":"rollback","implementation":"ansible","profile":{"color":"blue","shape":"circle"},"schema_version":1,"strategy":"canary","target_ids":["test-vehicle-01"]}
