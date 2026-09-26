@@ -6,6 +6,8 @@
 # used only for the existing dashboard ownership repair and Nginx validation.
 #
 # Revision history:
+#   2026-09-26  Refresh Fleet Deploy credentials from dedicated SSM paths and
+#               preserve existing values during temporary SSM read failures.
 #   2026-09-24  Activate Prometheus configuration and Grafana provisioning
 #               changes only when their tracked inputs changed, while keeping
 #               dashboard JSON updates on the existing file-provider reload path.
@@ -52,11 +54,16 @@ existing_env_value() {
 write_runtime_env() {
   local env_file="${REPO_DIR}/dashboard/.env"
   local openai_key gemini_key diagnostic_provider
+  local fleet_github_token fleet_api_key
   local oidc_issuer oidc_audience audience_claim jwks_url diagnostic_scope
   local limiter_backend redis_url
 
   openai_key="$(ssm_value "/homeops/${ENVIRONMENT}/openai-api-key" || true)"
   gemini_key="$(ssm_value "/homeops/${ENVIRONMENT}/gemini-api-key" || true)"
+  fleet_github_token="${FLEET_DEPLOY_GITHUB_TOKEN:-}"
+  fleet_api_key="${FLEET_DEPLOY_API_KEY:-}"
+  [[ -n "$fleet_github_token" ]] || fleet_github_token="$(ssm_value "/homeops/${ENVIRONMENT}/fleet-deploy-github-token" || true)"
+  [[ -n "$fleet_api_key" ]] || fleet_api_key="$(ssm_value "/homeops/${ENVIRONMENT}/fleet-deploy-api-key" || true)"
   oidc_issuer="$(ssm_value "/homeops/${ENVIRONMENT}/ask-homeops-oidc-issuer" || true)"
   oidc_audience="$(ssm_value "/homeops/${ENVIRONMENT}/ask-homeops-oidc-audience" || true)"
   audience_claim="$(ssm_value "/homeops/${ENVIRONMENT}/ask-homeops-oidc-audience-claim" || true)"
@@ -69,6 +76,8 @@ write_runtime_env() {
   # temporarily unavailable. Do not print the values or include them in logs.
   [[ -n "$openai_key" ]] || openai_key="$(existing_env_value OPENAI_API_KEY "$env_file")"
   [[ -n "$gemini_key" ]] || gemini_key="$(existing_env_value GEMINI_API_KEY "$env_file")"
+  [[ -n "$fleet_github_token" ]] || fleet_github_token="$(existing_env_value FLEET_DEPLOY_GITHUB_TOKEN "$env_file")"
+  [[ -n "$fleet_api_key" ]] || fleet_api_key="$(existing_env_value FLEET_DEPLOY_API_KEY "$env_file")"
   diagnostic_provider="$(existing_env_value ASK_HOMEOPS_DIAGNOSTIC_PROVIDER "$env_file")"
   [[ -n "$diagnostic_provider" ]] || diagnostic_provider="openai"
   [[ -n "$oidc_issuer" ]] || oidc_issuer="$(existing_env_value ASK_HOMEOPS_OIDC_ISSUER "$env_file")"
@@ -90,11 +99,19 @@ write_runtime_env() {
   elif [[ "$diagnostic_provider" == "gemini" && -z "$gemini_key" ]]; then
     echo "Gemini rollback key is missing; add /homeops/${ENVIRONMENT}/gemini-api-key to SSM" >&2
   fi
+  if [[ -z "$fleet_github_token" ]]; then
+    echo "Fleet GitHub credential is missing; add /homeops/${ENVIRONMENT}/fleet-deploy-github-token to SSM" >&2
+  fi
+  if [[ -z "$fleet_api_key" ]]; then
+    echo "Fleet API credential is missing; add /homeops/${ENVIRONMENT}/fleet-deploy-api-key to SSM" >&2
+  fi
 
   umask 077
   {
     printf 'OPENAI_API_KEY=%s\n' "$openai_key"
     printf 'GEMINI_API_KEY=%s\n' "$gemini_key"
+    printf 'FLEET_DEPLOY_GITHUB_TOKEN=%s\n' "$fleet_github_token"
+    printf 'FLEET_DEPLOY_API_KEY=%s\n' "$fleet_api_key"
     printf 'ASK_HOMEOPS_DIAGNOSTIC_PROVIDER=%s\n' "$diagnostic_provider"
     printf 'ASK_HOMEOPS_OIDC_ISSUER=%s\n' "$oidc_issuer"
     printf 'ASK_HOMEOPS_OIDC_AUDIENCE=%s\n' "$oidc_audience"

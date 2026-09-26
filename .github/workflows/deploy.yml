@@ -77,14 +77,28 @@ jobs:
           chmod 600 ${{ runner.temp }}/ec2_deploy_key
 
       - name: Deploy backend to EC2
+        env:
+          # Temporary bridge until the Terraform/SSM credential boundary is
+          # applied. These values are written only to the backend's protected
+          # runtime environment over the encrypted SSH stream.
+          FLEET_DEPLOY_GITHUB_TOKEN: ${{ secrets.FLEET_DEPLOY_GITHUB_TOKEN }}
+          FLEET_DEPLOY_API_KEY: ${{ secrets.FLEET_DEPLOY_API_KEY }}
         run: |
-          ssh -i ${{ runner.temp }}/ec2_deploy_key \
+          if [[ -z "${FLEET_DEPLOY_GITHUB_TOKEN}" || -z "${FLEET_DEPLOY_API_KEY}" ]]; then
+            echo "Fleet Deploy temporary secrets are not configured" >&2
+            exit 1
+          fi
+          {
+            printf 'export FLEET_DEPLOY_GITHUB_TOKEN=%q\n' "${FLEET_DEPLOY_GITHUB_TOKEN}"
+            printf 'export FLEET_DEPLOY_API_KEY=%q\n' "${FLEET_DEPLOY_API_KEY}"
+            cat deploy/deploy-ec2.sh
+          } | ssh -i ${{ runner.temp }}/ec2_deploy_key \
             -o ConnectTimeout=30 \
             -o BatchMode=yes \
             -o StrictHostKeyChecking=accept-new \
             -o UserKnownHostsFile=${{ runner.temp }}/known_hosts \
             "ubuntu@${EC2_SSH_HOST}" \
-            'bash -s' < deploy/deploy-ec2.sh
+            'bash -s'
 
       - name: Verify public deployment
         env:

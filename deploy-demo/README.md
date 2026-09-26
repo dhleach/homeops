@@ -389,11 +389,27 @@ image or an unpersisted Valkey key is not sufficient.
 
 The current EC2 runtime environment is populated by
 `deploy/deploy-ec2.sh` from the existing `/homeops/production/*` SSM paths for
-Ask HomeOps/OpenAI/OIDC/Valkey settings. PR10 adds no secret or Terraform
-resource. The backend expects the repository-scoped
+Ask HomeOps/OpenAI/OIDC/Valkey settings. REV 01 adds two dedicated SecureString
+paths for the Fleet backend:
+
+- `/homeops/<environment>/fleet-deploy-github-token` — the repository-scoped
+  server credential for GitHub Contents writes and workflow dispatch;
+- `/homeops/<environment>/fleet-deploy-api-key` — the separate bearer value
+  shared by the backend and the protected simulator workflow.
+
+The deploy script refreshes those values before recreating the backend and
+preserves existing `.env` values when an unrelated SSM read is temporarily
+unavailable. The backend expects the repository-scoped
 `FLEET_DEPLOY_GITHUB_TOKEN` for GitHub Contents writes and workflow dispatch;
 the existing `FLEET_DEPLOY_API_KEY` remains a separate protected simulator
 write credential. Neither value is a Vite variable or browser response field.
+
+Until the additive SSM/IAM rollout is applied, the production deploy workflow
+temporarily injects the two masked repository secrets over its encrypted SSH
+stream. This bridge is deliberately temporary: replace the broad GitHub OAuth
+credential with a least-privilege token or GitHub App credential, populate the
+two SSM paths, verify the safe Terraform plan, and then remove the workflow
+injection.
 
 The supporting prerequisite task must explicitly cover:
 
@@ -409,6 +425,28 @@ The supporting prerequisite task must explicitly cover:
 The browser must never receive either credential. PR 01 makes no Terraform
 changes and requires no apply; later credential/IAM work must declare its own
 Terraform action in its PR and handoff.
+
+## REV 01 — runtime credential hardening
+
+The repository-side deploy path now preserves the Fleet credentials instead of
+silently erasing them when `dashboard/.env` is regenerated. New EC2 instances
+also read the same two SSM paths during bootstrap. Missing values remain
+fail-closed and produce only redacted setup warnings.
+
+- Terraform apply required: **Yes** — attach the additive
+  `fleet_deploy_runtime_read` policy to the existing EC2 role.
+- Manual console/setup: create the reviewed `fleet-deployments` branch; store
+  the GitHub Contents/Actions credential in the Fleet GitHub SSM path; store a
+  generated Fleet API key in the Fleet API SSM path and the matching
+  `FLEET_DEPLOY_API_KEY` GitHub Actions secret.
+- Terraform resources: `aws_iam_policy.fleet_deploy_runtime_read` and
+  `aws_iam_role_policy_attachment.fleet_deploy_runtime_read`; no EC2 or EIP
+  replacement is intended.
+- Sequence and owner: merge the implementation first; the infrastructure
+  owner applies the reviewed additive plan, then provisions the two values and
+  reruns the production deploy before live acceptance.
+- Safety gate: the plan must contain no EC2/EIP replacement and must preserve
+  the existing bootstrap and Ask HomeOps IAM policies.
 
 ## Historical discovery findings at the PR 01 snapshot
 

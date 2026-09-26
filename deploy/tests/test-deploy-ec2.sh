@@ -2,6 +2,9 @@
 # Focused tests for the EC2 deployment readiness gate.
 #
 # Revision history:
+#   2026-09-26  Added Fleet Deploy credential preservation and SSM refresh
+#               coverage so backend deploys do not erase the public submission
+#               boundary.
 #   2026-09-24  Added changed-path targeting and fail-closed observability
 #               activation coverage for Prometheus and Grafana.
 #   2026-08-27  Added coverage for the OpenAI Luna credential and explicit
@@ -74,6 +77,8 @@ ssm_value() {
   case "$1" in
     */openai-api-key) printf '%s' 'redacted-test-openai-key' ;;
     */gemini-api-key) printf '%s' 'redacted-test-gemini-key' ;;
+    */fleet-deploy-github-token) printf '%s' 'redacted-test-fleet-github-token' ;;
+    */fleet-deploy-api-key) printf '%s' 'redacted-test-fleet-api-key' ;;
     */ask-homeops-oidc-issuer) printf '%s' 'https://issuer.example.test/pool' ;;
     */ask-homeops-oidc-audience) printf '%s' 'client-id' ;;
     */ask-homeops-oidc-audience-claim) printf '%s' 'client_id' ;;
@@ -87,10 +92,30 @@ ssm_value() {
 write_runtime_env
 [[ "$(stat -c '%a' "$REPO_DIR/dashboard/.env")" == "600" ]]
 grep -q '^OPENAI_API_KEY=redacted-test-openai-key$' "$REPO_DIR/dashboard/.env"
+grep -q '^FLEET_DEPLOY_GITHUB_TOKEN=redacted-test-fleet-github-token$' "$REPO_DIR/dashboard/.env"
+grep -q '^FLEET_DEPLOY_API_KEY=redacted-test-fleet-api-key$' "$REPO_DIR/dashboard/.env"
 grep -q '^ASK_HOMEOPS_DIAGNOSTIC_PROVIDER=openai$' "$REPO_DIR/dashboard/.env"
 grep -q '^ASK_HOMEOPS_LIMITER_BACKEND=redis$' "$REPO_DIR/dashboard/.env"
 grep -q '^ASK_HOMEOPS_OIDC_AUDIENCE_CLAIM=client_id$' "$REPO_DIR/dashboard/.env"
 printf '%s\n' "PASS: runtime environment refresh writes protected auth/Valkey settings"
+
+FLEET_DEPLOY_GITHUB_TOKEN='inherited-fleet-github-token'
+FLEET_DEPLOY_API_KEY='inherited-fleet-api-key'
+write_runtime_env
+grep -q '^FLEET_DEPLOY_GITHUB_TOKEN=inherited-fleet-github-token$' "$REPO_DIR/dashboard/.env"
+grep -q '^FLEET_DEPLOY_API_KEY=inherited-fleet-api-key$' "$REPO_DIR/dashboard/.env"
+unset FLEET_DEPLOY_GITHUB_TOKEN FLEET_DEPLOY_API_KEY
+printf '%s\n' "PASS: deployment-provided Fleet credentials take precedence"
+
+sed -i 's/^FLEET_DEPLOY_GITHUB_TOKEN=.*/FLEET_DEPLOY_GITHUB_TOKEN=preserved-fleet-github-token/' "$REPO_DIR/dashboard/.env"
+sed -i 's/^FLEET_DEPLOY_API_KEY=.*/FLEET_DEPLOY_API_KEY=preserved-fleet-api-key/' "$REPO_DIR/dashboard/.env"
+ssm_value() {
+  return 1
+}
+write_runtime_env
+grep -q '^FLEET_DEPLOY_GITHUB_TOKEN=preserved-fleet-github-token$' "$REPO_DIR/dashboard/.env"
+grep -q '^FLEET_DEPLOY_API_KEY=preserved-fleet-api-key$' "$REPO_DIR/dashboard/.env"
+printf '%s\n' "PASS: existing Fleet credentials survive unavailable SSM reads"
 
 observability_targets $'dashboard/backend/main.py\nservices/consumer/metrics.py'
 [[ "$PROMETHEUS_CONFIG_CHANGED" == "0" ]]
