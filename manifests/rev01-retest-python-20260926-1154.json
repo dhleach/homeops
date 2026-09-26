@@ -1,0 +1,1 @@
+{"deployment_id":"rev01-retest-python-20260926-1154","failure_mode":"abort","implementation":"python","profile":{"color":"green","shape":"square"},"schema_version":1,"strategy":"all_at_once","target_ids":["test-vehicle-01"]}
