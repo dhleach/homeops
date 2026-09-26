@@ -119,7 +119,9 @@ export function useFleet(apiUrl) {
     };
   }, [refresh]);
 
-  return { data, loading, error, lastUpdated, refresh: () => refresh() };
+  const refreshFleet = useCallback(() => refresh(), [refresh]);
+
+  return { data, loading, error, lastUpdated, refresh: refreshFleet };
 }
 
 function readStoredDeploymentId() {
