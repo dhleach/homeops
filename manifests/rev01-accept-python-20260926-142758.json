@@ -1,0 +1,1 @@
+{"deployment_id":"rev01-accept-python-20260926-142758","failure_mode":"abort","implementation":"python","profile":{"color":"green","shape":"hexagon"},"schema_version":1,"strategy":"canary","target_ids":["test-vehicle-01"]}
