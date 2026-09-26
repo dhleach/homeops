@@ -14,6 +14,7 @@ import hmac
 import importlib.util
 import logging
 import os
+import re
 import sqlite3
 import sys
 import uuid
@@ -49,6 +50,8 @@ def _ensure_deploy_demo_importable(module_file: Path) -> None:
 _ensure_deploy_demo_importable(Path(__file__))
 
 from deploy_demo import (  # noqa: E402
+    DEFAULT_REPOSITORY,
+    GITHUB_REPOSITORY_ENV,
     DeploymentAdmissionLimitError,
     DeploymentConflictError,
     DeploymentCooldownError,
@@ -63,6 +66,8 @@ from deploy_demo import (  # noqa: E402
     UnknownDeploymentError,
     UnknownTargetError,
     VehicleState,
+    WorkflowJobReceipt,
+    WorkflowRunReceipt,
     validate_deployment_spec,
 )
 
@@ -161,6 +166,35 @@ class DeploymentSpecRequest(BaseModel):
     failure_mode: str
 
 
+class FleetWorkflowJobResponse(BaseModel):
+    """Public-safe state for one GitHub Actions job."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: int
+    name: str
+    status: str
+    conclusion: str | None
+    started_at: str | None
+    completed_at: str | None
+    url: str | None
+    failed_step: str | None
+
+
+class FleetWorkflowResponse(BaseModel):
+    """Public-safe run and job state for the trusted deployment workflow."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: int
+    url: str | None
+    status: str
+    conclusion: str | None
+    created_at: str
+    updated_at: str
+    jobs: list[FleetWorkflowJobResponse]
+
+
 class FleetDeploymentResponse(BaseModel):
     """Deployment plus fresh target state used for apply and verification."""
 
@@ -183,8 +217,15 @@ class FleetDeploymentResponse(BaseModel):
     manifest_path: str | None = None
     manifest_sha256: str | None = None
     manifest_commit_sha: str | None = None
+    manifest_commit_url: str | None = None
     workflow_run_id: int | None = None
     workflow_url: str | None = None
+    workflow_status: str | None = None
+    workflow_conclusion: str | None = None
+    workflow_created_at: str | None = None
+    workflow_updated_at: str | None = None
+    workflow_error: str | None = None
+    workflow: FleetWorkflowResponse | None = None
     dispatch_status: DispatchStatusResponse = "not_started"
     dispatch_error: str | None = None
 
@@ -216,11 +257,76 @@ def _target_response(vehicle: VehicleState) -> FleetTargetResponse:
     )
 
 
+def _manifest_commit_url(commit_sha: str | None) -> str | None:
+    """Build a public commit URL only from validated repository metadata."""
+    if not isinstance(commit_sha, str) or not re.fullmatch(r"[0-9a-f]{40}", commit_sha):
+        return None
+    repository = os.environ.get(GITHUB_REPOSITORY_ENV, DEFAULT_REPOSITORY).strip()
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository):
+        return None
+    return f"https://github.com/{repository}/commit/{commit_sha}"
+
+
+def _workflow_job_response(job: WorkflowJobReceipt) -> FleetWorkflowJobResponse:
+    """Translate a bounded provider job receipt into the public contract."""
+    return FleetWorkflowJobResponse(
+        id=job.job_id,
+        name=job.name,
+        status=job.status,
+        conclusion=job.conclusion,
+        started_at=job.started_at,
+        completed_at=job.completed_at,
+        url=job.workflow_url,
+        failed_step=job.failed_step,
+    )
+
+
+def _workflow_response(run: WorkflowRunReceipt | None) -> FleetWorkflowResponse | None:
+    """Translate an optional Actions receipt for the browser."""
+    if run is None:
+        return None
+    return FleetWorkflowResponse(
+        id=run.workflow_run_id,
+        url=run.workflow_url,
+        status=run.status,
+        conclusion=run.conclusion,
+        created_at=run.created_at,
+        updated_at=run.updated_at,
+        jobs=[_workflow_job_response(job) for job in run.jobs],
+    )
+
+
+def _workflow_failure_message(run: WorkflowRunReceipt) -> str:
+    """Return an actionable, bounded failure summary for a completed run."""
+    failed_jobs = [
+        job for job in run.jobs if job.conclusion not in {None, "success", "neutral", "skipped"}
+    ]
+    if failed_jobs:
+        details = []
+        for job in failed_jobs[:3]:
+            detail = f"{job.name} ({job.conclusion or 'failed'})"
+            if job.failed_step:
+                detail += f" at {job.failed_step}"
+            details.append(detail)
+        return "GitHub Actions failed: " + "; ".join(details)
+    return f"GitHub Actions completed with conclusion: {run.conclusion or 'failed'}"
+
+
+def _deployment_observed_matches(store: FleetStateStore, deployment: DeploymentState) -> bool:
+    """Verify every requested target has the requested observed profile."""
+    return all(
+        store.get_vehicle(target_id).observed_digest == deployment.profile_digest
+        for target_id in deployment.target_ids
+    )
+
+
 def _deployment_response(
     store: FleetStateStore,
     deployment: DeploymentState,
     *,
     idempotent: bool = False,
+    workflow_run: WorkflowRunReceipt | None = None,
+    workflow_error: str | None = None,
 ) -> FleetDeploymentResponse:
     """Return a deployment with fresh desired/observed target snapshots."""
     targets = [
@@ -252,8 +358,19 @@ def _deployment_response(
         manifest_path=deployment.manifest_path,
         manifest_sha256=deployment.manifest_sha256,
         manifest_commit_sha=deployment.manifest_commit_sha,
-        workflow_run_id=deployment.workflow_run_id,
-        workflow_url=deployment.workflow_url,
+        manifest_commit_url=_manifest_commit_url(deployment.manifest_commit_sha),
+        workflow_run_id=(
+            workflow_run.workflow_run_id if workflow_run is not None else deployment.workflow_run_id
+        ),
+        workflow_url=(
+            workflow_run.workflow_url if workflow_run is not None else deployment.workflow_url
+        ),
+        workflow_status=workflow_run.status if workflow_run is not None else None,
+        workflow_conclusion=workflow_run.conclusion if workflow_run is not None else None,
+        workflow_created_at=workflow_run.created_at if workflow_run is not None else None,
+        workflow_updated_at=workflow_run.updated_at if workflow_run is not None else None,
+        workflow_error=workflow_error,
+        workflow=_workflow_response(workflow_run),
         dispatch_status=deployment.dispatch_status,
         dispatch_error=deployment.dispatch_error,
     )
@@ -299,6 +416,74 @@ FleetGitHubDependency = Annotated[
     GitHubFleetClient,
     Depends(get_fleet_github_client),
 ]
+
+
+def get_optional_fleet_github_client() -> GitHubFleetClient | None:
+    """Load GitHub polling when configured without breaking anonymous reads."""
+    try:
+        return GitHubFleetClient.from_environment()
+    except GitHubFleetConfigurationError:
+        return None
+
+
+OptionalFleetGitHubDependency = Annotated[
+    GitHubFleetClient | None,
+    Depends(get_optional_fleet_github_client),
+]
+
+
+def _refresh_workflow_state(
+    store: FleetStateStore,
+    deployment: DeploymentState,
+    github: GitHubFleetClient | None,
+) -> tuple[DeploymentState, WorkflowRunReceipt | None, str | None]:
+    """Read Actions plus observed state and reconcile only proven transitions."""
+    if github is None or deployment.dispatch_status != "dispatched":
+        return deployment, None, None
+
+    try:
+        if deployment.workflow_run_id is None:
+            workflow_run = github.find_workflow_run(deployment.deployment_id)
+            if workflow_run is None:
+                return deployment, None, None
+        else:
+            workflow_run = github.read_workflow_run(deployment.workflow_run_id)
+
+        if deployment.workflow_run_id != workflow_run.workflow_run_id or (
+            workflow_run.workflow_url and deployment.workflow_url != workflow_run.workflow_url
+        ):
+            deployment = store.record_workflow_run(
+                deployment.deployment_id,
+                workflow_run.workflow_run_id,
+                workflow_run.workflow_url,
+            )
+
+        current = store.get_deployment(deployment.deployment_id)
+        if workflow_run.status == "in_progress" and current.status == "queued":
+            current = store.mark_deployment_status(deployment.deployment_id, "applying")
+        elif workflow_run.status == "completed" and workflow_run.conclusion == "success":
+            if current.status not in {"succeeded", "failed"}:
+                if _deployment_observed_matches(store, current):
+                    current = store.mark_deployment_status(deployment.deployment_id, "succeeded")
+                else:
+                    current = store.mark_deployment_status(
+                        deployment.deployment_id,
+                        "failed",
+                        error="GitHub Actions reported success without verified fleet readback",
+                    )
+        elif workflow_run.status == "completed" and current.status not in {
+            "succeeded",
+            "failed",
+        }:
+            current = store.mark_deployment_status(
+                deployment.deployment_id,
+                "failed",
+                error=_workflow_failure_message(workflow_run),
+            )
+        return current, workflow_run, None
+    except GitHubFleetError as exc:
+        logger.warning("Fleet workflow refresh failed: %s", type(exc).__name__)
+        return deployment, None, "Workflow state temporarily unavailable"
 
 
 def _positive_fleet_int(name: str, default: int, *, allow_zero: bool = False) -> int:
@@ -410,11 +595,20 @@ def read_target(target_id: str, store: FleetStoreDependency) -> FleetTargetRespo
 def read_deployment(
     deployment_id: str,
     store: FleetStoreDependency,
+    github: OptionalFleetGitHubDependency,
 ) -> FleetDeploymentResponse:
-    """Return a fresh deployment snapshot suitable for client verification."""
+    """Return a fresh Actions-plus-simulator snapshot for client polling."""
     try:
         deployment = store.get_deployment(deployment_id)
-        return _deployment_response(store, deployment)
+        deployment, workflow_run, workflow_error = _refresh_workflow_state(
+            store, deployment, github
+        )
+        return _deployment_response(
+            store,
+            deployment,
+            workflow_run=workflow_run,
+            workflow_error=workflow_error,
+        )
     except UnknownDeploymentError as exc:
         raise _deployment_not_found(exc) from None
     except (OSError, sqlite3.Error, FleetStateError) as exc:

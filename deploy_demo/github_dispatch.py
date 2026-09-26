@@ -4,7 +4,9 @@ The browser never calls this module and never receives its credential.  The
 backend uses it to write one canonical manifest to the dedicated data branch,
 then dispatches the read-only trusted-master workflow from PR09.  The adapter
 does not create the manifest branch and does not infer a workflow-run URL when
-GitHub's dispatch endpoint returns no run metadata.
+GitHub's dispatch endpoint returns no run metadata.  Later reads resolve the
+exact run by its deterministic workflow run name and retrieve bounded job
+state.
 """
 
 from __future__ import annotations
@@ -16,7 +18,7 @@ import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from urllib.error import HTTPError, URLError
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 from urllib.request import Request, build_opener
 
 GITHUB_API_URL = "https://api.github.com"
@@ -31,6 +33,8 @@ MAX_RESPONSE_BYTES = 1_048_576
 MAX_MANIFEST_BYTES = 16_384
 _DEPLOYMENT_ID_PATTERN = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?[.]json$")
 _SHA1_PATTERN = re.compile(r"^[0-9a-f]{40}$")
+_WORKFLOW_VALUE_PATTERN = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
+MAX_WORKFLOW_JOBS = 100
 
 
 class GitHubFleetError(RuntimeError):
@@ -64,6 +68,33 @@ class WorkflowDispatchReceipt:
     workflow_url: str | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class WorkflowJobReceipt:
+    """Bounded state for one GitHub Actions job."""
+
+    job_id: int
+    name: str
+    status: str
+    conclusion: str | None
+    started_at: str | None
+    completed_at: str | None
+    workflow_url: str | None
+    failed_step: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class WorkflowRunReceipt:
+    """Run and job state read from GitHub Actions."""
+
+    workflow_run_id: int
+    workflow_url: str | None
+    status: str
+    conclusion: str | None
+    created_at: str
+    updated_at: str
+    jobs: tuple[WorkflowJobReceipt, ...]
+
+
 def _validate_deployment_id(value: str) -> str:
     """Validate an ID before placing it in a repository path."""
     candidate = f"{value}.json"
@@ -86,6 +117,95 @@ def _safe_workflow_url(value: object) -> str | None:
     if not isinstance(value, str) or len(value) > 512 or not value.startswith("https://"):
         return None
     return value
+
+
+def _safe_workflow_value(value: object, *, name: str, allow_none: bool = False) -> str | None:
+    """Accept a small provider enum without reflecting arbitrary API text."""
+    if value is None and allow_none:
+        return None
+    if not isinstance(value, str) or _WORKFLOW_VALUE_PATTERN.fullmatch(value) is None:
+        raise GitHubFleetError(f"GitHub workflow {name} was invalid")
+    return value
+
+
+def _safe_workflow_timestamp(value: object, *, name: str) -> str:
+    """Keep provider timestamps bounded while preserving their exact value."""
+    if not isinstance(value, str) or not value or len(value) > 64:
+        raise GitHubFleetError(f"GitHub workflow {name} was invalid")
+    return value
+
+
+def _safe_optional_workflow_timestamp(value: object, *, name: str) -> str | None:
+    """Accept nullable job timestamps from the Actions API."""
+    if value is None:
+        return None
+    return _safe_workflow_timestamp(value, name=name)
+
+
+def _safe_workflow_text(value: object, *, name: str, max_length: int = 256) -> str:
+    """Accept bounded human-readable provider metadata."""
+    if not isinstance(value, str) or not value or len(value) > max_length:
+        raise GitHubFleetError(f"GitHub workflow {name} was invalid")
+    return value
+
+
+def _workflow_job_from_payload(payload: object) -> WorkflowJobReceipt:
+    """Parse one bounded Actions job object."""
+    if not isinstance(payload, Mapping):
+        raise GitHubFleetError("GitHub workflow job was not an object")
+    job_id = payload.get("id")
+    if not isinstance(job_id, int) or isinstance(job_id, bool) or job_id < 1:
+        raise GitHubFleetError("GitHub workflow job ID was invalid")
+    steps = payload.get("steps", [])
+    failed_step: str | None = None
+    if isinstance(steps, list):
+        for step in steps:
+            if not isinstance(step, Mapping) or step.get("conclusion") not in {
+                "failure",
+                "timed_out",
+                "cancelled",
+            }:
+                continue
+            raw_name = step.get("name")
+            if isinstance(raw_name, str) and raw_name and len(raw_name) <= 256:
+                failed_step = raw_name
+                break
+    return WorkflowJobReceipt(
+        job_id=job_id,
+        name=_safe_workflow_text(payload.get("name"), name="job name"),
+        status=_safe_workflow_value(payload.get("status"), name="job status") or "unknown",
+        conclusion=_safe_workflow_value(
+            payload.get("conclusion"), name="job conclusion", allow_none=True
+        ),
+        started_at=_safe_optional_workflow_timestamp(
+            payload.get("started_at"), name="job start timestamp"
+        ),
+        completed_at=_safe_optional_workflow_timestamp(
+            payload.get("completed_at"), name="job completion timestamp"
+        ),
+        workflow_url=_safe_workflow_url(payload.get("html_url")),
+        failed_step=failed_step,
+    )
+
+
+def _workflow_run_from_payload(payload: object) -> WorkflowRunReceipt:
+    """Parse run metadata without making any assumptions about completion."""
+    if not isinstance(payload, Mapping):
+        raise GitHubFleetError("GitHub workflow run was not an object")
+    run_id = payload.get("id")
+    if not isinstance(run_id, int) or isinstance(run_id, bool) or run_id < 1:
+        raise GitHubFleetError("GitHub workflow run ID was invalid")
+    return WorkflowRunReceipt(
+        workflow_run_id=run_id,
+        workflow_url=_safe_workflow_url(payload.get("html_url")),
+        status=_safe_workflow_value(payload.get("status"), name="run status") or "unknown",
+        conclusion=_safe_workflow_value(
+            payload.get("conclusion"), name="run conclusion", allow_none=True
+        ),
+        created_at=_safe_workflow_timestamp(payload.get("created_at"), name="creation timestamp"),
+        updated_at=_safe_workflow_timestamp(payload.get("updated_at"), name="update timestamp"),
+        jobs=(),
+    )
 
 
 class GitHubFleetClient:
@@ -300,6 +420,90 @@ class GitHubFleetClient:
             workflow_url = _safe_workflow_url(headers.get("location"))
         return WorkflowDispatchReceipt(workflow_run_id=run_id, workflow_url=workflow_url)
 
+    def manifest_commit_url(self, commit_sha: str) -> str:
+        """Return the public URL for a validated manifest commit."""
+        validated_sha = _validate_sha(commit_sha, name="manifest commit SHA")
+        return f"https://github.com/{self.repository}/commit/{validated_sha}"
+
+    def _workflow_runs_path(self) -> str:
+        """Return the Actions run-list path for this trusted workflow."""
+        workflow = quote(self.workflow_file, safe="/")
+        query = urlencode({"event": "workflow_dispatch", "branch": "master", "per_page": "100"})
+        return f"/repos/{self.repository}/actions/workflows/{workflow}/runs?{query}"
+
+    def _workflow_run_jobs_path(self, workflow_run_id: int) -> str:
+        """Return the bounded job-list path for one run."""
+        if (
+            not isinstance(workflow_run_id, int)
+            or isinstance(workflow_run_id, bool)
+            or workflow_run_id < 1
+        ):
+            raise GitHubFleetError("workflow run ID must be positive")
+        return (
+            f"/repos/{self.repository}/actions/runs/{workflow_run_id}/jobs"
+            f"?per_page={MAX_WORKFLOW_JOBS}"
+        )
+
+    def get_workflow_run(self, workflow_run_id: int) -> WorkflowRunReceipt:
+        """Read one Actions run and its jobs without exposing provider payloads."""
+        _, payload, _ = self._request(
+            "GET",
+            f"/repos/{self.repository}/actions/runs/{workflow_run_id}",
+        )
+        run = _workflow_run_from_payload(payload)
+        if run.workflow_run_id != workflow_run_id:
+            raise GitHubFleetError("GitHub returned a different workflow run ID")
+
+        _, jobs_payload, _ = self._request("GET", self._workflow_run_jobs_path(workflow_run_id))
+        if not isinstance(jobs_payload, Mapping):
+            raise GitHubFleetError("GitHub workflow jobs response was not an object")
+        raw_jobs = jobs_payload.get("jobs", [])
+        if not isinstance(raw_jobs, list) or len(raw_jobs) > MAX_WORKFLOW_JOBS:
+            raise GitHubFleetError("GitHub workflow jobs response was invalid")
+        jobs = tuple(_workflow_job_from_payload(job) for job in raw_jobs)
+        return WorkflowRunReceipt(
+            workflow_run_id=run.workflow_run_id,
+            workflow_url=run.workflow_url,
+            status=run.status,
+            conclusion=run.conclusion,
+            created_at=run.created_at,
+            updated_at=run.updated_at,
+            jobs=jobs,
+        )
+
+    # The descriptive alias keeps the call site clear when a route refreshes
+    # an existing deployment instead of discovering a new one.
+    read_workflow_run = get_workflow_run
+
+    def find_workflow_run(self, deployment_id: str) -> WorkflowRunReceipt | None:
+        """Find the exact dispatched run by its deterministic run name.
+
+        A 204 dispatch response contains no run identity.  PR12 adds a
+        ``run-name`` based on the deployment ID, so this lookup never chooses
+        an unrelated recent workflow merely because it happened to be newest.
+        """
+        _validate_deployment_id(deployment_id)
+        _, payload, _ = self._request("GET", self._workflow_runs_path())
+        if not isinstance(payload, Mapping):
+            raise GitHubFleetError("GitHub workflow runs response was not an object")
+        raw_runs = payload.get("workflow_runs", [])
+        if not isinstance(raw_runs, list) or len(raw_runs) > MAX_WORKFLOW_JOBS:
+            raise GitHubFleetError("GitHub workflow runs response was invalid")
+        expected_name = f"Fleet deployment {deployment_id}"
+        candidates: list[tuple[str, int]] = []
+        for raw_run in raw_runs:
+            if not isinstance(raw_run, Mapping):
+                raise GitHubFleetError("GitHub workflow run list contained an invalid item")
+            display_title = raw_run.get("display_title") or raw_run.get("run_name")
+            if display_title != expected_name:
+                continue
+            candidate = _workflow_run_from_payload(raw_run)
+            candidates.append((candidate.created_at, candidate.workflow_run_id))
+        if not candidates:
+            return None
+        _, workflow_run_id = max(candidates)
+        return self.get_workflow_run(workflow_run_id)
+
 
 __all__ = [
     "DEFAULT_MANIFEST_BRANCH",
@@ -315,4 +519,6 @@ __all__ = [
     "MANIFEST_BRANCH_ENV",
     "WORKFLOW_FILE_ENV",
     "WorkflowDispatchReceipt",
+    "WorkflowJobReceipt",
+    "WorkflowRunReceipt",
 ]

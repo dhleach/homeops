@@ -52,6 +52,8 @@ from .github_dispatch import (
     ManifestCommitReceipt,
     ManifestConflictError,
     WorkflowDispatchReceipt,
+    WorkflowJobReceipt,
+    WorkflowRunReceipt,
 )
 
 _DEPLOYER_EXPORTS = frozenset(
@@ -132,6 +134,8 @@ __all__ = [
     "ManifestCommitReceipt",
     "ManifestConflictError",
     "WorkflowDispatchReceipt",
+    "WorkflowJobReceipt",
+    "WorkflowRunReceipt",
     "API_BASE_URL_ENV",
     "API_KEY_ENV",
     "ArtifactIdentityError",
