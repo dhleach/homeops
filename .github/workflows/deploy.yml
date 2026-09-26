@@ -12,7 +12,7 @@ jobs:
   deploy:
     name: Deploy to Pi
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     permissions:
       contents: read
     env:
@@ -87,4 +87,28 @@ jobs:
             'bash -s' < deploy/deploy-ec2.sh
 
       - name: Verify public deployment
-        run: python3 scripts/deploy_smoke_check.py
+        env:
+          # The backend restart can briefly leave the active public ingress
+          # without a healthy target. Keep the release gate fail-closed while
+          # allowing that existing routing layer to converge.
+          PUBLIC_SMOKE_INITIAL_DELAY_SECONDS: 60
+          PUBLIC_SMOKE_ATTEMPTS: 24
+          PUBLIC_SMOKE_RETRY_DELAY_SECONDS: 20
+        run: |
+          echo "Waiting ${PUBLIC_SMOKE_INITIAL_DELAY_SECONDS}s for public ingress convergence"
+          sleep "${PUBLIC_SMOKE_INITIAL_DELAY_SECONDS}"
+
+          for ((attempt = 1; attempt <= PUBLIC_SMOKE_ATTEMPTS; attempt++)); do
+            if python3 scripts/deploy_smoke_check.py; then
+              echo "Public deployment verified on attempt ${attempt}/${PUBLIC_SMOKE_ATTEMPTS}"
+              exit 0
+            fi
+
+            if ((attempt < PUBLIC_SMOKE_ATTEMPTS)); then
+              echo "Public smoke check failed; retrying in ${PUBLIC_SMOKE_RETRY_DELAY_SECONDS}s (attempt ${attempt}/${PUBLIC_SMOKE_ATTEMPTS})"
+              sleep "${PUBLIC_SMOKE_RETRY_DELAY_SECONDS}"
+            fi
+          done
+
+          echo "Public deployment failed after ${PUBLIC_SMOKE_ATTEMPTS} attempts" >&2
+          exit 1

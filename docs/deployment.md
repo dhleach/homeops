@@ -35,6 +35,11 @@ concurrency group. A push to `master` runs:
    authenticated request and fail if Ask HomeOps returns an error or an empty
    answer.
 
+The backend deploy workflow waits 60 seconds for the public routing layer to
+converge, then retries the public smoke check up to 24 times at 20-second
+intervals. The check remains fail-closed if the public interfaces do not
+recover within that bounded window.
+
 The separate frontend workflow runs `npm ci`, builds with
 `VITE_API_URL=https://api.homeops.now`, syncs the private S3 bucket, invalidates
 CloudFront, and runs the same public smoke checks.
