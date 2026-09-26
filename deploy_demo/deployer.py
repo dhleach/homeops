@@ -577,7 +577,12 @@ class FleetDeployer:
                 validated_spec,
                 validated_artifact,
                 phase="queue",
-                allowed_statuses=frozenset({"queued", "succeeded"}),
+                # A public status poll can reconcile the same in-flight
+                # workflow to ``applying`` before this protected queue
+                # response arrives.  That is a truthful intermediate state,
+                # not a queue failure; the protected apply and fresh readback
+                # below remain the authoritative success gates.
+                allowed_statuses=frozenset({"queued", "applying", "succeeded"}),
                 require_observed=False,
             )
             self._emit(

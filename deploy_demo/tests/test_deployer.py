@@ -165,6 +165,30 @@ def test_deployer_queues_applies_and_verifies_fresh_observed_state() -> None:
     assert all(event.artifact_sha256 == artifact.sha256 for event in events)
 
 
+def test_deployer_accepts_concurrent_applying_queue_state() -> None:
+    """Public polling may advance the durable row before queue returns."""
+    spec = valid_spec(target_ids=["test-vehicle-01"])
+    artifact = artifact_for(spec)
+    queued = snapshot(
+        spec,
+        artifact,
+        status="applying",
+        verified=False,
+        observed={"color": "blue", "shape": "circle"},
+        target_status="pending",
+    )
+    completed = snapshot(spec, artifact, status="succeeded", verified=True)
+    client = FakeClient(queued, completed, completed)
+    events = []
+
+    result = FleetDeployer(client, event_sink=events.append).deploy(spec, artifact)
+
+    assert result.response["verified"] is True
+    assert [name for name, _ in client.calls] == ["queue", "apply", "read"]
+    assert events[1].event_type == "deployment_queued"
+    assert events[1].status == "applying"
+
+
 def test_repeated_runs_are_safe_when_api_returns_idempotent_success() -> None:
     spec = valid_spec(target_ids=["test-vehicle-01"])
     artifact = artifact_for(spec)
