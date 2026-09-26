@@ -1,10 +1,10 @@
 # Fleet Deploy Lab integration map
 
-Status: PR 07 local Python deployer on top of the merged PR 06 preview-only `/deploy` controls
+Status: PR 08 local simulator/deployer integration suite on top of the merged PR 07 Python deployer
 Repository: `dhleach/homeops`
 Default branch: `master`
-Latest integration snapshot: `706cc34`
-GitHub issue: https://github.com/dhleach/homeops/issues/344
+Latest integration snapshot: `44de721`
+GitHub issue: https://github.com/dhleach/homeops/issues/346
 
 This document records the real HomeOps integration points for the Fleet Deploy
 Lab as the implementation advances. It is deliberately specific about what
@@ -136,6 +136,43 @@ HomeOps deployment path; PR 08 owns the simulator/deployer integration suite.
 - Terraform resources changed: **None**
 - Sequence and owner: Derek reviews and merges the local deployer implementation; later workflow work owns trusted artifact execution.
 - Safety gate: the client can write only through the dedicated simulated Fleet API and requires independent observed-state verification before success.
+
+## PR 08 — end-to-end local simulator/deployer tests
+
+PR 08 proves the merged Python deployer against the real FastAPI Fleet API and
+an isolated temporary SQLite simulator. The harness sends the real
+`FleetApiClient` requests through an in-process `TestClient`, so the tests
+exercise the protected queue route, explicit apply route, public readback, and
+the durable state store together without touching production or starting a
+server.
+
+The suite covers one-target success, environment expansion, replay idempotence,
+dedicated-credential rejection, queue-only web behavior, and a tampered fresh
+readback. The last case demonstrates that an apply that returns HTTP 200 still
+fails closed when the independent observed state does not match the immutable
+artifact. No web request invokes the deployer synchronously: queueing leaves
+the deployment pending until a separate protected apply request.
+
+Run the demo-specific integration suite from the repository root:
+
+```bash
+PYTHONPATH=services/consumer:services/observer:services/insights:dashboard/backend:scripts \
+python3 -m pytest --import-mode=importlib \
+  deploy_demo/tests/test_deployer_e2e.py
+```
+
+The same test file is included in the explicit Ruff lists and the repository's
+full pytest/test-count workflow. It adds six Python tests and changes no
+Terraform resource, credential, browser behavior, Pi state, Home Assistant
+state, or normal HomeOps deployment path.
+
+## PR 08 disposition
+
+- Terraform apply required: **No**
+- Manual console setup: **None**
+- Terraform resources changed: **None**
+- Sequence and owner: Derek reviews and merges the local integration-test PR; later workflow work owns trusted artifact execution.
+- Safety gate: all writes are against an isolated test store and the local FastAPI simulator; production routes and deployment actions are not invoked.
 
 ## Backend and API boundary
 
