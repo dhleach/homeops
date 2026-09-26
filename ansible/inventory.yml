@@ -1,0 +1,48 @@
+---
+# These names are logical simulator targets, not SSH hosts or containers.
+# The playbook runs on localhost and uses these groups only to resolve the
+# same twelve target IDs that the shared DeploymentSpec expands.
+all:
+  children:
+    test:
+      hosts:
+        test-vehicle-01:
+          fleet_target_id: test-vehicle-01
+          fleet_environment: test
+        test-vehicle-02:
+          fleet_target_id: test-vehicle-02
+          fleet_environment: test
+        test-vehicle-03:
+          fleet_target_id: test-vehicle-03
+          fleet_environment: test
+        test-vehicle-04:
+          fleet_target_id: test-vehicle-04
+          fleet_environment: test
+    stage:
+      hosts:
+        stage-vehicle-01:
+          fleet_target_id: stage-vehicle-01
+          fleet_environment: stage
+        stage-vehicle-02:
+          fleet_target_id: stage-vehicle-02
+          fleet_environment: stage
+        stage-vehicle-03:
+          fleet_target_id: stage-vehicle-03
+          fleet_environment: stage
+        stage-vehicle-04:
+          fleet_target_id: stage-vehicle-04
+          fleet_environment: stage
+    prod:
+      hosts:
+        prod-vehicle-01:
+          fleet_target_id: prod-vehicle-01
+          fleet_environment: prod
+        prod-vehicle-02:
+          fleet_target_id: prod-vehicle-02
+          fleet_environment: prod
+        prod-vehicle-03:
+          fleet_target_id: prod-vehicle-03
+          fleet_environment: prod
+        prod-vehicle-04:
+          fleet_target_id: prod-vehicle-04
+          fleet_environment: prod

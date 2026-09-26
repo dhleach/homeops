@@ -1,0 +1,190 @@
+---
+- name: Apply one validated Fleet Deploy operation with Ansible
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    fleet_api_base_url: "{{ api_base_url | default(lookup('env', 'FLEET_DEPLOY_API_URL'), true) | default('https://api.homeops.now/deploy/api', true) }}"
+    fleet_api_key: "{{ lookup('env', 'FLEET_DEPLOY_API_KEY') }}"
+    fleet_api_timeout: "{{ api_timeout | default(15) | int }}"
+    fleet_artifact_path: "{{ artifact_path | default('profile.json', true) }}"
+    fleet_spec_path: "{{ spec_path | default('deployment-spec.json', true) }}"
+    fleet_environment_groups:
+      - test
+      - stage
+      - prod
+
+  pre_tasks:
+    - name: Require the dedicated Fleet API credential
+      ansible.builtin.assert:
+        that:
+          - fleet_api_key | length > 0
+        fail_msg: FLEET_DEPLOY_API_KEY must be supplied through the runtime environment.
+
+    - name: Require an absolute HTTP(S) API boundary
+      ansible.builtin.assert:
+        that:
+          - fleet_api_base_url is match('^https?://')
+        fail_msg: api_base_url must be an absolute HTTP(S) URL.
+
+    - name: Validate the shared spec and immutable profile artifact
+      ansible.builtin.command:
+        argv:
+          - "{{ ansible_playbook_python }}"
+          - -m
+          - deploy_demo.ansible_validation
+          - --spec
+          - "{{ fleet_spec_path }}"
+          - --artifact
+          - "{{ fleet_artifact_path }}"
+        chdir: "{{ playbook_dir | dirname }}"
+      environment:
+        PYTHONPATH: "{{ playbook_dir | dirname }}"
+      register: validated_inputs_command
+      changed_when: false
+
+    - name: Load the bounded validation result
+      ansible.builtin.set_fact:
+        validated_inputs: "{{ validated_inputs_command.stdout | from_json }}"
+        validated_spec: "{{ (validated_inputs_command.stdout | from_json).spec }}"
+        validated_target_ids: "{{ (validated_inputs_command.stdout | from_json).target_ids }}"
+        validated_profile: "{{ (validated_inputs_command.stdout | from_json).profile }}"
+        validated_artifact_sha256: "{{ (validated_inputs_command.stdout | from_json).artifact_sha256 }}"
+
+    - name: Require all inventory environment groups
+      ansible.builtin.assert:
+        that:
+          - item in groups
+          - groups[item] | length == 4
+        fail_msg: "Inventory group {{ item }} must contain exactly four logical simulator targets."
+      loop: "{{ fleet_environment_groups }}"
+
+    - name: Require each selected target to resolve through inventory
+      ansible.builtin.assert:
+        that:
+          - item in hostvars
+          - hostvars[item].fleet_target_id is defined
+          - hostvars[item].fleet_target_id == item
+          - hostvars[item].fleet_environment is defined
+          - hostvars[item].fleet_environment in fleet_environment_groups
+          - item in groups[hostvars[item].fleet_environment]
+        fail_msg: "Selected target {{ item }} is not a valid logical Fleet Deploy inventory target."
+      loop: "{{ validated_target_ids }}"
+
+    - name: Require environment selectors to resolve only inside their group
+      ansible.builtin.assert:
+        that:
+          - item in groups[validated_spec.environment]
+      loop: "{{ validated_target_ids }}"
+      when: validated_spec.environment is defined
+
+    - name: Resolve the selected inventory IDs
+      ansible.builtin.set_fact:
+        inventory_target_ids: "{{ (inventory_target_ids | default([])) + [hostvars[item].fleet_target_id] }}"
+      loop: "{{ validated_target_ids }}"
+
+    - name: Require exact shared-contract and inventory target resolution
+      ansible.builtin.assert:
+        that:
+          - inventory_target_ids == validated_target_ids
+        fail_msg: Ansible inventory resolution does not match the validated DeploymentSpec target order.
+
+  tasks:
+    - name: Queue the validated deployment through the protected simulator API
+      ansible.builtin.uri:
+        url: "{{ fleet_api_base_url | regex_replace('/+$', '') }}/deployments"
+        method: POST
+        headers:
+          Authorization: "Bearer {{ fleet_api_key }}"
+        body: "{{ validated_spec }}"
+        body_format: json
+        return_content: true
+        status_code: 200
+        timeout: "{{ fleet_api_timeout }}"
+      no_log: true
+      register: queue_response
+
+    - name: Verify the queue response against the immutable artifact
+      ansible.builtin.assert:
+        that:
+          - queue_response.status == 200
+          - queue_response.json.simulated is true
+          - queue_response.json.target_kind == 'simulated'
+          - queue_response.json.deployment_id == validated_inputs.deployment_id
+          - queue_response.json.target_ids == validated_target_ids
+          - queue_response.json.desired == validated_profile
+          - queue_response.json.desired_digest == validated_artifact_sha256
+          - queue_response.json.status in ['queued', 'succeeded']
+        fail_msg: Queue response did not match the validated Ansible deployment.
+
+    - name: Apply the queued deployment through the protected simulator API
+      ansible.builtin.uri:
+        url: "{{ fleet_api_base_url | regex_replace('/+$', '') }}/deployments/{{ validated_inputs.deployment_id }}/apply"
+        method: POST
+        headers:
+          Authorization: "Bearer {{ fleet_api_key }}"
+        return_content: true
+        status_code: 200
+        timeout: "{{ fleet_api_timeout }}"
+      no_log: true
+      register: apply_response
+
+    - name: Require a successful protected apply
+      ansible.builtin.assert:
+        that:
+          - apply_response.status == 200
+          - apply_response.json.status == 'succeeded'
+          - apply_response.json.target_ids == validated_target_ids
+          - apply_response.json.desired == validated_profile
+          - apply_response.json.desired_digest == validated_artifact_sha256
+        fail_msg: Protected simulator apply did not report the validated deployment as succeeded.
+
+    - name: Read fresh public deployment state for independent verification
+      ansible.builtin.uri:
+        url: "{{ fleet_api_base_url | regex_replace('/+$', '') }}/deployments/{{ validated_inputs.deployment_id }}"
+        method: GET
+        return_content: true
+        status_code: 200
+        timeout: "{{ fleet_api_timeout }}"
+      register: fresh_readback
+
+    - name: Verify fresh deployment state and artifact identity
+      ansible.builtin.assert:
+        that:
+          - fresh_readback.status == 200
+          - fresh_readback.json.simulated is true
+          - fresh_readback.json.target_kind == 'simulated'
+          - fresh_readback.json.deployment_id == validated_inputs.deployment_id
+          - fresh_readback.json.target_ids == validated_target_ids
+          - fresh_readback.json.desired == validated_profile
+          - fresh_readback.json.desired_digest == validated_artifact_sha256
+          - fresh_readback.json.status == 'succeeded'
+          - fresh_readback.json.verification == 'verified'
+          - fresh_readback.json.verified is true
+          - fresh_readback.json.targets | length == validated_target_ids | length
+        fail_msg: Fresh public readback did not prove the requested deployment succeeded.
+
+    - name: Verify every target's observed profile and deployment identity
+      ansible.builtin.assert:
+        that:
+          - item.target_id == validated_target_ids[ansible_loop.index0]
+          - item.simulated is true
+          - item.desired == validated_profile
+          - item.desired_digest == validated_artifact_sha256
+          - item.observed == validated_profile
+          - item.observed_digest == validated_artifact_sha256
+          - item.status == 'succeeded'
+          - item.active_deployment_id == validated_inputs.deployment_id
+        fail_msg: "Fresh readback target {{ item.target_id | default('unknown') }} did not verify."
+      loop: "{{ fresh_readback.json.targets }}"
+      loop_control:
+        extended: true
+
+    - name: Report the verified Ansible deployment without credentials
+      ansible.builtin.debug:
+        msg:
+          deployment_id: "{{ validated_inputs.deployment_id }}"
+          implementation: ansible
+          target_ids: "{{ validated_target_ids }}"
+          artifact_sha256: "{{ validated_artifact_sha256 }}"
+          status: verified

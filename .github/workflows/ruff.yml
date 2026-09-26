@@ -36,9 +36,10 @@ jobs:
             services/insights/rules/tests/test_rule_enablement.py \
             dashboard/backend/fleet_api.py dashboard/backend/main.py dashboard/backend/security.py \
             dashboard/backend/tests/test_fleet_api.py dashboard/backend/tests/test_fleet_submission.py dashboard/backend/tests/test_security.py \
-            deploy_demo/__init__.py deploy_demo/__main__.py deploy_demo/deployment_spec.py \
+            deploy_demo/__init__.py deploy_demo/__main__.py deploy_demo/ansible_validation.py deploy_demo/deployment_spec.py \
             deploy_demo/deployer.py deploy_demo/fleet_state.py deploy_demo/github_dispatch.py deploy_demo/trusted_artifact.py \
             deploy_demo/tests/test_deployer.py deploy_demo/tests/test_deployer_e2e.py \
+            deploy_demo/tests/test_ansible_playbook.py deploy_demo/tests/test_ansible_validation.py \
             deploy_demo/tests/test_deployment_spec.py \
             deploy_demo/tests/test_fleet_state.py deploy_demo/tests/test_github_dispatch.py deploy_demo/tests/test_trusted_artifact.py \
             scripts/deploy_smoke_check.py scripts/test_counts.py scripts/validate_anomalies.py \
@@ -84,9 +85,10 @@ jobs:
             services/insights/rules/tests/test_rule_enablement.py \
             dashboard/backend/fleet_api.py dashboard/backend/main.py dashboard/backend/security.py \
             dashboard/backend/tests/test_fleet_api.py dashboard/backend/tests/test_fleet_submission.py dashboard/backend/tests/test_security.py \
-            deploy_demo/__init__.py deploy_demo/__main__.py deploy_demo/deployment_spec.py \
+            deploy_demo/__init__.py deploy_demo/__main__.py deploy_demo/ansible_validation.py deploy_demo/deployment_spec.py \
             deploy_demo/deployer.py deploy_demo/fleet_state.py deploy_demo/github_dispatch.py deploy_demo/trusted_artifact.py \
             deploy_demo/tests/test_deployer.py deploy_demo/tests/test_deployer_e2e.py \
+            deploy_demo/tests/test_ansible_playbook.py deploy_demo/tests/test_ansible_validation.py \
             deploy_demo/tests/test_deployment_spec.py \
             deploy_demo/tests/test_fleet_state.py deploy_demo/tests/test_github_dispatch.py deploy_demo/tests/test_trusted_artifact.py \
             scripts/deploy_smoke_check.py scripts/test_counts.py scripts/validate_anomalies.py \
@@ -126,7 +128,7 @@ jobs:
       - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pytest pytest-asyncio respx PyYAML
+          pip install pytest pytest-asyncio respx PyYAML ansible-core
           pip install -r services/consumer/requirements.txt
           pip install -r services/observer/requirements.txt
           pip install -r dashboard/backend/requirements.txt
@@ -164,6 +166,12 @@ jobs:
             --readme README.md \
             --output test-counts.json
           cat test-counts.json
+      - name: Validate Ansible inventory and playbook syntax
+        env:
+          ANSIBLE_CONFIG: ansible/ansible.cfg
+        run: |
+          ansible-inventory -i ansible/inventory.yml --list > /dev/null
+          ansible-playbook --syntax-check -i ansible/inventory.yml ansible/deploy.yml
 
   shell:
     runs-on: ubuntu-latest
