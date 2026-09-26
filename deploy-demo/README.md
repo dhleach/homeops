@@ -184,7 +184,10 @@ dispatch, fetches the
 `fleet-deployments` branch only as Git objects, verifies that the event commit
 is an ancestor of that branch, and reads exactly
 `manifests/<deployment_id>.json` with `git show`. It never checks out or
-executes the writable manifest branch.
+executes the writable manifest branch. Because this is a Git-over-HTTPS fetch
+rather than a REST request, the runner builds a short-lived Basic
+`x-access-token` header from its built-in read-only token; the token is never
+printed or uploaded.
 
 The trusted `deploy_demo.trusted_artifact` module reuses the shared
 `DeploymentSpec` validator, rejects duplicate keys and non-canonical manifest
