@@ -1,0 +1,1 @@
+{"deployment_id":"rev01-restore-baseline-20260926-160649","failure_mode":"rollback","implementation":"python","profile":{"color":"blue","shape":"circle"},"schema_version":1,"strategy":"rolling","target_ids":["test-vehicle-01"]}
