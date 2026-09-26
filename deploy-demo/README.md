@@ -1,10 +1,10 @@
 # Fleet Deploy Lab integration map
 
-Status: REV 03 live-deploy copy updates on top of merged REV 02 Python/Ansible execution
+Status: REV 04 live-deploy layout merged; REV 05 generated-attempt work in progress
 Repository: `dhleach/homeops`
 Default branch: `master`
-Latest integration snapshot: `54dab51`
-GitHub issue: https://github.com/dhleach/homeops/issues/366
+Latest merged integration snapshot: `be29c22`
+Active GitHub issue: https://github.com/dhleach/homeops/issues/370
 
 This document records the real HomeOps integration points for the Fleet Deploy
 Lab as the implementation advances. It is deliberately specific about what
@@ -80,13 +80,41 @@ frontend workflow; it is not published as an unrelated static site.
 The public `/deploy` route offers only the finite environments, simulated target
 IDs, profile colors and shapes, Python/Ansible implementations, strategies, and
 failure modes defined by the shared `deploy_demo.deployment_spec` contract. It
-validates the visible deployment ID and strategy/failure-mode combinations,
-shows the exact deployment specification that will be submitted, and labels the
-primary action with the selected environment or target count.
+generates the deployment attempt ID automatically instead of asking a visitor
+to invent one, keeps that ID in tab-scoped session storage across reloads, and
+shows the exact deployment specification that will be submitted. A retry keeps
+the same ID and unchanged spec; changing an already-submitted configuration or
+starting another deployment rotates to a new ID. The backend's durable
+admission boundary makes an unchanged replay idempotent while rejecting a
+different spec under an existing ID.
 
 Submitting creates a validated manifest and dispatches the trusted workflow.
 The browser accepts no repository path, URL, command, arbitrary code, or
 credential; GitHub and protected simulator credentials remain server-side.
+
+## REV 05 — generated request identifiers and safe retries
+
+The Fleet Deploy form now generates a unique attempt ID with browser-side
+randomness (using cryptographic APIs when available) and stores it only in the
+current tab. Network errors
+and dispatch failures leave the attempt available through an explicit
+`Retry same attempt` action, so a double click or retry cannot create a second
+manifest for the same spec. A reload does not submit anything automatically;
+it reconstructs the same attempt ID, while a fresh tab receives a different
+attempt and cannot inherit another visitor's active run. `Start another
+deployment` and edits after a completed attempt explicitly rotate the ID.
+
+This is a frontend/API behavior change only:
+
+- Terraform apply required: **No**
+- Manual console/setup: **None**
+- Terraform resources changed: **None**
+- Sequence and owner: Derek reviews and merges the implementation; the
+  existing backend idempotency and server-side credential boundary remain in
+  force.
+- Safety gate: no browser credential, repository path, arbitrary command,
+  Home Assistant state, thermostat, Pi/EC2 deployment, or normal release path
+  is changed.
 
 ## Fleet Deploy form safety boundary
 

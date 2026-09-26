@@ -24,13 +24,14 @@ const TARGETS_BY_ENVIRONMENT = Object.fromEntries(
 const TARGET_ORDER = ENVIRONMENTS.flatMap((environment) => TARGETS_BY_ENVIRONMENT[environment]);
 const KNOWN_TARGET_IDS = new Set(TARGET_ORDER);
 const DEPLOYMENT_ID_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/;
+const DEPLOYMENT_ATTEMPT_STORAGE_KEY = "homeops.fleetDeployAttemptId";
 
 function submitUrl(apiUrl) {
   return `${apiUrl.replace(/\/$/, "")}/deploy/api/deployments/submit`;
 }
 
 const DEFAULT_FORM = {
-  deployment_id: "demo-preview-001",
+  deployment_id: "",
   target_selection: "environment",
   environment: "test",
   target_ids: [],
@@ -40,6 +41,52 @@ const DEFAULT_FORM = {
   strategy: "rolling",
   failure_mode: "rollback",
 };
+
+function readStoredAttemptId() {
+  try {
+    const stored = window.sessionStorage.getItem(DEPLOYMENT_ATTEMPT_STORAGE_KEY);
+    return stored && DEPLOYMENT_ID_PATTERN.test(stored) ? stored : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeStoredAttemptId(deploymentId) {
+  try {
+    window.sessionStorage.setItem(DEPLOYMENT_ATTEMPT_STORAGE_KEY, deploymentId);
+  } catch {
+    // Private browsing and disabled storage should not block the demo.
+  }
+}
+
+function createDeploymentId() {
+  const uuid = globalThis.crypto?.randomUUID?.();
+  if (uuid) return `demo-${uuid.replaceAll("-", "")}`;
+
+  const values = new Uint32Array(3);
+  if (globalThis.crypto?.getRandomValues) {
+    globalThis.crypto.getRandomValues(values);
+  } else {
+    values[0] = Date.now();
+    values[1] = Math.floor(Math.random() * 2 ** 32);
+    values[2] = Math.floor(Math.random() * 2 ** 32);
+  }
+  return `demo-${Date.now().toString(36)}-${Array.from(values)
+    .map((value) => value.toString(36))
+    .join("")}`;
+}
+
+function getOrCreateDeploymentId() {
+  const stored = readStoredAttemptId();
+  if (stored) return stored;
+  const generated = createDeploymentId();
+  writeStoredAttemptId(generated);
+  return generated;
+}
+
+function createDefaultForm() {
+  return { ...DEFAULT_FORM, deployment_id: getOrCreateDeploymentId() };
+}
 
 function labelize(value) {
   return value.replaceAll("_", " ");
@@ -52,8 +99,9 @@ function deploymentTargetCount(form) {
   return form.target_ids.length;
 }
 
-function deploymentActionLabel(form, submitting) {
+function deploymentActionLabel(form, submitting, retryable) {
   if (submitting) return "Submitting…";
+  if (retryable) return "Retry same attempt";
 
   const targetCount = deploymentTargetCount(form);
   if (!targetCount) return "Select targets to deploy";
@@ -90,7 +138,7 @@ function validateForm(form) {
   const errors = {};
 
   if (!form.deployment_id) {
-    errors.deployment_id = "Enter a deployment ID.";
+    errors.deployment_id = "A generated attempt ID is required.";
   } else if (!DEPLOYMENT_ID_PATTERN.test(form.deployment_id)) {
     errors.deployment_id = "Use lowercase letters, digits, and internal hyphens only.";
   }
@@ -156,28 +204,61 @@ function OptionSelect({ id, label, value, options, onChange, error, disabled = f
   );
 }
 
-export function DeploymentSpecForm({ apiUrl, onSubmitted }) {
-  const [form, setForm] = useState(DEFAULT_FORM);
+export function DeploymentSpecForm({ apiUrl, onSubmitted, onNewAttempt }) {
+  const [form, setForm] = useState(createDefaultForm);
   const [submitting, setSubmitting] = useState(false);
   const [submission, setSubmission] = useState(null);
   const [submitError, setSubmitError] = useState(null);
   const errors = useMemo(() => validateForm(form), [form]);
   const preview = useMemo(() => buildDeploymentSpec(form), [form]);
 
+  function beginNewAttempt() {
+    const deploymentId = createDeploymentId();
+    writeStoredAttemptId(deploymentId);
+    setForm((current) => ({ ...current, deployment_id: deploymentId }));
+    setSubmission(null);
+    setSubmitError(null);
+    onNewAttempt?.();
+  }
+
+  function prepareForConfigurationEdit() {
+    if (!submission && !submitError) return null;
+    const deploymentId = createDeploymentId();
+    writeStoredAttemptId(deploymentId);
+    setSubmission(null);
+    setSubmitError(null);
+    onNewAttempt?.();
+    return deploymentId;
+  }
+
   function updateField(field) {
-    return (event) => setForm((current) => ({ ...current, [field]: event.target.value }));
+    return (event) => {
+      const deploymentId = prepareForConfigurationEdit();
+      setForm((current) => ({
+        ...current,
+        [field]: event.target.value,
+        ...(deploymentId ? { deployment_id: deploymentId } : {}),
+      }));
+    };
   }
 
   function selectTargetMode(event) {
-    setForm((current) => ({ ...current, target_selection: event.target.value }));
+    const deploymentId = prepareForConfigurationEdit();
+    setForm((current) => ({
+      ...current,
+      target_selection: event.target.value,
+      ...(deploymentId ? { deployment_id: deploymentId } : {}),
+    }));
   }
 
   function toggleTarget(targetId) {
+    const deploymentId = prepareForConfigurationEdit();
     setForm((current) => ({
       ...current,
       target_ids: current.target_ids.includes(targetId)
         ? current.target_ids.filter((selected) => selected !== targetId)
         : [...current.target_ids, targetId],
+      ...(deploymentId ? { deployment_id: deploymentId } : {}),
     }));
   }
 
@@ -203,6 +284,9 @@ export function DeploymentSpecForm({ apiUrl, onSubmitted }) {
           ? body.detail
           : `Fleet API returned HTTP ${response.status}`;
         throw new Error(detail);
+      }
+      if (body?.deployment_id !== form.deployment_id) {
+        throw new Error("Fleet API returned a different attempt ID");
       }
       setSubmission(body);
       onSubmitted?.(body);
@@ -242,22 +326,22 @@ export function DeploymentSpecForm({ apiUrl, onSubmitted }) {
         onSubmit={submitDeployment}
       >
         <div className="space-y-6">
-          <div>
-            <label htmlFor="deployment-id" className="block text-xs font-semibold uppercase tracking-wider text-slate-400">
-              Deployment ID
-            </label>
-            <input
-              id="deployment-id"
-              type="text"
-              value={form.deployment_id}
-              onChange={updateField("deployment_id")}
-              autoComplete="off"
-              spellCheck="false"
-              aria-invalid={Boolean(errors.deployment_id)}
-              aria-describedby={errors.deployment_id ? "deployment-id-error" : undefined}
-              className="mt-2 w-full rounded-lg border border-border bg-slate-950/70 px-3 py-2.5 font-mono text-sm text-slate-100 outline-none transition-colors focus:border-blue-400"
-            />
-            <FieldError id="deployment-id-error" message={errors.deployment_id} />
+          <div className="rounded-lg border border-border bg-slate-950/40 p-3">
+            <div className="flex items-baseline justify-between gap-3">
+              <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">
+                Attempt ID
+              </p>
+              <code
+                className="max-w-[70%] truncate text-right text-xs text-slate-300"
+                data-testid="deployment-attempt-id"
+                title={form.deployment_id}
+              >
+                {form.deployment_id}
+              </code>
+            </div>
+            <p className="mt-1 text-xs text-slate-500">
+              Generated automatically and retained in this browser tab so retries address the same operation.
+            </p>
           </div>
 
           <fieldset>
@@ -412,19 +496,22 @@ export function DeploymentSpecForm({ apiUrl, onSubmitted }) {
             data-testid="deploy-submit"
             className="mt-5 w-full rounded-lg border border-blue-400/40 bg-blue-400/10 px-4 py-2.5 text-sm font-semibold text-blue-200 transition-colors hover:bg-blue-400/20 disabled:cursor-not-allowed disabled:border-slate-600 disabled:bg-slate-800 disabled:text-slate-500"
           >
-            {deploymentActionLabel(form, submitting)}
+            {deploymentActionLabel(form, submitting, Boolean(submitError) || submission?.dispatch_status === "failed")}
           </button>
           {submitError && (
-            <p role="alert" className="mt-3 rounded-lg border border-red-400/30 bg-red-400/10 p-3 text-xs text-red-200">
-              {submitError}
-            </p>
+            <div role="alert" className="mt-3 rounded-lg border border-red-400/30 bg-red-400/10 p-3 text-xs text-red-200">
+              <p>{submitError}</p>
+              <p className="mt-1 text-red-200/80" data-testid="retry-guidance">
+                This attempt ID is retained. Retry to reconcile the same server record.
+              </p>
+            </div>
           )}
           {submission && (
             <div role="status" className="mt-3 rounded-lg border border-emerald-400/30 bg-emerald-400/10 p-3 text-xs text-emerald-100">
               <p className="font-semibold">Deployment {submission.deployment_id} accepted</p>
               <p className="mt-1">Workflow: {submission.dispatch_status}</p>
               {submission.dispatch_status === "failed" && (
-                <p className="mt-1">The manifest is retained; submit the same ID again to retry dispatch.</p>
+                <p className="mt-1" data-testid="retry-guidance">The manifest is retained; retrying uses the same attempt ID.</p>
               )}
               {submission.workflow_url && (
                 <a
@@ -436,6 +523,14 @@ export function DeploymentSpecForm({ apiUrl, onSubmitted }) {
                   View workflow run
                 </a>
               )}
+              <button
+                type="button"
+                onClick={beginNewAttempt}
+                className="mt-3 rounded-lg border border-emerald-300/30 px-3 py-2 font-medium text-emerald-100 hover:bg-emerald-300/10"
+                data-testid="new-deployment"
+              >
+                Start another deployment
+              </button>
             </div>
           )}
         </aside>

@@ -126,7 +126,7 @@ export function useFleet(apiUrl) {
 
 function readStoredDeploymentId() {
   try {
-    return window.localStorage.getItem(ACTIVE_DEPLOYMENT_STORAGE_KEY);
+    return window.sessionStorage.getItem(ACTIVE_DEPLOYMENT_STORAGE_KEY);
   } catch {
     return null;
   }
@@ -135,9 +135,9 @@ function readStoredDeploymentId() {
 function storeDeploymentId(deploymentId) {
   try {
     if (deploymentId) {
-      window.localStorage.setItem(ACTIVE_DEPLOYMENT_STORAGE_KEY, deploymentId);
+      window.sessionStorage.setItem(ACTIVE_DEPLOYMENT_STORAGE_KEY, deploymentId);
     } else {
-      window.localStorage.removeItem(ACTIVE_DEPLOYMENT_STORAGE_KEY);
+      window.sessionStorage.removeItem(ACTIVE_DEPLOYMENT_STORAGE_KEY);
     }
   } catch {
     // Private browsing and disabled storage should not block the demo.
@@ -470,6 +470,11 @@ export function FleetDeployView({ apiUrl }) {
     refresh();
   }, [deployment, refresh]);
 
+  const handleNewAttempt = useCallback(() => {
+    deployment.trackDeployment(null);
+    refresh();
+  }, [deployment, refresh]);
+
   useEffect(() => {
     if (deployment.data?.status === "succeeded" || deployment.data?.status === "failed") {
       refresh();
@@ -536,7 +541,11 @@ export function FleetDeployView({ apiUrl }) {
           data-testid="fleet-deploy-layout"
         >
           <div data-testid="deployment-config-column">
-            <DeploymentSpecForm apiUrl={apiUrl} onSubmitted={handleSubmitted} />
+            <DeploymentSpecForm
+              apiUrl={apiUrl}
+              onNewAttempt={handleNewAttempt}
+              onSubmitted={handleSubmitted}
+            />
           </div>
 
           <div className="min-w-0 space-y-8" data-testid="fleet-state-column">

@@ -24,8 +24,12 @@ React + Vite + Tailwind single-page dashboard for `homeops.now`.
   twelve explicitly simulated targets by TEST, STAGE, and PROD, and displays
   desired versus observed profiles, digests, and status. Its bounded control
   plane lets a visitor configure and submit only the finite `DeploymentSpec` to
-  `VITE_API_URL/deploy/api/deployments/submit`; it never sends a GitHub or
-  protected fleet-management credential to the browser.
+  `VITE_API_URL/deploy/api/deployments/submit`. The form generates the
+  deployment attempt ID automatically, keeps it in tab-scoped session storage
+  for reloads and safe retries, and rotates it when a visitor starts a new
+  deployment or edits an already-submitted attempt. Repeating an unchanged
+  attempt is therefore safe at the backend's idempotent boundary. It never
+  sends a GitHub or protected fleet-management credential to the browser.
 
 The production build is created by
 `.github/workflows/frontend-deploy.yml`, synced to the private S3 frontend
