@@ -171,9 +171,10 @@ the API never advances a run because a client timer elapsed.
 
 The trusted workflow's downstream deploy job consumes only the validated
 profile/provenance artifact and the separate `FLEET_DEPLOY_API_KEY` Actions
-secret. It serializes simulator writes, calls the protected queue/apply routes,
-and requires a fresh public readback before reporting success; this workflow
-does not reuse the normal Pi/EC2 deployment credential.
+secret. It serializes simulator writes, dispatches the validated Python or
+Ansible implementation selected by the manifest, calls the protected
+queue/apply routes, and requires a fresh public readback before reporting
+success; this workflow does not reuse the normal Pi/EC2 deployment credential.
 
 The active production topology, ports, public routes, internal scrape target, and release checks are
 documented in [`docs/architecture.md`](../../docs/architecture.md) and

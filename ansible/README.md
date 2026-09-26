@@ -30,6 +30,10 @@ The API key is intentionally read only from `FLEET_DEPLOY_API_KEY`. Protected
 URI tasks use `no_log`, while the final report contains only the deployment ID,
 target IDs, artifact digest, and verified status.
 
+The trusted Fleet workflow invokes this playbook when the validated manifest
+selects `implementation: ansible`; it does not execute an implementation or
+path supplied by the browser or writable manifest branch.
+
 An environment selector is expanded by the shared Python contract and must
 resolve entirely inside its matching Ansible inventory group. Explicit target
 lists are checked against the same logical IDs and stable order. No Ansible

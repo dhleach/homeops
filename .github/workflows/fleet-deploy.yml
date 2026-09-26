@@ -209,7 +209,7 @@ jobs:
             exit 1
           fi
 
-      - name: Deploy artifact and verify fresh API readback
+      - name: Deploy selected implementation and verify fresh API readback
         env:
           FLEET_DEPLOY_API_KEY: ${{ secrets.FLEET_DEPLOY_API_KEY }}
         run: |
@@ -223,8 +223,37 @@ jobs:
           print(json.loads(provenance_path.read_text(encoding="utf-8"))["artifact_sha256"])
           PY
           )"
-          PYTHONPATH=. python -m deploy_demo.deployer \
-            --api-base-url "${FLEET_DEPLOY_API_URL}" \
-            --spec "${RUNNER_TEMP}/fleet-artifact/deployment-spec.json" \
-            --artifact "${RUNNER_TEMP}/fleet-artifact/profile.json" \
-            --artifact-sha256 "${artifact_sha256}"
+          implementation="$(python - "${RUNNER_TEMP}/fleet-artifact/deployment-spec.json" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          implementation = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))["implementation"]
+          if implementation not in {"python", "ansible"}:
+              raise SystemExit(f"unsupported validated implementation: {implementation!r}")
+          print(implementation)
+          PY
+          )"
+          echo "Selected implementation: ${implementation}"
+          case "${implementation}" in
+            python)
+              PYTHONPATH=. python -m deploy_demo.deployer \
+                --api-base-url "${FLEET_DEPLOY_API_URL}" \
+                --spec "${RUNNER_TEMP}/fleet-artifact/deployment-spec.json" \
+                --artifact "${RUNNER_TEMP}/fleet-artifact/profile.json" \
+                --artifact-sha256 "${artifact_sha256}"
+              ;;
+            ansible)
+              python -m pip install --disable-pip-version-check ansible-core
+              PYTHONPATH=. ANSIBLE_CONFIG=ansible/ansible.cfg ansible-playbook \
+                -i ansible/inventory.yml \
+                ansible/deploy.yml \
+                -e "api_base_url=${FLEET_DEPLOY_API_URL}" \
+                -e "spec_path=${RUNNER_TEMP}/fleet-artifact/deployment-spec.json" \
+                -e "artifact_path=${RUNNER_TEMP}/fleet-artifact/profile.json"
+              ;;
+            *)
+              echo "validated implementation is not executable: ${implementation}" >&2
+              exit 1
+              ;;
+          esac

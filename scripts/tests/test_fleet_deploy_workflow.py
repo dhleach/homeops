@@ -75,11 +75,29 @@ def test_deployment_job_writes_only_after_artifact_verification() -> None:
     deploy_job = WORKFLOW.split("  deploy-simulator:", maxsplit=1)[1]
     verification = deploy_job.index("- name: Verify downloaded artifact provenance")
     credential = deploy_job.index("- name: Require simulator write credential")
-    deployer = deploy_job.index("- name: Deploy artifact and verify fresh API readback")
+    deployer = deploy_job.index(
+        "- name: Deploy selected implementation and verify fresh API readback"
+    )
 
     assert verification < credential < deployer
     assert '--artifact "${RUNNER_TEMP}/fleet-artifact/profile.json"' in deploy_job
     assert '--provenance "${RUNNER_TEMP}/fleet-artifact/profile-provenance.json"' in deploy_job
+
+
+def test_deployment_job_executes_the_validated_python_or_ansible_implementation() -> None:
+    """The selected closed implementation must control the real deployer path."""
+    deploy_job = WORKFLOW.split("  deploy-simulator:", maxsplit=1)[1]
+
+    assert (
+        'implementation="$(python - "${RUNNER_TEMP}/fleet-artifact/deployment-spec.json"'
+        in deploy_job
+    )
+    assert 'if implementation not in {"python", "ansible"}' in deploy_job
+    assert 'case "${implementation}" in' in deploy_job
+    assert "PYTHONPATH=. python -m deploy_demo.deployer" in deploy_job
+    assert "python -m pip install --disable-pip-version-check ansible-core" in deploy_job
+    assert "ANSIBLE_CONFIG=ansible/ansible.cfg ansible-playbook" in deploy_job
+    assert "Selected implementation: ${implementation}" in deploy_job
 
 
 def test_workflow_displays_event_sha_separately_from_profile_digest() -> None:

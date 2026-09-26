@@ -255,10 +255,11 @@ deployer against the protected `/deploy/api` simulator API.
 The deploy job receives only the separate `FLEET_DEPLOY_API_KEY` GitHub Actions
 secret, uses a static concurrency group so simulator writes cannot overlap, and
 fails before any write when the credential is absent or artifact verification
-fails. The deployer queues desired state, applies it, and performs a fresh
-readback that must prove all requested TEST targets succeeded; STAGE and PROD
-remain untouched for the TEST environment. The normal Pi/EC2 deployment secret
-and workflow remain outside this path.
+fails. The job dispatches the validated `python` deployer or `ansible` playbook
+selected by the manifest; both queue desired state, apply it, and perform a
+fresh readback that must prove all requested TEST targets succeeded. STAGE and
+PROD remain untouched for the TEST environment. The normal Pi/EC2 deployment
+secret and workflow remain outside this path.
 
 ### PR 11 disposition
 
@@ -316,8 +317,18 @@ inventory mismatch, and observed-state mismatch all fail nonzero.
 - Terraform apply required: **No**
 - Manual console/setup required: **None beyond the existing Fleet Deploy simulator/API credentials**
 - Terraform resources changed: **None**
-- Sequence and owner: Derek reviews and merges PR13; PR14 owns connecting the implementation selector to the CI workflow and source view.
+- Sequence and owner: Derek reviews and merges PR13; REV 02 owns proving the selected Python and Ansible paths against the live TEST fleet before PR14+ UI work.
 - Safety gate: local/synthetic Ansible tests only; no real hosts, Home Assistant, thermostat, Pi, EC2, or normal production deployment mutation is included.
+
+## REV 02 — selected implementation live execution
+
+The trusted simulator job reads the already validated `implementation` field
+from the downloaded DeploymentSpec and dispatches exactly one bounded
+controller path. `python` invokes `deploy_demo.deployer`; `ansible` invokes
+`ansible/deploy.yml` against the same logical simulator inventory. The API key
+remains an Actions-only environment secret, Ansible protected URI tasks remain
+`no_log`, and both paths require the same verified fresh readback. The workflow
+never executes commands or paths supplied by the manifest.
 
 ## Backend and API boundary
 
