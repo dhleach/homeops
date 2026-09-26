@@ -1,0 +1,1 @@
+{"deployment_id":"rev01-ansible-20260926-2021","failure_mode":"rollback","implementation":"ansible","profile":{"color":"blue","shape":"circle"},"schema_version":1,"strategy":"rolling","target_ids":["test-vehicle-01"]}
