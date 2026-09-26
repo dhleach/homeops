@@ -41,7 +41,8 @@ describe("FleetDeployView", () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
-    window.localStorage.removeItem("homeops.activeFleetDeploymentId");
+    window.sessionStorage.removeItem("homeops.activeFleetDeploymentId");
+    window.sessionStorage.removeItem("homeops.fleetDeployAttemptId");
     window.history.replaceState({}, "", "/");
   });
 
@@ -98,7 +99,9 @@ describe("FleetDeployView", () => {
 
     await screen.findAllByTestId("fleet-target-card");
     const preview = screen.getByTestId("deployment-spec-preview");
-    expect(preview).toHaveTextContent('"deployment_id": "demo-preview-001"');
+    const attemptId = screen.getByTestId("deployment-attempt-id").textContent;
+    expect(attemptId).toMatch(/^demo-[a-z0-9-]+$/);
+    expect(preview).toHaveTextContent(`"deployment_id": "${attemptId}"`);
     expect(preview).toHaveTextContent('"environment": "test"');
     expect(preview).toHaveTextContent('"implementation": "python"');
     expect(preview).toHaveTextContent('"strategy": "rolling"');
@@ -129,17 +132,20 @@ describe("FleetDeployView", () => {
 
   it("submits only the canonical constrained payload without a browser credential", async () => {
     const snapshot = fleetSnapshot();
-    const fetchMock = vi.fn()
-      .mockResolvedValueOnce({ ok: true, json: async () => snapshot })
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
-          deployment_id: "demo-preview-001",
-          dispatch_status: "dispatched",
-          workflow_url: "https://github.com/dhleach/homeops/actions/runs/456",
-        }),
-      })
-      .mockResolvedValue({ ok: true, json: async () => snapshot });
+    const fetchMock = vi.fn((url, options) => {
+      if (url.endsWith("/deployments/submit")) {
+        const request = JSON.parse(options.body);
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            deployment_id: request.deployment_id,
+            dispatch_status: "dispatched",
+            workflow_url: "https://github.com/dhleach/homeops/actions/runs/456",
+          }),
+        });
+      }
+      return Promise.resolve({ ok: true, json: async () => snapshot });
+    });
     vi.stubGlobal("fetch", fetchMock);
 
     render(<FleetDeployView apiUrl="https://api.homeops.now" />);
@@ -156,7 +162,7 @@ describe("FleetDeployView", () => {
       "Content-Type": "application/json",
     });
     expect(JSON.parse(options.body)).toEqual(expect.objectContaining({
-      deployment_id: "demo-preview-001",
+      deployment_id: expect.stringMatching(/^demo-[a-z0-9-]+$/),
       environment: "test",
       implementation: "python",
       strategy: "rolling",
@@ -164,7 +170,65 @@ describe("FleetDeployView", () => {
     }));
     expect(options.body).not.toContain("Authorization");
     expect(await screen.findByRole("status")).toHaveTextContent("accepted");
-    expect(window.localStorage.getItem("homeops.activeFleetDeploymentId")).toBe("demo-preview-001");
+    const submittedId = JSON.parse(options.body).deployment_id;
+    expect(submittedId).toMatch(/^demo-[a-z0-9-]+$/);
+    expect(window.sessionStorage.getItem("homeops.activeFleetDeploymentId")).toBe(submittedId);
+    fireEvent.click(screen.getByTestId("new-deployment"));
+    await waitFor(() => {
+      expect(screen.getByTestId("deployment-attempt-id").textContent).not.toBe(submittedId);
+      expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    });
+    expect(window.sessionStorage.getItem("homeops.activeFleetDeploymentId")).toBeNull();
+  });
+
+  it("keeps a generated attempt ID stable across a retry and isolates fresh visitors", async () => {
+    const snapshot = fleetSnapshot();
+    let submissionAttempts = 0;
+    const fetchMock = vi.fn((url, options) => {
+      if (url.endsWith("/deployments/submit")) {
+        submissionAttempts += 1;
+        if (submissionAttempts === 1) {
+          return Promise.resolve({
+            ok: false,
+            status: 504,
+            json: async () => ({ detail: "Gateway timeout" }),
+          });
+        }
+        const request = JSON.parse(options.body);
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ deployment_id: request.deployment_id, dispatch_status: "dispatched" }),
+        });
+      }
+      return Promise.resolve({ ok: true, json: async () => snapshot });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const first = render(<FleetDeployView apiUrl="https://api.homeops.now" />);
+    await screen.findAllByTestId("fleet-target-card");
+    const firstId = screen.getByTestId("deployment-attempt-id").textContent;
+    fireEvent.click(screen.getByTestId("deploy-submit"));
+    expect(await screen.findByTestId("retry-guidance")).toHaveTextContent("retained");
+    expect(screen.getByRole("button", { name: "Retry same attempt" })).not.toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Retry same attempt" }));
+    await screen.findByRole("status");
+
+    const submitCalls = fetchMock.mock.calls.filter(([url]) => url.endsWith("/deployments/submit"));
+    expect(submitCalls).toHaveLength(2);
+    expect(JSON.parse(submitCalls[0][1].body).deployment_id).toBe(firstId);
+    expect(JSON.parse(submitCalls[1][1].body).deployment_id).toBe(firstId);
+    expect(window.sessionStorage.getItem("homeops.activeFleetDeploymentId")).toBe(firstId);
+
+    first.unmount();
+    const reloaded = render(<FleetDeployView apiUrl="https://api.homeops.now" />);
+    await screen.findAllByTestId("fleet-target-card");
+    expect(screen.getByTestId("deployment-attempt-id").textContent).toBe(firstId);
+
+    reloaded.unmount();
+    window.sessionStorage.removeItem("homeops.fleetDeployAttemptId");
+    render(<FleetDeployView apiUrl="https://api.homeops.now" />);
+    await screen.findAllByTestId("fleet-target-card");
+    expect(screen.getByTestId("deployment-attempt-id").textContent).not.toBe(firstId);
   });
 
   it("validates explicit targets and strategy failure combinations", async () => {
@@ -247,7 +311,7 @@ describe("FleetDeployView", () => {
       dispatch_status: "dispatched",
       dispatch_error: null,
     };
-    window.localStorage.setItem("homeops.activeFleetDeploymentId", "demo-reload-001");
+    window.sessionStorage.setItem("homeops.activeFleetDeploymentId", "demo-reload-001");
     const fetchMock = vi.fn((url) => {
       if (url.includes("/deploy/api/deployments/")) {
         return Promise.resolve({ ok: true, json: async () => deployment });
