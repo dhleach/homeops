@@ -93,7 +93,7 @@ describe("FleetDeployView", () => {
     expect(screen.queryByText("What's the temperature right now?")).not.toBeInTheDocument();
   });
 
-  it("renders the constrained DeploymentSpec preview with a connected submit control", async () => {
+  it("describes the live deployment action and target-aware control", async () => {
     render(<FleetDeployView apiUrl="https://api.homeops.now" />);
 
     await screen.findAllByTestId("fleet-target-card");
@@ -103,7 +103,10 @@ describe("FleetDeployView", () => {
     expect(preview).toHaveTextContent('"implementation": "python"');
     expect(preview).toHaveTextContent('"strategy": "rolling"');
     expect(preview).toHaveTextContent('"failure_mode": "rollback"');
-    expect(screen.getByTestId("deploy-submit")).not.toBeDisabled();
+    expect(screen.getByRole("heading", { name: "Configure a deployment" })).toBeInTheDocument();
+    expect(screen.getByText("Deployment specification")).toBeInTheDocument();
+    expect(screen.getByText("Public simulated control plane")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Deploy to 4 test vehicles" })).not.toBeDisabled();
     expect(screen.getByText("Simulated fleet")).toBeInTheDocument();
   });
 
@@ -155,11 +158,13 @@ describe("FleetDeployView", () => {
     expect(screen.getByTestId("deployment-validation-errors")).toHaveTextContent(
       "Select at least one simulated target",
     );
+    expect(screen.getByRole("button", { name: "Select targets to deploy" })).toBeDisabled();
 
     fireEvent.click(screen.getByRole("checkbox", { name: "test-vehicle-01" }));
     expect(screen.queryByText("Select at least one simulated target.")).not.toBeInTheDocument();
     expect(screen.getByTestId("deployment-spec-preview")).toHaveTextContent('"target_ids": [');
     expect(screen.getByTestId("deployment-spec-preview")).toHaveTextContent('"test-vehicle-01"');
+    expect(screen.getByRole("button", { name: "Deploy to 1 selected vehicle" })).not.toBeDisabled();
 
     fireEvent.change(screen.getByLabelText("Strategy"), { target: { value: "all_at_once" } });
     expect(screen.getByTestId("deployment-validation-errors")).toHaveTextContent(

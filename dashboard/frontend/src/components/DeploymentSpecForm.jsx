@@ -45,6 +45,24 @@ function labelize(value) {
   return value.replaceAll("_", " ");
 }
 
+function deploymentTargetCount(form) {
+  if (form.target_selection === "environment") {
+    return TARGETS_BY_ENVIRONMENT[form.environment]?.length ?? 0;
+  }
+  return form.target_ids.length;
+}
+
+function deploymentActionLabel(form, submitting) {
+  if (submitting) return "Submitting…";
+
+  const targetCount = deploymentTargetCount(form);
+  if (!targetCount) return "Select targets to deploy";
+  if (form.target_selection === "environment") {
+    return `Deploy to ${targetCount} ${form.environment} vehicles`;
+  }
+  return `Deploy to ${targetCount} selected ${targetCount === 1 ? "vehicle" : "vehicles"}`;
+}
+
 function sortedTargetIds(targetIds) {
   return [...targetIds].sort((left, right) => TARGET_ORDER.indexOf(left) - TARGET_ORDER.indexOf(right));
 }
@@ -206,11 +224,11 @@ export function DeploymentSpecForm({ apiUrl, onSubmitted }) {
             Constrained control plane
           </p>
           <h2 id="deployment-spec-heading" className="mt-1 text-xl font-semibold text-white">
-            Build a deployment preview
+            Configure a deployment
           </h2>
           <p className="mt-2 max-w-2xl text-sm text-slate-400">
-            Choose only from the fixed simulated fleet and finite profile options. Submission creates one
-            validated manifest and dispatches the trusted workflow; no credential enters the browser.
+            Choose from the fixed simulated fleet and finite profile options. Deploying creates one
+            validated manifest and dispatches the trusted workflow; credentials remain server-side.
           </p>
         </div>
         <span className="w-fit rounded-full border border-emerald-400/30 bg-emerald-400/10 px-3 py-1 text-xs font-medium text-emerald-200">
@@ -354,10 +372,10 @@ export function DeploymentSpecForm({ apiUrl, onSubmitted }) {
         <aside className="flex flex-col rounded-xl border border-border bg-slate-950/50 p-4">
           <div>
             <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">
-              Canonical preview
+              Deployment specification
             </p>
             <p className="mt-1 text-xs text-slate-500">
-              The field names and values below are the DeploymentSpec payload.
+              This is the exact validated payload submitted when you deploy.
             </p>
           </div>
           <pre
@@ -387,7 +405,7 @@ export function DeploymentSpecForm({ apiUrl, onSubmitted }) {
             data-testid="deploy-submit"
             className="mt-5 w-full rounded-lg border border-blue-400/40 bg-blue-400/10 px-4 py-2.5 text-sm font-semibold text-blue-200 transition-colors hover:bg-blue-400/20 disabled:cursor-not-allowed disabled:border-slate-600 disabled:bg-slate-800 disabled:text-slate-500"
           >
-            {submitting ? "Submitting…" : "Submit deployment"}
+            {deploymentActionLabel(form, submitting)}
           </button>
           {submitError && (
             <p role="alert" className="mt-3 rounded-lg border border-red-400/30 bg-red-400/10 p-3 text-xs text-red-200">

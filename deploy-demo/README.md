@@ -1,10 +1,10 @@
 # Fleet Deploy Lab integration map
 
-Status: PR 13 Ansible parity on top of the merged PR 12 run-state and PR 11 trusted deployment paths
+Status: REV 03 live-deploy copy updates on top of merged REV 02 Python/Ansible execution
 Repository: `dhleach/homeops`
 Default branch: `master`
-Latest integration snapshot: `5cd9758`
-GitHub issue: https://github.com/dhleach/homeops/issues/356
+Latest integration snapshot: `54dab51`
+GitHub issue: https://github.com/dhleach/homeops/issues/366
 
 This document records the real HomeOps integration points for the Fleet Deploy
 Lab as the implementation advances. It is deliberately specific about what
@@ -13,11 +13,11 @@ decision.
 
 ## Purpose and boundary
 
-The Fleet Deploy Lab will add a public simulated-fleet deployment demo at
-`homeops.now/deploy`. A visitor will submit a constrained deployment spec; a
-backend will write a validated manifest; a workflow running trusted `master`
-will validate the manifest and build an immutable profile artifact; and a
-Python or Ansible deployer will update twelve logical simulated vehicles.
+The Fleet Deploy Lab provides a public simulated-fleet deployment demo at
+`homeops.now/deploy`. A visitor configures and submits a constrained deployment
+spec; the backend writes a validated manifest; a workflow running trusted
+`master` validates the manifest and builds an immutable profile artifact; and a
+Python or Ansible deployer updates twelve logical simulated vehicles.
 
 The lab is not a real Home Assistant deployment, a second production release
 path, hardware-in-the-loop, ECU control, or an autonomous-vehicle fleet. The
@@ -27,7 +27,7 @@ normal HomeOps Pi, EC2, frontend, and observability deployments remain separate.
 
 | Surface | Current path | Current owner | Current behavior | Fleet Deploy Lab target |
 | --- | --- | --- | --- | --- |
-| Public frontend | `https://homeops.now/deploy` | CloudFront → private S3 → React/Vite SPA | CloudFront serves the SPA shell. The merged PR 05 renders the read-only fleet snapshot and responsive TEST/STAGE/PROD cards; PR 10 connects the finite DeploymentSpec form to the anonymous backend submit route. | The browser sends only the closed contract; server-side GitHub credentials remain in the backend. |
+| Public frontend | `https://homeops.now/deploy` | CloudFront → private S3 → React/Vite SPA | CloudFront serves the SPA shell. The current Fleet Deploy Lab presents a bounded control plane with live desired/observed TEST/STAGE/PROD cards, a constrained DeploymentSpec form, and a target-aware deploy action. | The browser sends only the closed contract; server-side GitHub credentials remain in the backend. |
 | Existing backend liveness | `https://api.homeops.now/health` | Nginx → FastAPI | Returns `{"status":"ok"}`. | Remains the process liveness check. |
 | Fleet demo health | `https://api.homeops.now/deploy/api/health` | Nginx → FastAPI | Implemented by merged PR 04; availability follows the normal backend deployment. | Public simulator readiness and target-count check. |
 | Existing telemetry | `https://api.homeops.now/api/current-temps` | FastAPI → EC2-local Prometheus | Current production telemetry contract. | Must remain unchanged. |
@@ -43,7 +43,8 @@ configuration. Nginx already proxies the default API location and allows
 
 The following checks are the intended public smoke contract. All three are
 valid after the merged PR 04 backend deployment and PR 05 frontend deployment;
-the PR 06 form is client-side preview state only.
+the Fleet Deploy route also exposes the bounded configuration and submission
+control plane described below.
 
 ```bash
 curl -fsS https://homeops.now/deploy >/dev/null
@@ -74,27 +75,25 @@ now performs the explicit route-aware rendering in `App.jsx` and
 `FleetDeployView.jsx`. The module is included in the existing Vite build and
 frontend workflow; it is not published as an unrelated static site.
 
-## PR 06 — constrained controls and read-only DeploymentSpec preview
+## Fleet Deploy form — constrained controls and deployment specification
 
-PR 06 adds `DeploymentSpecForm.jsx` to the public `/deploy` route. The form
-offers only the finite environments, simulated target IDs, profile colors and
-shapes, Python/Ansible implementations, strategies, and failure modes defined
-by the shared `deploy_demo.deployment_spec` contract. It validates the visible
-deployment ID and strategy/failure-mode combinations, then renders the exact
-field names and current values as a read-only JSON preview.
+The public `/deploy` route offers only the finite environments, simulated target
+IDs, profile colors and shapes, Python/Ansible implementations, strategies, and
+failure modes defined by the shared `deploy_demo.deployment_spec` contract. It
+validates the visible deployment ID and strategy/failure-mode combinations,
+shows the exact deployment specification that will be submitted, and labels the
+primary action with the selected environment or target count.
 
-The Deploy button remains disabled. The browser makes no write request and
-accepts no repository path, URL, command, arbitrary code, or credential. A
-later PR owns the trusted manifest/workflow path and may enable submission only
-after that boundary is reviewed.
+Submitting creates a validated manifest and dispatches the trusted workflow.
+The browser accepts no repository path, URL, command, arbitrary code, or
+credential; GitHub and protected simulator credentials remain server-side.
 
-## PR 06 disposition
+## Fleet Deploy form safety boundary
 
 - Terraform apply required: **No**
 - Manual console setup: **None**
 - Terraform resources changed: **None**
-- Sequence and owner: Derek reviews and merges the frontend-only PR; a later trusted workflow PR owns deployment submission.
-- Safety gate: no backend/API write, credential, GitHub Actions dispatch, Home Assistant, thermostat, normal production deployment, or infrastructure behavior changes.
+- Safety gate: writes are limited to the simulated Fleet API through the trusted workflow; Home Assistant, thermostats, Pi, EC2, and normal production deployment state remain outside this route.
 
 ## PR 07 — local Python deployer
 
