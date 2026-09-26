@@ -1,10 +1,10 @@
 # Fleet Deploy Lab integration map
 
-Status: PR 06 preview-only constrained `/deploy` controls on top of the merged PR 05 fleet view and PR 04 API
+Status: PR 07 local Python deployer on top of the merged PR 06 preview-only `/deploy` controls
 Repository: `dhleach/homeops`
 Default branch: `master`
-Latest integration snapshot: `62699de`
-GitHub issue: https://github.com/dhleach/homeops/issues/342
+Latest integration snapshot: `706cc34`
+GitHub issue: https://github.com/dhleach/homeops/issues/344
 
 This document records the real HomeOps integration points for the Fleet Deploy
 Lab as the implementation advances. It is deliberately specific about what
@@ -95,6 +95,47 @@ after that boundary is reviewed.
 - Terraform resources changed: **None**
 - Sequence and owner: Derek reviews and merges the frontend-only PR; a later trusted workflow PR owns deployment submission.
 - Safety gate: no backend/API write, credential, GitHub Actions dispatch, Home Assistant, thermostat, normal production deployment, or infrastructure behavior changes.
+
+## PR 07 — local Python deployer
+
+PR 07 adds the dependency-free `deploy_demo.deployer` client and CLI. It
+reuses the validated `DeploymentSpec`, accepts only an exact canonical
+`profile.json` artifact, and binds every run to that artifact's SHA-256
+identity. The deployer resolves the spec's known target IDs, queues desired
+state through the protected Fleet API, applies it, then performs a separate
+fresh readback.
+
+The readback gate verifies the deployment ID, schema version, stable target
+set, desired and observed color/shape, desired and observed profile digests,
+simulated target kind, succeeded target status, and the API's explicit
+`verification: "verified"` result. A transport-level HTTP 200 without those
+facts is a failed deployment. Lifecycle events are structured, immutable
+values keyed by deployment ID and include the schema version, target set, and
+artifact digest for later workflow/pipeline reporting.
+
+For local or trusted workflow use:
+
+```bash
+FLEET_DEPLOY_API_KEY='not-for-browser' \
+python -m deploy_demo.deployer \
+  --api-base-url https://api.homeops.now/deploy/api \
+  --spec deployment.json \
+  --artifact profile.json \
+  --artifact-sha256 <sha256>
+```
+
+The API key is read from the process environment and never appears in the
+result or event payload. PR 07 changes no browser behavior, credentials,
+Terraform, GitHub Actions dispatch, Home Assistant state, Pi state, or normal
+HomeOps deployment path; PR 08 owns the simulator/deployer integration suite.
+
+## PR 07 disposition
+
+- Terraform apply required: **No**
+- Manual console setup: **None**
+- Terraform resources changed: **None**
+- Sequence and owner: Derek reviews and merges the local deployer implementation; later workflow work owns trusted artifact execution.
+- Safety gate: the client can write only through the dedicated simulated Fleet API and requires independent observed-state verification before success.
 
 ## Backend and API boundary
 
