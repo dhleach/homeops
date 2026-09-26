@@ -16,6 +16,7 @@ interface at `https://api.homeops.now`.
 | `GET /deploy/api/fleet` | Anonymous desired/observed state for all twelve explicitly simulated targets |
 | `GET /deploy/api/fleet/{target_id}` | Anonymous read of one simulated target |
 | `GET /deploy/api/deployments/{deployment_id}` | Anonymous fresh deployment state and verification result |
+| `POST /deploy/api/deployments/submit` | Anonymous constrained submission; commits one manifest and dispatches the trusted workflow through the server-only GitHub adapter |
 | `POST /deploy/api/deployments` | Protected desired-state queue operation |
 | `POST /deploy/api/deployments/{deployment_id}/apply` | Protected simulator apply/observation operation; safe to replay |
 | `GET /metrics` | Internal diagnostic abuse/cost metrics for EC2-local Prometheus; not a public route |
@@ -142,6 +143,22 @@ profiles. Replaying an already successful apply is a read-only idempotent
 response. Public deployment reads expose `verification: "pending"`,
 `"verified"`, or `"failed"` plus the fresh target snapshots for a deployer or
 UI to verify digest, color, shape, and status.
+
+`POST /deploy/api/deployments/submit` accepts only the shared closed
+`DeploymentSpec` JSON. It never accepts a repository, branch, path, URL,
+command, or credential from the browser. The backend creates the durable
+pending row under SQLite's global admission transaction, enforcing the
+per-client-IP cooldown and active-deployment limit, then writes the canonical
+`manifests/<deployment_id>.json` file to the dedicated `fleet-deployments`
+branch and dispatches `.github/workflows/fleet-deploy.yml` from trusted
+`master`. The server expects `FLEET_DEPLOY_GITHUB_TOKEN` and fails closed when
+it is absent; that token never appears in logs or responses.
+
+The response records the manifest commit SHA and any workflow run metadata
+GitHub actually returns. A dispatch failure stores a safe operation code and
+leaves the exact commit available for a retry of the same deployment ID, so a
+recovery request cannot create a second manifest commit. The backend does not
+guess a workflow-run URL when the dispatch endpoint returns `204`.
 
 The active production topology, ports, public routes, internal scrape target, and release checks are
 documented in [`docs/architecture.md`](../../docs/architecture.md) and

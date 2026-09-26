@@ -92,7 +92,7 @@ describe("FleetDeployView", () => {
     expect(screen.queryByText("What's the temperature right now?")).not.toBeInTheDocument();
   });
 
-  it("renders a read-only DeploymentSpec preview and keeps deploy disabled", async () => {
+  it("renders the constrained DeploymentSpec preview with a connected submit control", async () => {
     render(<FleetDeployView apiUrl="https://api.homeops.now" />);
 
     await screen.findAllByTestId("fleet-target-card");
@@ -102,8 +102,47 @@ describe("FleetDeployView", () => {
     expect(preview).toHaveTextContent('"implementation": "python"');
     expect(preview).toHaveTextContent('"strategy": "rolling"');
     expect(preview).toHaveTextContent('"failure_mode": "rollback"');
-    expect(screen.getByTestId("deploy-submit")).toBeDisabled();
-    expect(screen.getByText("Preview only")).toBeInTheDocument();
+    expect(screen.getByTestId("deploy-submit")).not.toBeDisabled();
+    expect(screen.getByText("Simulated fleet")).toBeInTheDocument();
+  });
+
+  it("submits only the canonical constrained payload without a browser credential", async () => {
+    const snapshot = fleetSnapshot();
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({ ok: true, json: async () => snapshot })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          deployment_id: "demo-preview-001",
+          dispatch_status: "dispatched",
+          workflow_url: "https://github.com/dhleach/homeops/actions/runs/456",
+        }),
+      })
+      .mockResolvedValue({ ok: true, json: async () => snapshot });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<FleetDeployView apiUrl="https://api.homeops.now" />);
+
+    await screen.findAllByTestId("fleet-target-card");
+    fireEvent.click(screen.getByTestId("deploy-submit"));
+
+    await waitFor(() => expect(fetchMock.mock.calls.length).toBeGreaterThanOrEqual(2));
+    const [url, options] = fetchMock.mock.calls[1];
+    expect(url).toBe("https://api.homeops.now/deploy/api/deployments/submit");
+    expect(options.method).toBe("POST");
+    expect(options.headers).toEqual({
+      Accept: "application/json",
+      "Content-Type": "application/json",
+    });
+    expect(JSON.parse(options.body)).toEqual(expect.objectContaining({
+      deployment_id: "demo-preview-001",
+      environment: "test",
+      implementation: "python",
+      strategy: "rolling",
+      failure_mode: "rollback",
+    }));
+    expect(options.body).not.toContain("Authorization");
+    expect(await screen.findByRole("status")).toHaveTextContent("accepted");
   });
 
   it("validates explicit targets and strategy failure combinations", async () => {

@@ -39,6 +39,9 @@ services:
       # Dedicated Fleet Deploy Lab management credential; never expose this
       # backend-only value to the browser or reuse a HomeOps/HA credential.
       - FLEET_DEPLOY_API_KEY
+      # Repository-scoped server credential for the PR10 manifest Contents
+      # write and trusted workflow dispatch; never expose to the browser.
+      - FLEET_DEPLOY_GITHUB_TOKEN
     volumes:
       - fleet_deploy_state:/var/lib/homeops/deploy-demo
 
