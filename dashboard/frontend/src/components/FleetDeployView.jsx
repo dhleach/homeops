@@ -490,7 +490,8 @@ export function FleetDeployView({ apiUrl }) {
                 Fleet Deploy Lab
               </h1>
               <p className="mt-2 max-w-2xl text-sm text-slate-400">
-                A read-only view of the twelve simulated vehicles used to demonstrate safe deployment state.
+                Configure and launch bounded deployments against twelve simulated vehicles, then follow the
+                trusted workflow and observed fleet state.
               </p>
             </div>
           </div>
@@ -520,7 +521,7 @@ export function FleetDeployView({ apiUrl }) {
           </div>
           <div className="rounded-xl border border-border bg-card/70 p-4">
             <p className="text-xs uppercase tracking-wider text-slate-500">Control boundary</p>
-            <p className="mt-1 text-xl font-semibold text-white">Public read-only</p>
+            <p className="mt-1 text-xl font-semibold text-white">Public simulated control plane</p>
           </div>
           <div className="rounded-xl border border-border bg-card/70 p-4">
             <p className="text-xs uppercase tracking-wider text-slate-500">Last refresh</p>
