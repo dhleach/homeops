@@ -62,10 +62,31 @@ describe("FleetDeployView", () => {
     expect(screen.getByRole("heading", { name: "test" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "stage" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "prod" })).toBeInTheDocument();
-    expect(screen.getAllByText("Simulated target")).toHaveLength(12);
+    expect(screen.getAllByText("Observed profile")).toHaveLength(12);
     expect(screen.getAllByText("test-vehicle-01").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("blue circle")).toHaveLength(6);
+    expect(screen.getAllByText("blue circle")).toHaveLength(9);
     expect(screen.getAllByText("Desired = observed")).toHaveLength(12);
+  });
+
+  it("keeps the main card content compact and reveals full identifiers on demand", async () => {
+    render(<FleetDeployView apiUrl="https://api.homeops.now" />);
+
+    await screen.findAllByTestId("fleet-target-card");
+    expect(screen.getAllByTestId("fleet-vehicle-glyph")).toHaveLength(12);
+
+    const firstCard = screen.getByTestId("fleet-environment-test").querySelector(
+      '[data-target-id="test-vehicle-01"]',
+    );
+    expect(firstCard).not.toBeNull();
+    expect(within(firstCard).getByRole("heading", { name: "TEST-01" })).toBeInTheDocument();
+    expect(within(firstCard).getByText("Observed profile")).toBeInTheDocument();
+
+    const details = within(firstCard).getByTestId("fleet-target-details");
+    expect(details).not.toHaveAttribute("open");
+    fireEvent.click(within(details).getByText("Full target details"));
+    expect(details).toHaveAttribute("open");
+    expect(within(details).getByText("test-vehicle-01")).toBeInTheDocument();
+    expect(within(details).getAllByText("sha256:test-desired")).toHaveLength(2);
   });
 
   it("reads the public fleet endpoint and keeps desired versus observed drift visible", async () => {
