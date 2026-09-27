@@ -172,8 +172,8 @@ This is a frontend/API behavior change only:
 
 REV 06 closes the gap between the finite request vocabulary and the behavior
 that the two deployers actually execute. The shared contract now publishes a
-capability matrix with three verified paths: Python + all-at-once + abort,
-Python + canary + abort, and Ansible + all-at-once + abort. The anonymous fleet
+capability matrix with four verified paths: Python + all-at-once + abort,
+Python + canary + abort, Python + canary + rollback, and Ansible + all-at-once + abort. The anonymous fleet
 response carries that matrix to the frontend, which exposes canary only for
 Python and hides it for Ansible until equivalent serial behavior is proven. The
 same shared validator rejects unsupported combinations at the backend boundary,
@@ -182,9 +182,9 @@ including when a caller bypasses the browser.
 - Terraform apply required: **No**
 - Manual console/setup: **None**
 - Terraform resources changed: **None**
-- Safety gate: the simulator remains atomic and readback-verified; no UI or
-  API claim is made for rolling or rollback semantics that are not implemented;
-  Python canary is the only target-scoped rollout currently enabled.
+- Safety gate: the simulator remains bounded and readback-verified; no UI or
+  API claim is made for rolling semantics that are not implemented; Python
+  canary is the only target-scoped rollout currently enabled.
 
 ## Fleet Deploy form safety boundary
 
@@ -455,6 +455,22 @@ Actions run.
 - Terraform resources changed: **None**
 - Sequence and owner: Derek reviews and merges PR16; no production deployment or simulator mutation is part of the code change itself.
 - Safety gate: the switch is validated against the fixed simulated target set and cannot reach Home Assistant, the normal HomeOps release path, Pi, or EC2.
+
+## PR 17 — stop and restore a partial rollout
+
+PR 17 enables Python `canary` + `rollback`. The deployer snapshots the
+observed profiles returned before the first apply. If a later target fails
+verification, it stops before applying any further targets, restores the
+targets that actually changed through a protected API endpoint, and performs a
+fresh public readback against those snapshots. The run remains failed even
+when rollback is verified; an unverified rollback stays visible as partial
+desired/observed state instead of becoming a false success.
+
+- Terraform apply required: **No**
+- Manual console/setup required: **None beyond the existing Fleet Deploy simulator/API credentials**
+- Terraform resources changed: **None**
+- Sequence and owner: Derek reviews and merges PR17; no production deployment or simulator mutation is part of the code change itself.
+- Safety gate: rollback accepts only bounded finite profiles for selected simulated targets and cannot reach Home Assistant, the normal HomeOps release path, Pi, or EC2.
 
 ## REV 02 — selected implementation live execution
 

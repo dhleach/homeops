@@ -42,6 +42,9 @@ DeploymentEventType = Literal[
     "deployment_canary_verified",
     "deployment_rollout_started",
     "deployment_rollout_verified",
+    "deployment_rollback_started",
+    "deployment_rollback_verified",
+    "deployment_rollback_failed",
     "deployment_verified",
     "deployment_failed",
 ]
@@ -65,6 +68,10 @@ class FleetApiError(DeployerError):
 
 class DeploymentVerificationError(DeployerError):
     """Raised when readback does not prove the requested deployment succeeded."""
+
+
+class DeploymentRollbackError(DeployerError):
+    """Raised when a requested rollback cannot be independently verified."""
 
 
 def _require_sha256(value: object, path: str = "sha256") -> str:
@@ -225,6 +232,13 @@ class DeploymentApi(Protocol):
     def read_deployment(self, deployment_id: str) -> Mapping[str, Any]:
         """Read fresh observed state for independent verification."""
 
+    def restore_deployment(
+        self,
+        deployment_id: str,
+        profiles: Mapping[str, FleetProfile],
+    ) -> Mapping[str, Any]:
+        """Restore trusted pre-deployment profiles for changed targets."""
+
 
 RequestOpener = Callable[..., Any]
 
@@ -317,10 +331,28 @@ class FleetApiClient:
         deployment_id = _require_deployment_id(deployment_id)
         return self._request_json("GET", f"deployments/{deployment_id}")
 
+    def restore_deployment(
+        self,
+        deployment_id: str,
+        profiles: Mapping[str, FleetProfile],
+    ) -> Mapping[str, Any]:
+        """Restore bounded pre-deployment profiles through the protected API."""
+        deployment_id = _require_deployment_id(deployment_id)
+        if not profiles:
+            raise FleetApiError("rollback must include at least one target")
+        payload = {
+            "targets": [
+                {"target_id": target_id, "profile": profile.to_dict()}
+                for target_id, profile in profiles.items()
+            ]
+        }
+        return self._request_json("POST", f"deployments/{deployment_id}/restore", payload)
+
     # Concise aliases make the client convenient in small workflow adapters.
     queue = queue_deployment
     apply = apply_deployment
     read = read_deployment
+    restore = restore_deployment
 
 
 @dataclass(frozen=True, slots=True)
@@ -583,6 +615,194 @@ class FleetDeployer:
             )
         return status
 
+    @staticmethod
+    def _snapshot_previous_profiles(
+        payload: Mapping[str, Any],
+        spec: DeploymentSpec,
+    ) -> dict[str, FleetProfile]:
+        """Capture observed profiles before the first protected apply."""
+        targets = payload.get("targets")
+        if not isinstance(targets, list):
+            raise DeploymentVerificationError("queue.targets must be a JSON array")
+        expected_target_ids = spec.expanded_target_ids
+        profiles: dict[str, FleetProfile] = {}
+        for index, target_value in enumerate(targets):
+            target = _as_mapping(target_value, f"queue.targets[{index}]")
+            target_id = _as_string(target.get("target_id"), f"queue.targets[{index}].target_id")
+            if target_id not in expected_target_ids:
+                raise DeploymentVerificationError(
+                    f"queue.targets[{index}] contains an unexpected target"
+                )
+            if target_id in profiles:
+                raise DeploymentVerificationError(
+                    f"queue.targets[{index}] contains a duplicate target"
+                )
+            try:
+                profiles[target_id] = FleetProfile.from_mapping(
+                    _as_mapping(target.get("observed"), f"queue.targets[{index}].observed")
+                )
+            except (TypeError, ValueError) as exc:
+                raise DeploymentVerificationError(
+                    f"queue.targets[{index}].observed is invalid: {exc}"
+                ) from exc
+        if tuple(profiles) != expected_target_ids:
+            raise DeploymentVerificationError(
+                "queue.targets did not provide every target in stable order"
+            )
+        return profiles
+
+    @staticmethod
+    def _changed_target_ids(
+        payload: Mapping[str, Any],
+        spec: DeploymentSpec,
+        artifact: DeploymentArtifact,
+    ) -> tuple[str, ...]:
+        """Find targets whose observed state reached the new artifact."""
+        targets = payload.get("targets")
+        if not isinstance(targets, list):
+            return ()
+        changed: list[str] = []
+        for target_value in targets:
+            if not isinstance(target_value, Mapping):
+                continue
+            target_id = target_value.get("target_id")
+            if (
+                isinstance(target_id, str)
+                and target_id in spec.expanded_target_ids
+                and target_value.get("status") == "succeeded"
+                and target_value.get("observed_digest") == artifact.sha256
+            ):
+                changed.append(target_id)
+        return tuple(target_id for target_id in spec.expanded_target_ids if target_id in changed)
+
+    @staticmethod
+    def _validate_rollback_snapshot(
+        payload: Mapping[str, Any],
+        spec: DeploymentSpec,
+        previous_profiles: Mapping[str, FleetProfile],
+        rollback_target_ids: Sequence[str],
+        *,
+        phase: str,
+    ) -> None:
+        """Prove rollback restored only the changed targets and kept failure final."""
+        deployment_id = _as_string(payload.get("deployment_id"), f"{phase}.deployment_id")
+        if deployment_id != spec.deployment_id:
+            raise DeploymentRollbackError(
+                f"{phase}.deployment_id mismatch: expected {spec.deployment_id}, "
+                f"got {deployment_id}"
+            )
+        if payload.get("simulated", True) is not True:
+            raise DeploymentRollbackError(f"{phase} is not marked simulated")
+        if payload.get("target_kind", "simulated") != "simulated":
+            raise DeploymentRollbackError(f"{phase} has an unexpected target kind")
+        if payload.get("status") != "failed":
+            raise DeploymentRollbackError(f"{phase}.status must remain failed")
+        if payload.get("rollback_status") != "succeeded":
+            raise DeploymentRollbackError(f"{phase}.rollback_status did not report succeeded")
+        reported_targets = _as_target_ids(
+            payload.get("rollback_target_ids"), f"{phase}.rollback_target_ids"
+        )
+        expected_rollback_targets = tuple(rollback_target_ids)
+        if reported_targets != expected_rollback_targets:
+            raise DeploymentRollbackError(
+                f"{phase}.rollback_target_ids mismatch: expected "
+                f"{list(expected_rollback_targets)}, got {list(reported_targets)}"
+            )
+        targets = payload.get("targets")
+        if not isinstance(targets, list):
+            raise DeploymentRollbackError(f"{phase}.targets must be a JSON array")
+        by_id = {}
+        for index, target_value in enumerate(targets):
+            target = _as_mapping(target_value, f"{phase}.targets[{index}]")
+            target_id = _as_string(target.get("target_id"), f"{phase}.targets[{index}].target_id")
+            by_id[target_id] = target
+        for target_id in expected_rollback_targets:
+            target = by_id.get(target_id)
+            if target is None:
+                raise DeploymentRollbackError(f"{phase} is missing rollback target {target_id}")
+            expected_profile = previous_profiles[target_id]
+            _assert_profile(target.get("desired"), expected_profile, f"{phase}.{target_id}.desired")
+            _assert_profile(
+                target.get("observed"), expected_profile, f"{phase}.{target_id}.observed"
+            )
+            if target.get("desired_digest") != expected_profile.digest:
+                raise DeploymentRollbackError(f"{phase}.{target_id}.desired_digest mismatch")
+            if target.get("observed_digest") != expected_profile.digest:
+                raise DeploymentRollbackError(f"{phase}.{target_id}.observed_digest mismatch")
+            if target.get("status") != "ready":
+                raise DeploymentRollbackError(f"{phase}.{target_id}.status must be ready")
+            if target.get("active_deployment_id") is not None:
+                raise DeploymentRollbackError(
+                    f"{phase}.{target_id}.active_deployment_id must be empty"
+                )
+
+    def _rollback_changed_targets(
+        self,
+        spec: DeploymentSpec,
+        artifact: DeploymentArtifact,
+        previous_profiles: Mapping[str, FleetProfile],
+        changed_target_ids: Sequence[str],
+        events: list[DeploymentEvent],
+    ) -> None:
+        """Restore changed targets and independently verify the failed outcome."""
+        rollback_target_ids = tuple(
+            target_id
+            for target_id in spec.expanded_target_ids
+            if target_id in changed_target_ids and target_id in previous_profiles
+        )
+        if not rollback_target_ids:
+            return
+        profiles = {target_id: previous_profiles[target_id] for target_id in rollback_target_ids}
+        self._emit(
+            events,
+            spec,
+            artifact,
+            "deployment_rollback_started",
+            "applying",
+            detail="restoring targets changed before verification failed",
+            target_ids=rollback_target_ids,
+        )
+        try:
+            restored = self.client.restore_deployment(spec.deployment_id, profiles)
+            self._validate_rollback_snapshot(
+                restored,
+                spec,
+                previous_profiles,
+                rollback_target_ids,
+                phase="rollback.apply",
+            )
+            fresh = self.client.read_deployment(spec.deployment_id)
+            self._validate_rollback_snapshot(
+                fresh,
+                spec,
+                previous_profiles,
+                rollback_target_ids,
+                phase="rollback.readback",
+            )
+        except Exception as exc:
+            detail = str(exc) if isinstance(exc, DeployerError) else type(exc).__name__
+            self._emit(
+                events,
+                spec,
+                artifact,
+                "deployment_rollback_failed",
+                "failed",
+                detail=detail,
+                target_ids=rollback_target_ids,
+            )
+            raise DeploymentRollbackError(
+                f"deployment failed and rollback could not be verified: {detail}"
+            ) from exc
+        self._emit(
+            events,
+            spec,
+            artifact,
+            "deployment_rollback_verified",
+            "failed",
+            detail="changed targets returned to their pre-deployment profiles",
+            target_ids=rollback_target_ids,
+        )
+
     def _apply_and_read(
         self,
         spec: DeploymentSpec,
@@ -639,6 +859,8 @@ class FleetDeployer:
         validated_artifact = self._normalize_artifact(artifact)
         self._validate_artifact_matches_spec(validated_spec, validated_artifact)
         events: list[DeploymentEvent] = []
+        previous_profiles: dict[str, FleetProfile] = {}
+        changed_target_ids: list[str] = []
 
         try:
             self._emit(
@@ -662,6 +884,7 @@ class FleetDeployer:
                 allowed_statuses=frozenset({"queued", "applying", "succeeded"}),
                 require_observed=False,
             )
+            previous_profiles = self._snapshot_previous_profiles(queued, validated_spec)
             self._emit(
                 events,
                 validated_spec,
@@ -691,6 +914,11 @@ class FleetDeployer:
                     apply_statuses=frozenset({"applying", "succeeded"}),
                     read_statuses=frozenset({"applying", "succeeded"}),
                 )
+                for target_id in self._changed_target_ids(
+                    canary_fresh, validated_spec, validated_artifact
+                ):
+                    if target_id not in changed_target_ids:
+                        changed_target_ids.append(target_id)
                 self._emit(
                     events,
                     validated_spec,
@@ -721,6 +949,11 @@ class FleetDeployer:
                         apply_statuses=frozenset({"applying", "succeeded"}),
                         read_statuses=frozenset({"applying", "succeeded"}),
                     )
+                    for target_id in self._changed_target_ids(
+                        fresh, validated_spec, validated_artifact
+                    ):
+                        if target_id not in changed_target_ids:
+                            changed_target_ids.append(target_id)
                     self._emit(
                         events,
                         validated_spec,
@@ -750,6 +983,11 @@ class FleetDeployer:
                     apply_statuses=frozenset({"applying", "succeeded"}),
                     read_statuses=frozenset({"applying", "succeeded"}),
                 )
+                for target_id in self._changed_target_ids(
+                    fresh, validated_spec, validated_artifact
+                ):
+                    if target_id not in changed_target_ids:
+                        changed_target_ids.append(target_id)
             self._validate_snapshot(
                 fresh,
                 validated_spec,
@@ -774,8 +1012,25 @@ class FleetDeployer:
                 events=tuple(events),
             )
         except Exception as exc:
+            rollback_error: DeploymentRollbackError | None = None
+            if validated_spec.failure_mode == "rollback" and changed_target_ids:
+                try:
+                    self._rollback_changed_targets(
+                        validated_spec,
+                        validated_artifact,
+                        previous_profiles,
+                        changed_target_ids,
+                        events,
+                    )
+                except DeploymentRollbackError as rollback_exc:
+                    rollback_error = rollback_exc
             if not events or events[-1].event_type != "deployment_failed":
-                detail = str(exc) if isinstance(exc, DeployerError) else type(exc).__name__
+                detail_error = rollback_error or exc
+                detail = (
+                    str(detail_error)
+                    if isinstance(detail_error, DeployerError)
+                    else type(detail_error).__name__
+                )
                 self._emit(
                     events,
                     validated_spec,
@@ -784,6 +1039,8 @@ class FleetDeployer:
                     "failed",
                     detail=detail,
                 )
+            if rollback_error is not None:
+                raise rollback_error from exc
             if isinstance(exc, DeployerError):
                 raise
             raise DeployerError(f"deployment failed: {type(exc).__name__}") from exc
@@ -853,6 +1110,7 @@ __all__ = [
     "DeploymentArtifact",
     "DeploymentEvent",
     "DeploymentEventType",
+    "DeploymentRollbackError",
     "DeploymentResult",
     "DeploymentVerificationError",
     "DeployerError",

@@ -34,6 +34,7 @@ function fleetSnapshot() {
     capabilities: [
       { implementation: "python", strategy: "all_at_once", failure_mode: "abort" },
       { implementation: "python", strategy: "canary", failure_mode: "abort" },
+      { implementation: "python", strategy: "canary", failure_mode: "rollback" },
       { implementation: "ansible", strategy: "all_at_once", failure_mode: "abort" },
     ],
     targets,
@@ -526,6 +527,68 @@ describe("FleetDeployView", () => {
       "https://api.homeops.now/deploy/api/deployments/demo-reload-001",
       expect.objectContaining({ cache: "no-store" }),
     );
+  });
+
+  it("shows verified rollback while keeping the deployment visibly failed", async () => {
+    const deployment = {
+      simulated: true,
+      target_kind: "simulated",
+      deployment_id: "demo-rollback-ui-001",
+      target_ids: [
+        "test-vehicle-01",
+        "test-vehicle-02",
+        "test-vehicle-03",
+        "test-vehicle-04",
+      ],
+      desired: { color: "orange", shape: "triangle" },
+      desired_digest: "orange-triangle-digest",
+      status: "failed",
+      error: "deterministic verification failure injected for target test-vehicle-02",
+      error_code: "verification_failed",
+      error_recovery: "Deployment remains failed; rollback verified the changed simulated targets against their pre-deployment profiles.",
+      request_summary: {
+        deployment_id: "demo-rollback-ui-001",
+        environment: "test",
+        failure_mode: "rollback",
+        failure_target_id: "test-vehicle-02",
+        implementation: "python",
+        profile: { color: "orange", shape: "triangle" },
+        schema_version: 1,
+        strategy: "canary",
+      },
+      created_at: "2026-09-27T15:00:00Z",
+      updated_at: "2026-09-27T15:00:20Z",
+      verification: "failed",
+      verified: false,
+      rollback_status: "succeeded",
+      rollback_target_ids: ["test-vehicle-01"],
+      rollback_error: null,
+      targets: fleetSnapshot().targets.slice(0, 4).map((target, index) => ({
+        ...target,
+        desired: index === 0 ? target.observed : { color: "orange", shape: "triangle" },
+        desired_digest: index === 0 ? target.observed_digest : "orange-triangle-digest",
+        observed: index === 0 ? target.observed : target.observed,
+        observed_digest: index === 0 ? target.observed_digest : target.observed_digest,
+        status: index === 0 ? "ready" : index === 1 ? "failed" : "pending",
+        active_deployment_id: index === 0 ? null : "demo-rollback-ui-001",
+      })),
+      dispatch_status: "failed",
+      dispatch_error: null,
+    };
+    window.sessionStorage.setItem("homeops.activeFleetDeploymentId", "demo-rollback-ui-001");
+    vi.stubGlobal("fetch", vi.fn((url) => {
+      if (url.includes("/deploy/api/deployments/")) {
+        return Promise.resolve({ ok: true, json: async () => deployment });
+      }
+      return Promise.resolve({ ok: true, json: async () => fleetSnapshot() });
+    }));
+
+    render(<FleetDeployView apiUrl="https://api.homeops.now" />);
+
+    const rollback = await screen.findByTestId("deployment-rollback-state");
+    expect(rollback).toHaveTextContent("Rollback: Verified");
+    expect(rollback).toHaveTextContent("Deployment remains failed");
+    expect(screen.getByTestId("deployment-run-state")).toHaveTextContent("Failed");
   });
 
   it("keeps a frozen request summary visible and polls until workflow jobs converge", async () => {

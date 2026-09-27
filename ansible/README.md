@@ -37,10 +37,12 @@ path supplied by the browser or writable manifest branch.
 Ansible currently exposes only the verified `all_at_once` + `abort` capability.
 Python canary requests are implemented by the Python deployer; the shared
 capability matrix hides canary from this playbook until Ansible has equivalent
-serial apply and fresh-readback semantics. Either implementation may receive
-the optional validated `failure_target_id` switch; the playbook still performs
-its ordinary fresh readback and exits nonzero when that simulated target does
-not verify.
+serial apply and fresh-readback semantics. Python canary rollback is likewise
+hidden from Ansible because only the Python deployer snapshots and restores
+pre-deployment profiles. Ansible may receive the optional validated
+`failure_target_id` switch only on its supported all-at-once path; the playbook
+still performs its ordinary fresh readback and exits nonzero when that simulated
+target does not verify.
 
 An environment selector is expanded by the shared Python contract and must
 resolve entirely inside its matching Ansible inventory group. Explicit target

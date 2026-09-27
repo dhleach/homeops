@@ -65,6 +65,13 @@ const ERROR_CLASS_LABELS = {
   workflow_unavailable: "Workflow state unavailable",
 };
 
+const ROLLBACK_STATUS_LABELS = {
+  not_started: "Not verified",
+  in_progress: "Restoring",
+  succeeded: "Verified",
+  failed: "Failed",
+};
+
 const TERMINAL_JOB_STATUSES = new Set(["completed"]);
 
 function errorClassLabel(code) {
@@ -605,6 +612,35 @@ function DeploymentRunPanel({ deployment, error, onRefresh }) {
           Attempt ID and request details stay fixed while this run is reconciled.
         </p>
       </div>
+
+      {deployment.request_summary?.failure_mode === "rollback" && (
+        <div
+          className={`mt-5 rounded-lg border p-3 text-sm ${deployment.rollback_status === "succeeded"
+            ? "border-emerald-400/30 bg-emerald-400/10 text-emerald-100"
+            : "border-amber-400/30 bg-amber-400/10 text-amber-100"}`}
+          data-testid="deployment-rollback-state"
+          role="status"
+        >
+          <p className="font-semibold">
+            Rollback: {ROLLBACK_STATUS_LABELS[deployment.rollback_status] ?? "Unknown"}
+          </p>
+          {deployment.rollback_status === "succeeded" ? (
+            <p className="mt-1">
+              Deployment remains failed; {deployment.rollback_target_ids?.length ?? 0} changed
+              target{deployment.rollback_target_ids?.length === 1 ? "" : "s"} returned to the
+              pre-deployment profile.
+            </p>
+          ) : (
+            <p className="mt-1">
+              Rollback is not verified. Inspect desired versus observed state; the simulated
+              fleet may be partially changed.
+            </p>
+          )}
+          {deployment.rollback_error && (
+            <p className="mt-1 text-red-200">Rollback detail: {deployment.rollback_error}</p>
+          )}
+        </div>
+      )}
 
       {implementationSource && (
         <div

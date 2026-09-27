@@ -146,12 +146,17 @@ the simulator leaves it divergent with a target-level error so the ordinary
 fresh-readback path fails safely. Replaying an already successful apply is a
 read-only idempotent response. Public deployment reads expose
 `verification: "pending"`, `"verified"`, or `"failed"` plus the fresh target
-snapshots for a deployer or UI to verify digest, color, shape, and status.
+snapshots for a deployer or UI to verify digest, color, shape, and status. A
+validated Python canary with `failure_mode: "rollback"` may call the protected
+restore endpoint with finite pre-deployment profiles. It restores only targets
+that changed, records `rollback_status: "succeeded"`, and keeps the deployment
+failed; an unavailable or invalid restore remains visible as partial state.
 
 `GET /deploy/api/fleet` includes the same verified implementation/strategy/
 failure-mode capability matrix rendered by the frontend. It currently exposes
-Python all-at-once/abort, Python canary/abort, and Ansible all-at-once/abort;
-Ansible canary remains hidden until its serial path is implemented. `POST /deploy/api/deployments/submit`
+Python all-at-once/abort, Python canary/abort, Python canary/rollback, and
+Ansible all-at-once/abort; Ansible canary remains hidden until its serial path
+is implemented. `POST /deploy/api/deployments/submit`
 accepts only the shared closed `DeploymentSpec`
 JSON and rejects combinations outside that matrix before any manifest or
 workflow side effect. It never accepts a repository, branch, path, URL,
@@ -207,7 +212,8 @@ The local end-to-end proof suite exercises the real `FleetApiClient` and
 store. It covers protected queue/apply/readback behavior, environment target
 expansion, replay idempotence, queue-only web requests, and fail-closed
 verification, including deterministic failure injection and canary stop
-behavior. Run it from the repository root with:
+behavior, verified rollback, and partial rollback failure. Run it from the
+repository root with:
 
 ```bash
 PYTHONPATH=services/consumer:services/observer:services/insights:dashboard/backend:scripts \

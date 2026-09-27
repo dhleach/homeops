@@ -33,11 +33,12 @@ from .deployment_spec import (
 
 STATE_PATH_ENV = "FLEET_DEPLOY_STATE_PATH"
 DEFAULT_STATE_PATH = "/var/lib/homeops/deploy-demo/fleet-state.sqlite3"
-STATE_SCHEMA_VERSION = 3
+STATE_SCHEMA_VERSION = 4
 SIMULATED_VERIFICATION_FAILURE_PREFIX = "deterministic verification failure injected for target "
 
 VehicleStatus = Literal["ready", "pending", "applying", "succeeded", "failed"]
 DeploymentStatus = Literal["queued", "applying", "succeeded", "failed"]
+RollbackStatus = Literal["not_started", "in_progress", "succeeded", "failed"]
 
 VEHICLE_STATUSES = ("ready", "pending", "applying", "succeeded", "failed")
 DEPLOYMENT_STATUSES = ("queued", "applying", "succeeded", "failed")
@@ -49,6 +50,7 @@ DISPATCH_STATUSES = (
     "dispatched",
     "failed",
 )
+ROLLBACK_STATUSES = ("not_started", "in_progress", "succeeded", "failed")
 _BASELINE_PROFILES = (
     ("blue", "circle"),
     ("green", "square"),
@@ -196,6 +198,9 @@ class DeploymentState:
     workflow_url: str | None = None
     dispatch_status: str = "not_started"
     dispatch_error: str | None = None
+    rollback_status: RollbackStatus = "not_started"
+    rollback_target_ids: tuple[str, ...] = ()
+    rollback_error: str | None = None
 
     def to_dict(self) -> dict[str, object]:
         """Return the JSON-safe deployment status representation."""
@@ -216,6 +221,9 @@ class DeploymentState:
             "workflow_url": self.workflow_url,
             "dispatch_status": self.dispatch_status,
             "dispatch_error": self.dispatch_error,
+            "rollback_status": self.rollback_status,
+            "rollback_target_ids": list(self.rollback_target_ids),
+            "rollback_error": self.rollback_error,
         }
 
 
@@ -389,6 +397,9 @@ class FleetStateStore:
                     dispatch_error TEXT,
                     dispatch_claim_token TEXT,
                     dispatch_claimed_at TEXT,
+                    rollback_status TEXT NOT NULL DEFAULT 'not_started',
+                    rollback_target_ids_json TEXT,
+                    rollback_error TEXT,
                     UNIQUE(deployment_id, profile_digest)
                 )
                 """
@@ -407,6 +418,9 @@ class FleetStateStore:
                 ("dispatch_error", "TEXT"),
                 ("dispatch_claim_token", "TEXT"),
                 ("dispatch_claimed_at", "TEXT"),
+                ("rollback_status", "TEXT NOT NULL DEFAULT 'not_started'"),
+                ("rollback_target_ids_json", "TEXT"),
+                ("rollback_error", "TEXT"),
             )
             for column, definition in migration_columns:
                 if column not in deployment_columns:
@@ -505,6 +519,20 @@ class FleetStateStore:
         dispatch_status = row["dispatch_status"] or "not_started"
         if dispatch_status not in DISPATCH_STATUSES:
             raise FleetStateError(f"unsupported persisted dispatch status: {dispatch_status}")
+        rollback_status = row["rollback_status"] or "not_started"
+        if rollback_status not in ROLLBACK_STATUSES:
+            raise FleetStateError(f"unsupported persisted rollback status: {rollback_status}")
+        rollback_target_ids: tuple[str, ...] = ()
+        if row["rollback_target_ids_json"]:
+            try:
+                parsed_rollback_targets = json.loads(row["rollback_target_ids_json"])
+            except (TypeError, json.JSONDecodeError) as exc:
+                raise FleetStateError("invalid persisted rollback target IDs") from exc
+            if not isinstance(parsed_rollback_targets, list) or not all(
+                isinstance(target_id, str) for target_id in parsed_rollback_targets
+            ):
+                raise FleetStateError("persisted rollback target IDs must be a string array")
+            rollback_target_ids = tuple(parsed_rollback_targets)
         target_ids = tuple(json.loads(row["target_ids_json"]))
         request_summary = None
         if row["request_summary_json"]:
@@ -532,6 +560,9 @@ class FleetStateStore:
             workflow_url=row["workflow_url"],
             dispatch_status=dispatch_status,
             dispatch_error=row["dispatch_error"],
+            rollback_status=rollback_status,
+            rollback_target_ids=rollback_target_ids,
+            rollback_error=row["rollback_error"],
         )
 
     def list_vehicles(self) -> tuple[VehicleState, ...]:
@@ -875,6 +906,151 @@ class FleetStateStore:
                 WHERE deployment_id = ?
                 """,
                 (next_status, timestamp, deployment_id),
+            )
+            updated = connection.execute(
+                "SELECT * FROM fleet_deployments WHERE deployment_id = ?",
+                (deployment_id,),
+            ).fetchone()
+            assert updated is not None
+            return self._deployment_from_row(updated)
+
+    def restore_deployment_targets(
+        self,
+        deployment_id: str,
+        profiles: Mapping[str, FleetProfile],
+    ) -> DeploymentState:
+        """Restore changed targets to their pre-deployment profiles atomically.
+
+        Rollback is a protected simulator operation.  It restores both desired
+        and observed state for only the targets supplied by the trusted
+        deployer, releases those target reservations, and permanently marks
+        the deployment failed.  A successful rollback is therefore never a
+        deployment success or a way to replay a new desired profile.
+        """
+        if not profiles:
+            raise UnknownTargetError("rollback must include at least one target")
+        target_ids = _validate_target_ids(profiles)
+        timestamp = _now_iso(self._clock)
+        with self._transaction() as connection:
+            row = connection.execute(
+                "SELECT * FROM fleet_deployments WHERE deployment_id = ?",
+                (deployment_id,),
+            ).fetchone()
+            if row is None:
+                raise UnknownDeploymentError(f"unknown deployment: {deployment_id}")
+            existing = self._deployment_from_row(row)
+            if not set(target_ids).issubset(existing.target_ids):
+                raise DeploymentConflictError(
+                    "rollback targets must stay within the deployment target set"
+                )
+            if existing.rollback_status == "succeeded":
+                if existing.rollback_target_ids == target_ids:
+                    return existing
+                raise InvalidStateTransitionError(
+                    f"deployment {deployment_id} already has a different verified rollback"
+                )
+            if existing.status == "succeeded":
+                raise InvalidStateTransitionError(
+                    f"deployment {deployment_id} is already succeeded"
+                )
+            if existing.status not in {"applying", "failed"}:
+                raise InvalidStateTransitionError(
+                    f"deployment {deployment_id} is not in a rollback state"
+                )
+
+            placeholders = ", ".join("?" for _ in target_ids)
+            rows = connection.execute(
+                f"SELECT * FROM fleet_vehicles WHERE target_id IN ({placeholders})",
+                target_ids,
+            ).fetchall()
+            by_id = {vehicle["target_id"]: vehicle for vehicle in rows}
+            if len(by_id) != len(target_ids):
+                raise FleetStateError("rollback could not resolve every target")
+            for target_id in target_ids:
+                vehicle = by_id[target_id]
+                profile = profiles[target_id]
+                if vehicle["active_deployment_id"] is None:
+                    if (
+                        vehicle["desired_digest"] != profile.digest
+                        or vehicle["observed_digest"] != profile.digest
+                    ):
+                        raise DeploymentConflictError(f"target {target_id} is not already restored")
+                elif (
+                    vehicle["active_deployment_id"] != deployment_id
+                    or vehicle["status"] != "succeeded"
+                ):
+                    raise DeploymentConflictError(
+                        f"target {target_id} was not successfully changed by this deployment"
+                    )
+
+            for target_id in target_ids:
+                profile = profiles[target_id]
+                connection.execute(
+                    """
+                    UPDATE fleet_vehicles
+                    SET desired_color = ?, desired_shape = ?, desired_digest = ?,
+                        observed_color = ?, observed_shape = ?, observed_digest = ?,
+                        status = 'ready', active_deployment_id = NULL,
+                        last_error = NULL, updated_at = ?
+                    WHERE target_id = ?
+                    """,
+                    (
+                        profile.color,
+                        profile.shape,
+                        profile.digest,
+                        profile.color,
+                        profile.shape,
+                        profile.digest,
+                        timestamp,
+                        target_id,
+                    ),
+                )
+
+            connection.execute(
+                """
+                UPDATE fleet_deployments
+                SET status = 'failed',
+                    error = COALESCE(error, 'deployment failed; rollback verified'),
+                    rollback_status = 'succeeded',
+                    rollback_target_ids_json = ?, rollback_error = NULL,
+                    updated_at = ?
+                WHERE deployment_id = ?
+                """,
+                (json.dumps(target_ids, separators=(",", ":")), timestamp, deployment_id),
+            )
+            updated = connection.execute(
+                "SELECT * FROM fleet_deployments WHERE deployment_id = ?",
+                (deployment_id,),
+            ).fetchone()
+            assert updated is not None
+            return self._deployment_from_row(updated)
+
+    def record_rollback_failure(self, deployment_id: str, *, error: str) -> DeploymentState:
+        """Persist a failed rollback attempt without claiming fleet recovery."""
+        error = _validate_error(error)
+        if error is None:
+            raise ValueError("rollback error is required")
+        timestamp = _now_iso(self._clock)
+        with self._transaction() as connection:
+            row = connection.execute(
+                "SELECT * FROM fleet_deployments WHERE deployment_id = ?",
+                (deployment_id,),
+            ).fetchone()
+            if row is None:
+                raise UnknownDeploymentError(f"unknown deployment: {deployment_id}")
+            existing = self._deployment_from_row(row)
+            if existing.status == "succeeded" or existing.rollback_status == "succeeded":
+                raise InvalidStateTransitionError(
+                    f"deployment {deployment_id} already has a successful terminal state"
+                )
+            connection.execute(
+                """
+                UPDATE fleet_deployments
+                SET status = 'failed', rollback_status = 'failed', rollback_error = ?,
+                    updated_at = ?
+                WHERE deployment_id = ?
+                """,
+                (error, timestamp, deployment_id),
             )
             updated = connection.execute(
                 "SELECT * FROM fleet_deployments WHERE deployment_id = ?",
@@ -1361,6 +1537,7 @@ __all__ = [
     "DISPATCH_STATUSES",
     "STATE_PATH_ENV",
     "STATE_SCHEMA_VERSION",
+    "ROLLBACK_STATUSES",
     "VEHICLE_STATUSES",
     "DeploymentConflictError",
     "DeploymentCooldownError",

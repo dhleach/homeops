@@ -68,6 +68,7 @@ def test_public_fleet_reads_identify_every_target_as_simulated(fleet_store) -> N
     assert body["capabilities"] == [
         {"implementation": "python", "strategy": "all_at_once", "failure_mode": "abort"},
         {"implementation": "python", "strategy": "canary", "failure_mode": "abort"},
+        {"implementation": "python", "strategy": "canary", "failure_mode": "rollback"},
         {"implementation": "ansible", "strategy": "all_at_once", "failure_mode": "abort"},
     ]
     assert body["targets"][0]["label"] == "TEST-01"
@@ -240,6 +241,98 @@ def test_deterministic_failure_is_simulated_and_exposes_target_error(fleet_store
         "color": "blue",
         "shape": "circle",
     }
+
+
+def test_protected_rollback_restores_changed_targets_but_keeps_run_failed(fleet_store) -> None:
+    payload = valid_payload(
+        deployment_id="demo-api-canary-rollback",
+        target_ids=[
+            "test-vehicle-01",
+            "test-vehicle-02",
+            "test-vehicle-03",
+            "test-vehicle-04",
+        ],
+        strategy="canary",
+        failure_mode="rollback",
+        failure_target_id="test-vehicle-02",
+        profile={"color": "orange", "shape": "triangle"},
+    )
+
+    queued = client.post(
+        "/deploy/api/deployments",
+        headers=FLEET_HEADERS,
+        json=payload,
+    )
+    assert queued.status_code == 200
+
+    canary = client.post(
+        "/deploy/api/deployments/demo-api-canary-rollback/apply",
+        headers=FLEET_HEADERS,
+        json={"target_ids": ["test-vehicle-01"]},
+    )
+    assert canary.status_code == 200
+    assert canary.json()["targets"][0]["status"] == "succeeded"
+
+    failure = client.post(
+        "/deploy/api/deployments/demo-api-canary-rollback/apply",
+        headers=FLEET_HEADERS,
+        json={"target_ids": ["test-vehicle-02", "test-vehicle-03", "test-vehicle-04"]},
+    )
+    assert failure.status_code == 200
+    assert failure.json()["targets"][1]["status"] == "failed"
+
+    failed_restore = client.post(
+        "/deploy/api/deployments/demo-api-canary-rollback/restore",
+        headers=FLEET_HEADERS,
+        json={
+            "targets": [
+                {
+                    "target_id": "test-vehicle-01",
+                    "profile": {"color": "blue", "shape": "circle"},
+                },
+                {
+                    "target_id": "test-vehicle-01",
+                    "profile": {"color": "blue", "shape": "circle"},
+                },
+            ]
+        },
+    )
+    assert failed_restore.status_code == 409
+    failed_state = client.get("/deploy/api/deployments/demo-api-canary-rollback")
+    assert failed_state.json()["status"] == "failed"
+    assert failed_state.json()["rollback_status"] == "failed"
+    assert "duplicate target" in failed_state.json()["rollback_error"]
+
+    restored = client.post(
+        "/deploy/api/deployments/demo-api-canary-rollback/restore",
+        headers=FLEET_HEADERS,
+        json={
+            "targets": [
+                {
+                    "target_id": "test-vehicle-01",
+                    "profile": {"color": "blue", "shape": "circle"},
+                }
+            ]
+        },
+    )
+
+    assert restored.status_code == 200
+    body = restored.json()
+    assert body["status"] == "failed"
+    assert body["verification"] == "failed"
+    assert body["verified"] is False
+    assert body["rollback_status"] == "succeeded"
+    assert body["rollback_target_ids"] == ["test-vehicle-01"]
+    assert body["targets"][0]["status"] == "ready"
+    assert body["targets"][0]["desired"] == {"color": "blue", "shape": "circle"}
+    assert body["targets"][0]["observed"] == {"color": "blue", "shape": "circle"}
+    assert body["targets"][0]["active_deployment_id"] is None
+    assert body["targets"][1]["status"] == "failed"
+    assert body["targets"][2]["status"] == "pending"
+
+    readback = client.get("/deploy/api/deployments/demo-api-canary-rollback")
+    assert readback.status_code == 200
+    assert readback.json()["rollback_status"] == "succeeded"
 
 
 def test_invalid_target_id_fails_before_state_mutation(fleet_store) -> None:

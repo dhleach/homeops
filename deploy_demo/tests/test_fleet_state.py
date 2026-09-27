@@ -174,6 +174,74 @@ def test_canary_failure_leaves_later_targets_pending(tmp_path, fixed_clock) -> N
     ]
 
 
+def test_rollback_restores_changed_targets_and_keeps_partial_failure_state(
+    tmp_path, fixed_clock
+) -> None:
+    store = FleetStateStore(tmp_path / "fleet.sqlite3", clock=fixed_clock)
+    baseline = store.get_vehicle("test-vehicle-01").observed_profile
+    spec = valid_spec(
+        deployment_id="demo-canary-rollback",
+        strategy="canary",
+        failure_mode="rollback",
+        profile={"color": "orange", "shape": "triangle"},
+        failure_target_id="test-vehicle-02",
+    )
+
+    store.queue_deployment(spec)
+    store.apply_deployment_targets(spec.deployment_id, ["test-vehicle-01"])
+    store.apply_deployment_targets(
+        spec.deployment_id,
+        ["test-vehicle-02", "test-vehicle-03", "test-vehicle-04"],
+    )
+
+    rolled_back = store.restore_deployment_targets(
+        spec.deployment_id,
+        {"test-vehicle-01": baseline},
+    )
+
+    assert rolled_back.status == "failed"
+    assert rolled_back.rollback_status == "succeeded"
+    assert rolled_back.rollback_target_ids == ("test-vehicle-01",)
+    restored = store.get_vehicle("test-vehicle-01")
+    assert restored.status == "ready"
+    assert restored.active_deployment_id is None
+    assert restored.desired_profile == baseline
+    assert restored.observed_profile == baseline
+    assert store.get_vehicle("test-vehicle-02").status == "failed"
+    assert store.get_vehicle("test-vehicle-03").status == "pending"
+
+
+def test_rollback_failure_records_partial_state_without_false_success(
+    tmp_path, fixed_clock
+) -> None:
+    store = FleetStateStore(tmp_path / "fleet.sqlite3", clock=fixed_clock)
+    spec = valid_spec(
+        deployment_id="demo-canary-rollback-failure",
+        strategy="canary",
+        failure_mode="rollback",
+        profile={"color": "orange", "shape": "triangle"},
+        failure_target_id="test-vehicle-02",
+    )
+
+    store.queue_deployment(spec)
+    store.apply_deployment_targets(spec.deployment_id, ["test-vehicle-01"])
+    store.apply_deployment_targets(
+        spec.deployment_id,
+        ["test-vehicle-02", "test-vehicle-03", "test-vehicle-04"],
+    )
+    failed = store.record_rollback_failure(
+        spec.deployment_id,
+        error="restore endpoint unavailable",
+    )
+
+    assert failed.status == "failed"
+    assert failed.rollback_status == "failed"
+    assert failed.rollback_error == "restore endpoint unavailable"
+    assert store.get_vehicle("test-vehicle-01").status == "succeeded"
+    assert store.get_vehicle("test-vehicle-02").status == "failed"
+    assert store.get_vehicle("test-vehicle-03").status == "pending"
+
+
 def test_reopening_store_preserves_queued_state_without_auto_success(tmp_path, fixed_clock) -> None:
     path = tmp_path / "fleet.sqlite3"
     first = FleetStateStore(path, clock=fixed_clock)
