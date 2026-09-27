@@ -637,6 +637,23 @@ def _refresh_workflow_state(
         return deployment, None, "Workflow state temporarily unavailable"
 
 
+def _reconcile_active_deployments(
+    store: FleetStateStore,
+    github: GitHubFleetClient,
+) -> None:
+    """Reconcile tracked workflows before a new request checks capacity.
+
+    The browser may stop polling an older attempt when the user edits a new
+    request or reloads.  Admission therefore performs a bounded server-side
+    reconciliation of every queued/applying dispatched deployment before
+    counting active capacity.  Provider failures remain fail-closed: the
+    deployment stays active until a later read or retry proves its terminal
+    workflow state.
+    """
+    for deployment in store.list_active_deployments():
+        _refresh_workflow_state(store, deployment, github)
+
+
 def _positive_fleet_int(name: str, default: int, *, allow_zero: bool = False) -> int:
     """Read bounded admission settings without allowing unsafe negatives."""
     try:
@@ -825,6 +842,7 @@ def submit_public_deployment(
     )
 
     try:
+        _reconcile_active_deployments(store, github)
         admission = store.admit_public_deployment(
             spec,
             client_ip=client_ip,

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 
 import pytest
@@ -152,6 +153,94 @@ def test_deterministic_verification_failure_preserves_partial_target_state(
     assert store.get_vehicle("test-vehicle-03").status == "pending"
 
 
+def test_terminal_canary_failure_releases_reservations_across_restart_and_retry(
+    tmp_path, fixed_clock
+) -> None:
+    path = tmp_path / "fleet.sqlite3"
+    store = FleetStateStore(path, clock=fixed_clock)
+    spec = valid_spec(
+        deployment_id="demo-terminal-canary-failure",
+        strategy="canary",
+        profile={"color": "orange", "shape": "triangle"},
+        failure_target_id="test-vehicle-02",
+    )
+
+    store.queue_deployment(spec)
+    store.apply_deployment_targets(spec.deployment_id, ["test-vehicle-01"])
+    store.apply_deployment_targets(
+        spec.deployment_id,
+        ["test-vehicle-02", "test-vehicle-03", "test-vehicle-04"],
+    )
+    failed = store.mark_deployment_status(
+        spec.deployment_id,
+        "failed",
+        error="GitHub Actions failed: deploy simulator",
+    )
+
+    assert failed.status == "failed"
+    assert [
+        store.get_vehicle(target_id).active_deployment_id for target_id in spec.expanded_target_ids
+    ] == [None, None, None, None]
+    assert [store.get_vehicle(target_id).status for target_id in spec.expanded_target_ids] == [
+        "succeeded",
+        "failed",
+        "pending",
+        "pending",
+    ]
+
+    # Repeated terminal reconciliation must be harmless and preserve the
+    # target-level failure/pending evidence.
+    repeated = store.mark_deployment_status(
+        spec.deployment_id,
+        "failed",
+        error="GitHub Actions failed: deploy simulator",
+    )
+    assert repeated.status == "failed"
+    assert all(
+        store.get_vehicle(target_id).active_deployment_id is None
+        for target_id in spec.expanded_target_ids
+    )
+
+    reopened = FleetStateStore(path, clock=fixed_clock)
+    retry = reopened.queue_deployment(
+        valid_spec(
+            deployment_id="demo-terminal-canary-retry",
+            target_ids=list(spec.expanded_target_ids),
+            profile={"color": "purple", "shape": "hexagon"},
+        )
+    )
+    assert retry.deployment.status == "queued"
+    assert all(
+        reopened.get_vehicle(target_id).active_deployment_id == retry.deployment.deployment_id
+        for target_id in spec.expanded_target_ids
+    )
+
+
+def test_concurrent_terminal_failure_reconciliation_is_idempotent(tmp_path, fixed_clock) -> None:
+    store = FleetStateStore(tmp_path / "fleet.sqlite3", clock=fixed_clock)
+    spec = valid_spec(
+        deployment_id="demo-concurrent-terminal-failure",
+        target_ids=["test-vehicle-01"],
+    )
+    store.queue_deployment(spec)
+    store.mark_deployment_status(spec.deployment_id, "applying")
+
+    def reconcile() -> str:
+        return store.mark_deployment_status(
+            spec.deployment_id,
+            "failed",
+            error="workflow failed",
+        ).status
+
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        statuses = list(executor.map(lambda _: reconcile(), range(4)))
+
+    assert statuses == ["failed"] * 4
+    vehicle = store.get_vehicle("test-vehicle-01")
+    assert vehicle.status == "failed"
+    assert vehicle.active_deployment_id is None
+
+
 def test_canary_failure_leaves_later_targets_pending(tmp_path, fixed_clock) -> None:
     store = FleetStateStore(tmp_path / "fleet.sqlite3", clock=fixed_clock)
     spec = valid_spec(
@@ -172,6 +261,28 @@ def test_canary_failure_leaves_later_targets_pending(tmp_path, fixed_clock) -> N
         "pending",
         "pending",
     ]
+
+
+def test_successful_canary_completion_releases_reservations(tmp_path, fixed_clock) -> None:
+    store = FleetStateStore(tmp_path / "fleet.sqlite3", clock=fixed_clock)
+    spec = valid_spec(
+        deployment_id="demo-canary-success-reservations",
+        strategy="canary",
+        profile={"color": "green", "shape": "hexagon"},
+    )
+
+    store.queue_deployment(spec)
+    store.apply_deployment_targets(spec.deployment_id, ["test-vehicle-01"])
+    completed = store.apply_deployment_targets(
+        spec.deployment_id,
+        ["test-vehicle-02", "test-vehicle-03", "test-vehicle-04"],
+    )
+
+    assert completed.status == "succeeded"
+    assert all(
+        store.get_vehicle(target_id).active_deployment_id is None
+        for target_id in spec.expanded_target_ids
+    )
 
 
 def test_rollback_restores_changed_targets_and_keeps_partial_failure_state(
@@ -354,6 +465,14 @@ def test_successful_completion_updates_observed_state_atomically(tmp_path, fixed
         assert vehicle.status == "succeeded"
         assert vehicle.desired_profile == vehicle.observed_profile
         assert vehicle.desired_digest == vehicle.observed_digest
+        assert vehicle.active_deployment_id is None
+
+    repeated = store.mark_deployment_status("demo-success", "succeeded")
+    assert repeated.status == "succeeded"
+    assert all(
+        store.get_vehicle(target_id).active_deployment_id is None
+        for target_id in ("stage-vehicle-01", "stage-vehicle-02")
+    )
 
 
 def test_unknown_target_is_rejected_before_state_changes(tmp_path, fixed_clock) -> None:
