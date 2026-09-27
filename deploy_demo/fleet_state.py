@@ -33,7 +33,7 @@ from .deployment_spec import (
 
 STATE_PATH_ENV = "FLEET_DEPLOY_STATE_PATH"
 DEFAULT_STATE_PATH = "/var/lib/homeops/deploy-demo/fleet-state.sqlite3"
-STATE_SCHEMA_VERSION = 2
+STATE_SCHEMA_VERSION = 3
 
 VehicleStatus = Literal["ready", "pending", "applying", "succeeded", "failed"]
 DeploymentStatus = Literal["queued", "applying", "succeeded", "failed"]
@@ -187,6 +187,7 @@ class DeploymentState:
     error: str | None
     created_at: str
     updated_at: str
+    request_summary: dict[str, object] | None = None
     manifest_path: str | None = None
     manifest_sha256: str | None = None
     manifest_commit_sha: str | None = None
@@ -206,6 +207,7 @@ class DeploymentState:
             "error": self.error,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
+            "request_summary": self.request_summary,
             "manifest_path": self.manifest_path,
             "manifest_sha256": self.manifest_sha256,
             "manifest_commit_sha": self.manifest_commit_sha,
@@ -361,6 +363,7 @@ class FleetStateStore:
                     error TEXT,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
+                    request_summary_json TEXT,
                     manifest_path TEXT,
                     manifest_sha256 TEXT,
                     manifest_commit_sha TEXT,
@@ -378,6 +381,7 @@ class FleetStateStore:
                 row[1] for row in connection.execute("PRAGMA table_info(fleet_deployments)")
             }
             migration_columns = (
+                ("request_summary_json", "TEXT"),
                 ("manifest_path", "TEXT"),
                 ("manifest_sha256", "TEXT"),
                 ("manifest_commit_sha", "TEXT"),
@@ -486,6 +490,15 @@ class FleetStateStore:
         if dispatch_status not in DISPATCH_STATUSES:
             raise FleetStateError(f"unsupported persisted dispatch status: {dispatch_status}")
         target_ids = tuple(json.loads(row["target_ids_json"]))
+        request_summary = None
+        if row["request_summary_json"]:
+            try:
+                parsed_summary = json.loads(row["request_summary_json"])
+            except (TypeError, json.JSONDecodeError) as exc:
+                raise FleetStateError("invalid persisted deployment request summary") from exc
+            if not isinstance(parsed_summary, dict):
+                raise FleetStateError("persisted deployment request summary is not an object")
+            request_summary = parsed_summary
         return DeploymentState(
             deployment_id=row["deployment_id"],
             target_ids=target_ids,
@@ -495,6 +508,7 @@ class FleetStateStore:
             error=row["error"],
             created_at=row["created_at"],
             updated_at=row["updated_at"],
+            request_summary=request_summary,
             manifest_path=row["manifest_path"],
             manifest_sha256=row["manifest_sha256"],
             manifest_commit_sha=row["manifest_commit_sha"],
@@ -591,8 +605,8 @@ class FleetStateStore:
             INSERT INTO fleet_deployments(
                 deployment_id, target_ids_json, profile_color, profile_shape,
                 profile_digest, status, error, created_at, updated_at,
-                manifest_path, manifest_sha256, dispatch_status
-            ) VALUES (?, ?, ?, ?, ?, 'queued', NULL, ?, ?, ?, ?, ?)
+                request_summary_json, manifest_path, manifest_sha256, dispatch_status
+            ) VALUES (?, ?, ?, ?, ?, 'queued', NULL, ?, ?, ?, ?, ?, ?)
             """,
             (
                 spec.deployment_id,
@@ -602,6 +616,7 @@ class FleetStateStore:
                 profile.digest,
                 timestamp,
                 timestamp,
+                spec.canonical_json(),
                 manifest_path,
                 manifest_sha256,
                 dispatch_status,
@@ -647,7 +662,14 @@ class FleetStateStore:
             ).fetchone()
             if row is not None:
                 existing = self._deployment_from_row(row)
-                if existing.profile_digest != profile.digest or existing.target_ids != target_ids:
+                if (
+                    existing.profile_digest != profile.digest
+                    or existing.target_ids != target_ids
+                    or (
+                        existing.request_summary is not None
+                        and existing.request_summary != spec.to_dict()
+                    )
+                ):
                     raise DeploymentConflictError(
                         f"deployment ID already exists with a different profile or target set: "
                         f"{spec.deployment_id}"

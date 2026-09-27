@@ -35,11 +35,14 @@ class FakeGitHub:
     def __init__(self) -> None:
         self.commit_calls: list[tuple[str, bytes]] = []
         self.dispatch_calls: list[tuple[str, str]] = []
+        self.fail_commit = False
         self.fail_dispatch = False
         self.workflow_run: WorkflowRunReceipt | None = None
 
     def commit_manifest(self, deployment_id: str, content: bytes) -> ManifestCommitReceipt:
         self.commit_calls.append((deployment_id, content))
+        if self.fail_commit:
+            raise GitHubFleetError("provider response must not reach the client")
         return ManifestCommitReceipt("e" * 40)
 
     def dispatch_workflow(
@@ -99,10 +102,20 @@ def test_public_submission_commits_once_and_dispatches_matching_identity(
     assert body["manifest_commit_sha"] == "e" * 40
     assert body["workflow_run_id"] == 456
     assert body["workflow_url"].endswith("/456")
+    assert body["request_summary"] == {
+        "deployment_id": "public-submit-001",
+        "failure_mode": "abort",
+        "implementation": "python",
+        "profile": {"color": "purple", "shape": "hexagon"},
+        "schema_version": 1,
+        "strategy": "all_at_once",
+        "target_ids": ["test-vehicle-01"],
+    }
     assert len(github.commit_calls) == 1
     assert len(github.dispatch_calls) == 1
     deployment = store.get_deployment("public-submit-001")
     assert deployment.manifest_commit_sha == "e" * 40
+    assert deployment.request_summary == body["request_summary"]
     assert github.dispatch_calls[0] == ("public-submit-001", "e" * 40)
     assert "FLEET_DEPLOY_API_KEY" not in response.text
 
@@ -141,6 +154,55 @@ def test_dispatch_failure_is_recoverable_without_a_second_manifest_commit(
     assert recovered.json()["dispatch_status"] == "dispatched"
     assert len(github.commit_calls) == 1
     assert len(github.dispatch_calls) == 2
+
+
+def test_manifest_commit_failure_is_classified_and_retryable(submission_harness) -> None:
+    client, _store, github = submission_harness
+    github.fail_commit = True
+
+    failed = client.post("/deploy/api/deployments/submit", json=SUBMISSION)
+
+    assert failed.status_code == 202
+    body = failed.json()
+    assert body["dispatch_error"] == "manifest_commit_failed"
+    assert body["error_code"] == "manifest_commit_failed"
+    assert "manifest" in body["error"].lower()
+    assert "same attempt" in body["error_recovery"]
+
+
+def test_cooldown_error_exposes_bounded_recovery_metadata(submission_harness, monkeypatch) -> None:
+    client, _store, _github = submission_harness
+    monkeypatch.setenv(fleet_api.FLEET_SUBMISSION_COOLDOWN_ENV, "60")
+
+    first = client.post("/deploy/api/deployments/submit", json=SUBMISSION)
+    second = client.post(
+        "/deploy/api/deployments/submit",
+        json={**SUBMISSION, "deployment_id": "public-submit-002"},
+    )
+
+    assert first.status_code == 202
+    assert second.status_code == 429
+    assert second.headers["Retry-After"]
+    assert second.json()["detail"]["code"] == "submission_cooldown"
+    assert second.json()["detail"]["retry_after_seconds"] >= 1
+
+
+def test_capacity_error_exposes_busy_fleet_recovery_metadata(
+    submission_harness, monkeypatch
+) -> None:
+    client, _store, _github = submission_harness
+    monkeypatch.setenv(fleet_api.FLEET_MAX_ACTIVE_ENV, "1")
+
+    first = client.post("/deploy/api/deployments/submit", json=SUBMISSION)
+    second = client.post(
+        "/deploy/api/deployments/submit",
+        json={**SUBMISSION, "deployment_id": "public-submit-003"},
+    )
+
+    assert first.status_code == 202
+    assert second.status_code == 429
+    assert second.json()["detail"]["code"] == "capacity_full"
+    assert second.json()["detail"]["retry_after_seconds"] == 30
 
 
 def test_submission_rejects_extra_browser_fields_before_external_calls(submission_harness) -> None:
@@ -238,6 +300,8 @@ def test_failed_workflow_marks_deployment_failed_without_changing_observed_state
     body = response.json()
     assert body["status"] == "failed"
     assert body["workflow_conclusion"] == "failure"
+    assert body["error_code"] == "workflow_failed"
+    assert "workflow run" in body["error_recovery"]
     assert "Deploy immutable artifact to simulator" in body["error"]
     assert "Deploy artifact and verify fresh API readback" in body["error"]
     assert body["targets"][0]["observed"] == baseline

@@ -1,10 +1,10 @@
 # Fleet Deploy Lab integration map
 
-Status: REV 06 capability-matrix work merged; REV 07 target-selection work in progress
+Status: REV 08 actionable submission/failure status work in progress; REV 07 target-selection work merged
 Repository: `dhleach/homeops`
 Default branch: `master`
-Latest merged integration snapshot: `15f8858`
-Active GitHub issue: https://github.com/dhleach/homeops/issues/374
+Latest merged integration snapshot: `a135e24`
+Active GitHub issue: https://github.com/dhleach/homeops/issues/376
 
 This document records the real HomeOps integration points for the Fleet Deploy
 Lab as the implementation advances. It is deliberately specific about what
@@ -101,6 +101,28 @@ in the DeploymentSpec details. The Fleet Deploy cards highlight the targets in
 the current resolved set. Switching modes clears inactive individual selection,
 so the summary, highlighted cards, and submitted payload cannot disagree about
 which vehicles will deploy.
+
+## REV 08 — actionable submission and failure status
+
+The public route now persists the validated request summary with each
+deployment record and displays that frozen request alongside the run state. The
+submission boundary classifies busy-fleet, cooldown, validation, service,
+manifest-commit, and workflow-dispatch failures with concrete recovery guidance
+that never exposes provider credentials. Editing a failed or completed form
+creates a new attempt while preserving the prior result in an explicit
+Previous attempt area.
+
+Run reconciliation remains server-backed and idempotent. The browser keeps
+polling after simulator state becomes terminal until the workflow conclusion
+and its job rows are both current, so a stale Running row cannot survive behind
+a terminal Succeeded label. The same active run identity and waiting state are
+recoverable after reload.
+
+- Terraform apply required: **No**
+- Manual console/setup: **None**
+- Terraform resources changed: **None**
+- Safety gate: no browser credential, provider response, Home Assistant state,
+  thermostat, Pi/EC2 deployment, or normal release path is exposed or changed.
 
 ## REV 05 — generated request identifiers and safe retries
 
@@ -331,7 +353,9 @@ server to resolve the run created by GitHub's otherwise metadata-free `204`
 dispatch response without guessing based on recency. The server reads the run
 and bounded job state, exposes the manifest commit URL, run URL, timestamps,
 job conclusions, and actionable failure details, and reconciles only proven
-state transitions.
+state transitions. REV 08 extends this boundary with a persisted frozen
+request summary and keeps polling until terminal deployment state and current
+workflow/job metadata converge in the same read cycle.
 
 An in-progress Actions run maps to `applying`; a completed failure marks the
 deployment failed while leaving observed profiles unchanged; a completed
@@ -339,7 +363,7 @@ success is accepted only when the simulator readback already proves every
 requested target converged. The frontend polls these APIs for state rather
 than advancing a client-side timer, refreshes the fleet cards after terminal
 state, and keeps the active deployment ID in browser storage so a reload can
-recover the same run.
+recover the same run without leaving stale workflow-job rows behind.
 
 ### PR 12 disposition
 

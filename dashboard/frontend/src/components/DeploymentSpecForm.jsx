@@ -21,6 +21,21 @@ const TARGET_ORDER = ENVIRONMENTS.flatMap((environment) => TARGETS_BY_ENVIRONMEN
 const KNOWN_TARGET_IDS = new Set(TARGET_ORDER);
 const DEPLOYMENT_ID_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/;
 const DEPLOYMENT_ATTEMPT_STORAGE_KEY = "homeops.fleetDeployAttemptId";
+const PREVIOUS_ATTEMPT_STORAGE_KEY = "homeops.previousFleetDeployment";
+
+const ERROR_CLASS_LABELS = {
+  capacity_full: "Fleet busy",
+  invalid_deployment_spec: "Request rejected",
+  manifest_commit_failed: "Manifest commit failed",
+  response_mismatch: "Response identity mismatch",
+  service_unavailable: "Service unavailable",
+  submission_cooldown: "Cooldown active",
+  submission_failed: "Submission failed",
+  verification_failed: "Verification failed",
+  workflow_dispatch_failed: "Workflow dispatch failed",
+  workflow_failed: "Workflow failed",
+  workflow_unavailable: "Workflow state unavailable",
+};
 
 function submitUrl(apiUrl) {
   return `${apiUrl.replace(/\/$/, "")}/deploy/api/deployments/submit`;
@@ -83,6 +98,79 @@ function writeStoredAttemptId(deploymentId) {
   } catch {
     // Private browsing and disabled storage should not block the demo.
   }
+}
+
+function readStoredPreviousAttempt() {
+  try {
+    const stored = window.sessionStorage.getItem(PREVIOUS_ATTEMPT_STORAGE_KEY);
+    return stored ? JSON.parse(stored) : null;
+  } catch {
+    return null;
+  }
+}
+
+function storePreviousAttempt(attempt) {
+  try {
+    window.sessionStorage.setItem(PREVIOUS_ATTEMPT_STORAGE_KEY, JSON.stringify(attempt));
+  } catch {
+    // Private browsing and disabled storage should not block the demo.
+  }
+}
+
+function errorClassLabel(code) {
+  return ERROR_CLASS_LABELS[code] ?? "Deployment submission error";
+}
+
+function normalizeSubmissionError(response, body) {
+  const detail = body?.detail;
+  const retryAfterHeader = Number.parseInt(response.headers.get("Retry-After") ?? "", 10);
+  if (detail && typeof detail === "object" && !Array.isArray(detail)) {
+    return {
+      code: detail.code ?? "submission_failed",
+      message: detail.message ?? `Fleet API returned HTTP ${response.status}`,
+      recovery: detail.recovery ?? "This attempt ID is retained. Retry to reconcile the same server record.",
+      retry_after_seconds: detail.retry_after_seconds ?? (
+        Number.isFinite(retryAfterHeader) ? retryAfterHeader : null
+      ),
+    };
+  }
+
+  const code = response.status === 429
+    ? "capacity_full"
+    : response.status === 422
+      ? "invalid_deployment_spec"
+      : response.status >= 500
+        ? "service_unavailable"
+        : "submission_failed";
+  return {
+    code,
+    message: typeof detail === "string" ? detail : `Fleet API returned HTTP ${response.status}`,
+    recovery: "This attempt ID is retained. Retry to reconcile the same server record.",
+    retry_after_seconds: Number.isFinite(retryAfterHeader) ? retryAfterHeader : null,
+  };
+}
+
+function compactAttempt(attempt) {
+  if (!attempt) return null;
+  return {
+    deployment_id: attempt.deployment_id ?? null,
+    request_summary: attempt.request_summary ?? null,
+    status: attempt.status ?? null,
+    dispatch_status: attempt.dispatch_status ?? null,
+    dispatch_error: attempt.dispatch_error ?? null,
+    error: attempt.error ?? attempt.message ?? null,
+    error_code: attempt.error_code ?? attempt.code ?? null,
+    error_recovery: attempt.error_recovery ?? attempt.recovery ?? null,
+    workflow_url: attempt.workflow_url ?? null,
+  };
+}
+
+function requestSummaryLabel(summary) {
+  if (!summary) return "Request details unavailable";
+  const targets = summary.environment
+    ? `${summary.environment.toUpperCase()} environment`
+    : `${summary.target_ids?.length ?? 0} selected vehicles`;
+  return `${targets} · ${summary.implementation ?? "unknown"} / ${summary.strategy ?? "unknown"} / ${summary.failure_mode ?? "unknown"}`;
 }
 
 function createDeploymentId() {
@@ -239,6 +327,7 @@ function OptionSelect({ id, label, value, options, onChange, error, disabled = f
 export function DeploymentSpecForm({
   apiUrl,
   capabilities,
+  activeDeployment,
   onSubmitted,
   onNewAttempt,
   onTargetSelectionChange,
@@ -248,6 +337,7 @@ export function DeploymentSpecForm({
   const [submitting, setSubmitting] = useState(false);
   const [submission, setSubmission] = useState(null);
   const [submitError, setSubmitError] = useState(null);
+  const [previousAttempt, setPreviousAttempt] = useState(readStoredPreviousAttempt);
   const errors = useMemo(
     () => validateForm(form, availableCapabilities),
     [form, availableCapabilities],
@@ -265,7 +355,28 @@ export function DeploymentSpecForm({
     onTargetSelectionChange?.(selectedTargetIds);
   }, [onTargetSelectionChange, selectedTargetIds]);
 
+  function rememberPreviousAttempt(attempt) {
+    const compact = compactAttempt(attempt);
+    if (!compact || (!compact.deployment_id && !compact.error)) return;
+    setPreviousAttempt(compact);
+    storePreviousAttempt(compact);
+  }
+
+  function currentAttemptSnapshot() {
+    if (submission) return submission;
+    if (activeDeployment?.deployment_id === form.deployment_id) return activeDeployment;
+    if (submitError) {
+      return {
+        deployment_id: form.deployment_id,
+        request_summary: preview,
+        ...submitError,
+      };
+    }
+    return null;
+  }
+
   function beginNewAttempt() {
+    rememberPreviousAttempt(currentAttemptSnapshot());
     const deploymentId = createDeploymentId();
     writeStoredAttemptId(deploymentId);
     setForm((current) => ({ ...current, deployment_id: deploymentId }));
@@ -275,7 +386,9 @@ export function DeploymentSpecForm({
   }
 
   function prepareForConfigurationEdit() {
-    if (!submission && !submitError) return null;
+    const previous = currentAttemptSnapshot();
+    if (!previous) return null;
+    rememberPreviousAttempt(previous);
     const deploymentId = createDeploymentId();
     writeStoredAttemptId(deploymentId);
     setSubmission(null);
@@ -352,18 +465,25 @@ export function DeploymentSpecForm({
       });
       const body = await response.json().catch(() => null);
       if (!response.ok) {
-        const detail = typeof body?.detail === "string"
-          ? body.detail
-          : `Fleet API returned HTTP ${response.status}`;
-        throw new Error(detail);
+        throw normalizeSubmissionError(response, body);
       }
       if (body?.deployment_id !== form.deployment_id) {
-        throw new Error("Fleet API returned a different attempt ID");
+        throw {
+          code: "response_mismatch",
+          message: "Fleet API returned a different attempt ID.",
+          recovery: "Do not retry automatically. Start a new attempt after checking the server response.",
+        };
       }
       setSubmission(body);
       onSubmitted?.(body);
     } catch (requestError) {
-      setSubmitError(requestError instanceof Error ? requestError.message : "Unable to submit deployment");
+      setSubmitError(requestError?.code
+        ? requestError
+        : {
+          code: "submission_failed",
+          message: requestError instanceof Error ? requestError.message : "Unable to submit deployment",
+          recovery: "This attempt ID is retained. Retry to reconcile the same server record.",
+        });
     } finally {
       setSubmitting(false);
     }
@@ -604,16 +724,38 @@ export function DeploymentSpecForm({
           </button>
           {submitError && (
             <div role="alert" className="mt-3 rounded-lg border border-red-400/30 bg-red-400/10 p-3 text-xs text-red-200">
-              <p>{submitError}</p>
+              <p className="font-semibold" data-testid="submission-error-class">
+                {errorClassLabel(submitError.code)}
+              </p>
+              <p className="mt-1">{submitError.message}</p>
               <p className="mt-1 text-red-200/80" data-testid="retry-guidance">
-                This attempt ID is retained. Retry to reconcile the same server record.
+                {submitError.recovery}
+                {submitError.retry_after_seconds ? ` Retry after ${submitError.retry_after_seconds} seconds.` : ""}
               </p>
             </div>
           )}
           {submission && (
-            <div role="status" className="mt-3 rounded-lg border border-emerald-400/30 bg-emerald-400/10 p-3 text-xs text-emerald-100">
-              <p className="font-semibold">Deployment {submission.deployment_id} accepted</p>
+            <div
+              role={submission.dispatch_status === "failed" ? "alert" : "status"}
+              className={`mt-3 rounded-lg border p-3 text-xs ${submission.dispatch_status === "failed"
+                ? "border-red-400/30 bg-red-400/10 text-red-100"
+                : "border-emerald-400/30 bg-emerald-400/10 text-emerald-100"}`}
+            >
+              <p className="font-semibold">
+                {submission.dispatch_status === "failed"
+                  ? `Deployment ${submission.deployment_id} needs recovery`
+                  : `Deployment ${submission.deployment_id} accepted`}
+              </p>
               <p className="mt-1">Workflow: {submission.dispatch_status}</p>
+              {submission.error_code && (
+                <p className="mt-1" data-testid="submission-error-class">
+                  {errorClassLabel(submission.error_code)}
+                </p>
+              )}
+              {submission.error && <p className="mt-1">{submission.error}</p>}
+              {submission.error_recovery && (
+                <p className="mt-1" data-testid="retry-guidance">{submission.error_recovery}</p>
+              )}
               {submission.dispatch_status === "failed" && (
                 <p className="mt-1" data-testid="retry-guidance">The manifest is retained; retrying uses the same attempt ID.</p>
               )}
@@ -636,6 +778,50 @@ export function DeploymentSpecForm({
                 Start another deployment
               </button>
             </div>
+          )}
+          {previousAttempt && (
+            <details
+              className="mt-3 rounded-lg border border-slate-600/70 bg-slate-950/30 p-3 text-xs text-slate-300"
+              data-testid="previous-attempt"
+            >
+              <summary className="cursor-pointer font-semibold text-slate-200">Previous attempt</summary>
+              <div className="mt-3 space-y-2">
+                <p>
+                  <span className="text-slate-500">Attempt ID: </span>
+                  <code>{previousAttempt.deployment_id ?? "Unavailable"}</code>
+                </p>
+                <p>
+                  <span className="text-slate-500">Frozen request: </span>
+                  {requestSummaryLabel(previousAttempt.request_summary)}
+                </p>
+                {(previousAttempt.error_code || previousAttempt.error) && (
+                  <p data-testid="previous-attempt-error">
+                    <span className="text-slate-500">Result: </span>
+                    {errorClassLabel(previousAttempt.error_code)}
+                    {previousAttempt.error ? ` — ${previousAttempt.error}` : ""}
+                  </p>
+                )}
+                {previousAttempt.dispatch_status && !previousAttempt.error_code && (
+                  <p>
+                    <span className="text-slate-500">Result: </span>
+                    {previousAttempt.dispatch_status}
+                  </p>
+                )}
+                {previousAttempt.error_recovery && (
+                  <p className="text-slate-400">{previousAttempt.error_recovery}</p>
+                )}
+                {previousAttempt.workflow_url && (
+                  <a
+                    href={previousAttempt.workflow_url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-block text-blue-300 underline"
+                  >
+                    View previous workflow run
+                  </a>
+                )}
+              </div>
+            </details>
           )}
         </aside>
       </form>
