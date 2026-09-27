@@ -178,6 +178,14 @@ class DeploymentSpecRequest(BaseModel):
     failure_mode: str
 
 
+class DeploymentApplyRequest(BaseModel):
+    """Optional protected target subset for a verified canary phase."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    target_ids: list[str] | None = Field(default=None, min_length=1, max_length=12)
+
+
 class FleetWorkflowJobResponse(BaseModel):
     """Public-safe state for one GitHub Actions job."""
 
@@ -882,6 +890,7 @@ def queue_deployment(
 def apply_deployment(
     deployment_id: str,
     store: FleetStoreDependency,
+    payload: DeploymentApplyRequest | None = None,
     _: None = Depends(require_fleet_management_credential),
 ) -> FleetDeploymentResponse:
     """Apply desired state to the simulator and make observed state converge.
@@ -892,6 +901,9 @@ def apply_deployment(
     """
     try:
         deployment = store.get_deployment(deployment_id)
+        if payload is not None and payload.target_ids is not None:
+            deployment = store.apply_deployment_targets(deployment_id, payload.target_ids)
+            return _deployment_response(store, deployment)
         if deployment.status == "succeeded":
             return _deployment_response(store, deployment, idempotent=True)
         if deployment.status == "failed":
@@ -904,6 +916,10 @@ def apply_deployment(
         return _deployment_response(store, deployment)
     except UnknownDeploymentError as exc:
         raise _deployment_not_found(exc) from None
+    except UnknownTargetError as exc:
+        raise _target_not_found(exc) from None
+    except DeploymentConflictError as exc:
+        raise _deployment_conflict(exc) from None
     except InvalidStateTransitionError as exc:
         # Another authorized request may have completed the same deployment
         # between the initial read and transition.  Treat that terminal replay

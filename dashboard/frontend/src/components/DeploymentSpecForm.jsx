@@ -10,6 +10,7 @@ const COLORS = ["blue", "green", "orange", "purple"];
 const SHAPES = ["circle", "hexagon", "square", "triangle"];
 const DEFAULT_CAPABILITIES = [
   { implementation: "python", strategy: "all_at_once", failure_mode: "abort" },
+  { implementation: "python", strategy: "canary", failure_mode: "abort" },
   { implementation: "ansible", strategy: "all_at_once", failure_mode: "abort" },
 ];
 const TARGETS_BY_ENVIRONMENT = Object.fromEntries(
@@ -674,8 +675,9 @@ export function DeploymentSpecForm({
             />
           </div>
           <p className="rounded-lg border border-amber-400/20 bg-amber-400/5 p-3 text-xs leading-5 text-amber-100/80" data-testid="deployment-capability-note">
-            Only verified execution paths are enabled. Rolling, canary, and rollback behavior remain
-            unavailable until their implementation paths are exercised and proven.
+            Only verified execution paths are enabled. Python canary verifies the first target
+            before continuing; Ansible exposes only its verified all-at-once path until equivalent
+            serial behavior is proven.
           </p>
 
           <ImplementationSourcePanel

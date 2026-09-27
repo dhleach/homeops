@@ -34,6 +34,11 @@ The trusted Fleet workflow invokes this playbook when the validated manifest
 selects `implementation: ansible`; it does not execute an implementation or
 path supplied by the browser or writable manifest branch.
 
+Ansible currently exposes only the verified `all_at_once` + `abort` capability.
+Python canary requests are implemented by the Python deployer; the shared
+capability matrix hides canary from this playbook until Ansible has equivalent
+serial apply and fresh-readback semantics.
+
 An environment selector is expanded by the shared Python contract and must
 resolve entirely inside its matching Ansible inventory group. Explicit target
 lists are checked against the same logical IDs and stable order. No Ansible

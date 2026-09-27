@@ -38,6 +38,10 @@ DeploymentEventType = Literal[
     "deployment_started",
     "deployment_queued",
     "deployment_applying",
+    "deployment_canary_started",
+    "deployment_canary_verified",
+    "deployment_rollout_started",
+    "deployment_rollout_verified",
     "deployment_verified",
     "deployment_failed",
 ]
@@ -211,8 +215,12 @@ class DeploymentApi(Protocol):
     def queue_deployment(self, spec: DeploymentSpec) -> Mapping[str, Any]:
         """Persist the desired deployment state."""
 
-    def apply_deployment(self, deployment_id: str) -> Mapping[str, Any]:
-        """Apply the queued state through the protected simulator API."""
+    def apply_deployment(
+        self,
+        deployment_id: str,
+        target_ids: Sequence[str] | None = None,
+    ) -> Mapping[str, Any]:
+        """Apply the queued state, optionally for one canary phase."""
 
     def read_deployment(self, deployment_id: str) -> Mapping[str, Any]:
         """Read fresh observed state for independent verification."""
@@ -294,10 +302,15 @@ class FleetApiClient:
         """Queue a normalized DeploymentSpec using the dedicated bearer key."""
         return self._request_json("POST", "deployments", spec.to_dict())
 
-    def apply_deployment(self, deployment_id: str) -> Mapping[str, Any]:
-        """Apply one validated deployment ID."""
+    def apply_deployment(
+        self,
+        deployment_id: str,
+        target_ids: Sequence[str] | None = None,
+    ) -> Mapping[str, Any]:
+        """Apply one validated deployment ID or a canary target subset."""
         deployment_id = _require_deployment_id(deployment_id)
-        return self._request_json("POST", f"deployments/{deployment_id}/apply")
+        payload = None if target_ids is None else {"target_ids": list(target_ids)}
+        return self._request_json("POST", f"deployments/{deployment_id}/apply", payload)
 
     def read_deployment(self, deployment_id: str) -> Mapping[str, Any]:
         """Read one deployment without credentials so verification uses the public path."""
@@ -445,13 +458,14 @@ class FleetDeployer:
         event_type: DeploymentEventType,
         status: str,
         detail: str | None = None,
+        target_ids: Sequence[str] | None = None,
     ) -> None:
         event = DeploymentEvent(
             deployment_id=spec.deployment_id,
             event_type=event_type,
             schema_version=spec.schema_version,
             artifact_sha256=artifact.sha256,
-            target_ids=spec.expanded_target_ids,
+            target_ids=tuple(target_ids or spec.expanded_target_ids),
             status=status,
             detail=detail,
         )
@@ -468,6 +482,7 @@ class FleetDeployer:
         phase: str,
         allowed_statuses: frozenset[str],
         require_observed: bool,
+        observed_target_ids: Sequence[str] | None = None,
     ) -> str:
         deployment_id = _as_string(payload.get("deployment_id"), f"{phase}.deployment_id")
         if deployment_id != spec.deployment_id:
@@ -507,6 +522,13 @@ class FleetDeployer:
         targets = payload.get("targets")
         if not isinstance(targets, list):
             raise DeploymentVerificationError(f"{phase}.targets must be a JSON array")
+        expected_observed_ids = tuple(observed_target_ids or ())
+        if require_observed:
+            expected_observed_ids = expected_target_ids
+        if any(target_id not in expected_target_ids for target_id in expected_observed_ids):
+            raise DeploymentVerificationError(
+                f"{phase}.observed_target_ids contains an unexpected target"
+            )
         actual_target_ids: list[str] = []
         expected_profile = FleetProfile(spec.profile_color, spec.profile_shape)
         for index, target_value in enumerate(targets):
@@ -528,7 +550,7 @@ class FleetDeployer:
                 raise DeploymentVerificationError(
                     f"{phase}.targets[{index}].desired_digest does not match artifact"
                 )
-            if require_observed:
+            if target_id in expected_observed_ids:
                 _assert_profile(
                     target.get("observed"),
                     expected_profile,
@@ -546,11 +568,58 @@ class FleetDeployer:
                     raise DeploymentVerificationError(
                         f"{phase}.targets[{index}].active_deployment_id mismatch"
                     )
+            elif observed_target_ids is not None:
+                if target.get("status") != "pending":
+                    raise DeploymentVerificationError(
+                        f"{phase}.targets[{index}].status must remain pending before rollout"
+                    )
+                if target.get("active_deployment_id") != spec.deployment_id:
+                    raise DeploymentVerificationError(
+                        f"{phase}.targets[{index}].active_deployment_id mismatch"
+                    )
         if tuple(actual_target_ids) != expected_target_ids:
             raise DeploymentVerificationError(
                 f"{phase}.targets do not contain the expected target order"
             )
         return status
+
+    def _apply_and_read(
+        self,
+        spec: DeploymentSpec,
+        artifact: DeploymentArtifact,
+        *,
+        apply_target_ids: Sequence[str] | None,
+        observed_target_ids: Sequence[str] | None,
+        apply_phase: str,
+        read_phase: str,
+        apply_statuses: frozenset[str],
+        read_statuses: frozenset[str],
+    ) -> Mapping[str, Any]:
+        """Apply one phase and verify its fresh simulator snapshot."""
+        if apply_target_ids is None:
+            applied = self.client.apply_deployment(spec.deployment_id)
+        else:
+            applied = self.client.apply_deployment(spec.deployment_id, apply_target_ids)
+        self._validate_snapshot(
+            applied,
+            spec,
+            artifact,
+            phase=f"{apply_phase}.apply",
+            allowed_statuses=apply_statuses,
+            require_observed=False,
+            observed_target_ids=observed_target_ids,
+        )
+        fresh = self.client.read_deployment(spec.deployment_id)
+        self._validate_snapshot(
+            fresh,
+            spec,
+            artifact,
+            phase=f"{read_phase}.readback",
+            allowed_statuses=read_statuses,
+            require_observed=False,
+            observed_target_ids=observed_target_ids,
+        )
+        return fresh
 
     def deploy(
         self,
@@ -592,23 +661,87 @@ class FleetDeployer:
                 "deployment_queued",
                 queue_status,
             )
-            self._emit(
-                events,
-                validated_spec,
-                validated_artifact,
-                "deployment_applying",
-                "applying",
-            )
-            applied = self.client.apply_deployment(validated_spec.deployment_id)
-            apply_status = self._validate_snapshot(
-                applied,
-                validated_spec,
-                validated_artifact,
-                phase="apply",
-                allowed_statuses=frozenset({"succeeded"}),
-                require_observed=False,
-            )
-            fresh = self.client.read_deployment(validated_spec.deployment_id)
+            if validated_spec.strategy == "canary":
+                target_ids = validated_spec.expanded_target_ids
+                canary_target_ids = target_ids[:1]
+                self._emit(
+                    events,
+                    validated_spec,
+                    validated_artifact,
+                    "deployment_canary_started",
+                    "applying",
+                    detail=f"verifying canary target {canary_target_ids[0]}",
+                    target_ids=canary_target_ids,
+                )
+                canary_fresh = self._apply_and_read(
+                    validated_spec,
+                    validated_artifact,
+                    apply_target_ids=canary_target_ids,
+                    observed_target_ids=canary_target_ids,
+                    apply_phase="canary",
+                    read_phase="canary",
+                    apply_statuses=frozenset({"applying", "succeeded"}),
+                    read_statuses=frozenset({"applying", "succeeded"}),
+                )
+                self._emit(
+                    events,
+                    validated_spec,
+                    validated_artifact,
+                    "deployment_canary_verified",
+                    str(canary_fresh.get("status", "applying")),
+                    detail=f"verified canary target {canary_target_ids[0]}",
+                    target_ids=canary_target_ids,
+                )
+                remaining_target_ids = target_ids[1:]
+                if remaining_target_ids:
+                    self._emit(
+                        events,
+                        validated_spec,
+                        validated_artifact,
+                        "deployment_rollout_started",
+                        "applying",
+                        detail="continuing the remaining targets after canary verification",
+                        target_ids=remaining_target_ids,
+                    )
+                    fresh = self._apply_and_read(
+                        validated_spec,
+                        validated_artifact,
+                        apply_target_ids=remaining_target_ids,
+                        observed_target_ids=target_ids,
+                        apply_phase="rollout",
+                        read_phase="rollout",
+                        apply_statuses=frozenset({"succeeded"}),
+                        read_statuses=frozenset({"succeeded"}),
+                    )
+                    self._emit(
+                        events,
+                        validated_spec,
+                        validated_artifact,
+                        "deployment_rollout_verified",
+                        str(fresh.get("status", "succeeded")),
+                        detail="verified the remaining rollout targets",
+                        target_ids=remaining_target_ids,
+                    )
+                else:
+                    fresh = canary_fresh
+            else:
+                self._emit(
+                    events,
+                    validated_spec,
+                    validated_artifact,
+                    "deployment_applying",
+                    "applying",
+                )
+                fresh = self._apply_and_read(
+                    validated_spec,
+                    validated_artifact,
+                    apply_target_ids=None,
+                    observed_target_ids=None,
+                    apply_phase="apply",
+                    read_phase="readback",
+                    apply_statuses=frozenset({"succeeded"}),
+                    read_statuses=frozenset({"succeeded"}),
+                )
             self._validate_snapshot(
                 fresh,
                 validated_spec,
@@ -624,7 +757,7 @@ class FleetDeployer:
                 validated_spec,
                 validated_artifact,
                 "deployment_verified",
-                apply_status,
+                str(fresh.get("status", "succeeded")),
             )
             return DeploymentResult(
                 spec=validated_spec,

@@ -48,7 +48,9 @@ source/build links and read-only revision-pinned Python/Ansible source tabs
 when it is a valid full commit SHA; local builds do not claim a build revision.
 The trusted Fleet workflow adds the selected implementation and checked-in
 source path to the completed run summary so the run link is explicit evidence
-of which allow-listed path executed.
+of which allow-listed path executed. Python canary runs also emit structured
+canary and remaining-rollout phase events from the deployer; Ansible remains
+limited to its verified all-at-once path.
 
 The Bob evaluator is delivered by that existing S3/CloudFront frontend
 deployment. Because Terraform changes are intentionally applied separately

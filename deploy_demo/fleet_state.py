@@ -684,6 +684,132 @@ class FleetStateStore:
             )
             return QueueResult(deployment=deployment, idempotent=False)
 
+    def apply_deployment_targets(
+        self,
+        deployment_id: str,
+        target_ids: Iterable[str],
+    ) -> DeploymentState:
+        """Apply only a canary or remaining-rollout target subset.
+
+        Queueing reserves the complete target set, while this operation makes
+        observed state converge only for the explicitly requested phase.  The
+        target subset is therefore a protected execution detail, not a second
+        deployment request or a browser-controlled way to bypass the shared
+        capability matrix.
+        """
+        requested_targets = _validate_target_ids(target_ids)
+        timestamp = _now_iso(self._clock)
+        with self._transaction() as connection:
+            row = connection.execute(
+                "SELECT * FROM fleet_deployments WHERE deployment_id = ?",
+                (deployment_id,),
+            ).fetchone()
+            if row is None:
+                raise UnknownDeploymentError(f"unknown deployment: {deployment_id}")
+            existing = self._deployment_from_row(row)
+            request_summary = existing.request_summary or {}
+            if request_summary.get("strategy") != "canary":
+                raise DeploymentConflictError(
+                    "target-scoped apply is supported only for canary deployments"
+                )
+            if not set(requested_targets).issubset(existing.target_ids):
+                raise DeploymentConflictError(
+                    "target-scoped apply must stay within the deployment target set"
+                )
+            if existing.status == "failed":
+                raise InvalidStateTransitionError(f"deployment {deployment_id} is already failed")
+            if existing.status == "succeeded":
+                return existing
+
+            all_placeholders = ", ".join("?" for _ in existing.target_ids)
+            all_rows = connection.execute(
+                f"SELECT target_id, status, active_deployment_id FROM fleet_vehicles "
+                f"WHERE target_id IN ({all_placeholders})",
+                existing.target_ids,
+            ).fetchall()
+            all_by_id = {row["target_id"]: row for row in all_rows}
+            if len(all_by_id) != len(existing.target_ids):
+                raise FleetStateError("target-scoped apply could not resolve every target")
+            completed_count = 0
+            while (
+                completed_count < len(existing.target_ids)
+                and all_by_id[existing.target_ids[completed_count]]["status"] == "succeeded"
+            ):
+                completed_count += 1
+            if any(
+                all_by_id[target_id]["status"] == "succeeded"
+                for target_id in existing.target_ids[completed_count:]
+            ):
+                raise InvalidStateTransitionError(
+                    "canary targets must complete in stable target order"
+                )
+            if completed_count == 1 and requested_targets == existing.target_ids[:1]:
+                return existing
+            expected_targets = (
+                existing.target_ids[:1]
+                if completed_count == 0
+                else existing.target_ids[completed_count:]
+            )
+            if requested_targets != expected_targets:
+                raise DeploymentConflictError(
+                    "canary apply must advance the next stable target phase"
+                )
+            selected_by_id = {target_id: all_by_id[target_id] for target_id in requested_targets}
+            invalid = [
+                target_id
+                for target_id in requested_targets
+                if selected_by_id[target_id]["active_deployment_id"] != deployment_id
+                or selected_by_id[target_id]["status"] not in {"pending", "applying", "succeeded"}
+            ]
+            if invalid:
+                raise InvalidStateTransitionError(
+                    "target-scoped apply cannot advance target(s): " + ", ".join(invalid)
+                )
+
+            selected_placeholders = ", ".join("?" for _ in requested_targets)
+            updated_targets = connection.execute(
+                f"""
+                UPDATE fleet_vehicles
+                SET observed_color = desired_color, observed_shape = desired_shape,
+                    observed_digest = desired_digest, status = 'succeeded',
+                    last_error = NULL, updated_at = ?
+                WHERE target_id IN ({selected_placeholders})
+                  AND active_deployment_id = ?
+                """,
+                (timestamp, *requested_targets, deployment_id),
+            )
+            if updated_targets.rowcount != len(requested_targets):
+                raise FleetStateError(
+                    f"deployment {deployment_id} did not update every requested target"
+                )
+
+            all_targets = ", ".join("?" for _ in existing.target_ids)
+            remaining = connection.execute(
+                f"""
+                SELECT COUNT(*) AS count
+                FROM fleet_vehicles
+                WHERE target_id IN ({all_targets})
+                  AND active_deployment_id = ?
+                  AND status != 'succeeded'
+                """,
+                (*existing.target_ids, deployment_id),
+            ).fetchone()["count"]
+            next_status: DeploymentStatus = "succeeded" if remaining == 0 else "applying"
+            connection.execute(
+                """
+                UPDATE fleet_deployments
+                SET status = ?, error = NULL, updated_at = ?
+                WHERE deployment_id = ?
+                """,
+                (next_status, timestamp, deployment_id),
+            )
+            updated = connection.execute(
+                "SELECT * FROM fleet_deployments WHERE deployment_id = ?",
+                (deployment_id,),
+            ).fetchone()
+            assert updated is not None
+            return self._deployment_from_row(updated)
+
     def admit_public_deployment(
         self,
         spec: DeploymentSpec,
@@ -1023,6 +1149,7 @@ class FleetStateStore:
                 raise InvalidStateTransitionError(
                     f"deployment {deployment_id} cannot return to queued"
                 )
+            is_canary = (existing.request_summary or {}).get("strategy") == "canary"
 
             connection.execute(
                 """
@@ -1047,27 +1174,36 @@ class FleetStateStore:
                     (timestamp, *target_ids, deployment_id),
                 )
             elif status == "failed":
+                failure_filter = "AND status = 'applying'" if is_canary else ""
                 updated_vehicles = connection.execute(
                     f"""
                     UPDATE fleet_vehicles
                     SET status = 'failed', last_error = ?, updated_at = ?
                     WHERE target_id IN ({placeholders})
                       AND active_deployment_id = ?
+                      {failure_filter}
                     """,
                     (error, timestamp, *target_ids, deployment_id),
                 )
             else:
                 vehicle_status = "pending" if status == "queued" else "applying"
-                updated_vehicles = connection.execute(
-                    f"""
-                    UPDATE fleet_vehicles
-                    SET status = ?, last_error = NULL, updated_at = ?
-                    WHERE target_id IN ({placeholders})
-                      AND active_deployment_id = ?
-                    """,
-                    (vehicle_status, timestamp, *target_ids, deployment_id),
-                )
-            if updated_vehicles.rowcount != len(target_ids):
+                if is_canary and status == "applying":
+                    updated_vehicles = None
+                else:
+                    updated_vehicles = connection.execute(
+                        f"""
+                        UPDATE fleet_vehicles
+                        SET status = ?, last_error = NULL, updated_at = ?
+                        WHERE target_id IN ({placeholders})
+                          AND active_deployment_id = ?
+                        """,
+                        (vehicle_status, timestamp, *target_ids, deployment_id),
+                    )
+            if (
+                updated_vehicles is not None
+                and not (status == "failed" and is_canary)
+                and updated_vehicles.rowcount != len(target_ids)
+            ):
                 raise FleetStateError(
                     f"deployment {deployment_id} did not update every target atomically"
                 )

@@ -169,17 +169,19 @@ This is a frontend/API behavior change only:
 
 REV 06 closes the gap between the finite request vocabulary and the behavior
 that the two deployers actually execute. The shared contract now publishes a
-capability matrix with two verified paths: Python + all-at-once + abort and
-Ansible + all-at-once + abort. The anonymous fleet response carries that matrix
-to the frontend, which hides unproven rolling, canary, and rollback choices.
-The same shared validator rejects those combinations at the backend boundary,
+capability matrix with three verified paths: Python + all-at-once + abort,
+Python + canary + abort, and Ansible + all-at-once + abort. The anonymous fleet
+response carries that matrix to the frontend, which exposes canary only for
+Python and hides it for Ansible until equivalent serial behavior is proven. The
+same shared validator rejects unsupported combinations at the backend boundary,
 including when a caller bypasses the browser.
 
 - Terraform apply required: **No**
 - Manual console/setup: **None**
 - Terraform resources changed: **None**
 - Safety gate: the simulator remains atomic and readback-verified; no UI or
-  API claim is made for rollout/rollback semantics that are not implemented.
+  API claim is made for rolling or rollback semantics that are not implemented;
+  Python canary is the only target-scoped rollout currently enabled.
 
 ## Fleet Deploy form safety boundary
 
@@ -413,6 +415,26 @@ inventory mismatch, and observed-state mismatch all fail nonzero.
 - Terraform resources changed: **None**
 - Sequence and owner: Derek reviews and merges PR13; REV 02 owns proving the selected Python and Ansible paths against the live TEST fleet before PR14+ UI work.
 - Safety gate: local/synthetic Ansible tests only; no real hosts, Home Assistant, thermostat, Pi, EC2, or normal production deployment mutation is included.
+
+## PR 15 — add a one-target canary rollout
+
+PR 15 enables the Python `canary` + `abort` capability. Queueing still reserves
+the complete stable-order target set, but the protected apply boundary accepts a
+target subset only for a validated canary request. The Python deployer applies
+and freshly verifies the first target, then applies and verifies the remaining
+targets only after that readback succeeds. Its structured events identify the
+canary and remaining-rollout scopes; a canary validation failure stops before a
+remaining-target apply.
+
+Ansible remains intentionally limited to its verified all-at-once path. The
+shared capability matrix prevents the browser, backend, or trusted workflow
+from claiming Ansible canary behavior before it has an equivalent implementation.
+
+- Terraform apply required: **No**
+- Manual console/setup required: **None beyond the existing Fleet Deploy simulator/API credentials**
+- Terraform resources changed: **None**
+- Sequence and owner: Derek reviews and merges PR15; no production deployment or simulator mutation is part of the code change itself.
+- Safety gate: canary target subsets are accepted only for the validated Python capability; later targets remain pending until canary verification passes.
 
 ## REV 02 — selected implementation live execution
 
