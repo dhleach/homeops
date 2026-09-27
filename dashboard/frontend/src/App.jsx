@@ -10,6 +10,7 @@
  *               describe the provisioned heating/cooling Grafana views.
  */
 
+import { useEffect } from "react";
 import { useTemps } from "./hooks/useTemps.js";
 import { TempCard } from "./components/TempCard.jsx";
 import { OutdoorCard } from "./components/OutdoorCard.jsx";
@@ -32,7 +33,13 @@ const DASHBOARDS = [
   { uid: "homeops-daily",       title: "Daily Summary + Heating/Cooling History", description: "Heating/cooling session history and floor-2 long-call events" },
 ];
 export default function App() {
-  if (window.location.pathname === "/deploy" || window.location.pathname === "/deploy/") {
+  const isFleetDeploy = window.location.pathname === "/deploy" || window.location.pathname === "/deploy/";
+
+  useEffect(() => {
+    document.title = isFleetDeploy ? "Fleet Deploy Lab · HomeOps" : "HomeOps — Live HVAC Dashboard";
+  }, [isFleetDeploy]);
+
+  if (isFleetDeploy) {
     return <FleetDeployView apiUrl={API_URL} />;
   }
 

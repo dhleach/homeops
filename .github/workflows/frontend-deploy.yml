@@ -35,6 +35,7 @@ jobs:
         working-directory: dashboard/frontend
         env:
           VITE_API_URL: https://api.homeops.now
+          VITE_BUILD_SHA: ${{ github.sha }}
           # Set these repository variables from `terraform output` after the
           # Cognito user pool is provisioned. They are public OIDC metadata,
           # not credentials; the app client intentionally has no secret.

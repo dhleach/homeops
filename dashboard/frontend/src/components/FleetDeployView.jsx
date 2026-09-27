@@ -5,6 +5,17 @@ const REFRESH_INTERVAL_MS = 30_000;
 const DEPLOYMENT_REFRESH_INTERVAL_MS = 2_000;
 const ACTIVE_DEPLOYMENT_STORAGE_KEY = "homeops.activeFleetDeploymentId";
 const ENVIRONMENTS = ["test", "stage", "prod"];
+const SOURCE_REPOSITORY_URL = "https://github.com/dhleach/homeops";
+const FRONTEND_SOURCE_PATH = "dashboard/frontend/src/components/FleetDeployView.jsx";
+const FRONTEND_README_PATH = "dashboard/frontend/README.md";
+const RAW_BUILD_SHA = import.meta.env.VITE_BUILD_SHA;
+const BUILD_SHA = typeof RAW_BUILD_SHA === "string" && /^[0-9a-f]{40}$/i.test(RAW_BUILD_SHA)
+  ? RAW_BUILD_SHA.toLowerCase()
+  : null;
+const SOURCE_REF = BUILD_SHA ?? "master";
+const FRONTEND_SOURCE_URL = `${SOURCE_REPOSITORY_URL}/blob/${SOURCE_REF}/${FRONTEND_SOURCE_PATH}`;
+const FRONTEND_README_URL = `${SOURCE_REPOSITORY_URL}/blob/${SOURCE_REF}/${FRONTEND_README_PATH}`;
+const BUILD_COMMIT_URL = BUILD_SHA ? `${SOURCE_REPOSITORY_URL}/commit/${BUILD_SHA}` : null;
 
 const PROFILE_COLORS = {
   blue: "#60a5fa",
@@ -461,6 +472,61 @@ function formatTimestamp(value) {
   return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString();
 }
 
+function FleetBuildContext() {
+  return (
+    <section
+      aria-labelledby="fleet-build-context-heading"
+      className="mt-10 border-t border-border/70 pt-6"
+      data-testid="fleet-build-context"
+    >
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <p
+            id="fleet-build-context-heading"
+            className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-400"
+          >
+            Fleet Deploy Lab context
+          </p>
+          <p className="mt-1 text-xs text-slate-500">
+            Public source and documentation for this bounded simulated control plane.
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs">
+          <a
+            href={FRONTEND_SOURCE_URL}
+            target="_blank"
+            rel="noreferrer"
+            className="text-slate-400 underline decoration-slate-600 underline-offset-2 hover:text-slate-200"
+          >
+            View frontend source
+          </a>
+          <a
+            href={FRONTEND_README_URL}
+            target="_blank"
+            rel="noreferrer"
+            className="text-slate-400 underline decoration-slate-600 underline-offset-2 hover:text-slate-200"
+          >
+            Frontend README
+          </a>
+          {BUILD_COMMIT_URL && (
+            <span data-testid="fleet-build-revision" className="text-slate-500">
+              Build{" "}
+              <a
+                href={BUILD_COMMIT_URL}
+                target="_blank"
+                rel="noreferrer"
+                className="font-mono text-slate-400 underline decoration-slate-600 underline-offset-2 hover:text-slate-200"
+              >
+                {BUILD_SHA.slice(0, 12)}
+              </a>
+            </span>
+          )}
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function targetSummaryLabel(targetIds) {
   return targetIds.map((targetId) => {
     const match = /^(test|stage|prod)-vehicle-(\d{2})$/.exec(targetId);
@@ -507,7 +573,8 @@ function DeploymentRunPanel({ deployment, error, onRefresh }) {
             {deployment.deployment_id}
           </h2>
           <p className="mt-2 text-sm text-slate-400">
-            State is reconstructed from GitHub Actions and the observed simulated fleet.
+            State is reconstructed from GitHub Actions and the observed simulated fleet. Fleet reads are
+            separate from submission-pipeline availability and deployment completion.
           </p>
         </div>
         <div className="flex items-center gap-3">
@@ -565,11 +632,11 @@ function DeploymentRunPanel({ deployment, error, onRefresh }) {
           </p>
         </div>
         <div className="rounded-lg border border-border bg-slate-950/30 p-3">
-          <p className="text-xs uppercase tracking-wider text-slate-400">Created</p>
+          <p className="text-xs uppercase tracking-wider text-slate-400">Deployment created</p>
           <p className="mt-1 text-sm text-slate-300">{formatTimestamp(deployment.workflow_created_at ?? deployment.created_at)}</p>
         </div>
         <div className="rounded-lg border border-border bg-slate-950/30 p-3">
-          <p className="text-xs uppercase tracking-wider text-slate-400">Last updated</p>
+          <p className="text-xs uppercase tracking-wider text-slate-400">Run state updated</p>
           <p className="mt-1 text-sm text-slate-300">{formatTimestamp(deployment.workflow_updated_at ?? deployment.updated_at)}</p>
         </div>
       </div>
@@ -708,11 +775,17 @@ export function FleetDeployView({ apiUrl }) {
           <div className="rounded-xl border border-border bg-card/70 p-4">
             <p className="text-xs uppercase tracking-wider text-slate-400">Control boundary</p>
             <p className="mt-1 text-xl font-semibold text-white">Public simulated control plane</p>
+            <p className="mt-2 text-xs leading-relaxed text-slate-400" data-testid="fleet-read-boundary">
+              A successful fleet read does not prove that the protected submission pipeline is healthy.
+            </p>
           </div>
           <div className="rounded-xl border border-border bg-card/70 p-4">
-            <p className="text-xs uppercase tracking-wider text-slate-400">Last refresh</p>
-            <p className="mt-1 text-xl font-semibold text-white">
+            <p className="text-xs uppercase tracking-wider text-slate-400">Fleet snapshot read</p>
+            <p className="mt-1 text-xl font-semibold text-white" data-testid="fleet-refresh-time">
               {lastUpdated ? lastUpdated.toLocaleTimeString() : "Waiting…"}
+            </p>
+            <p className="mt-2 text-xs leading-relaxed text-slate-400">
+              Browser read time; run completion and workflow state appear in the deployment panel.
             </p>
           </div>
         </div>
@@ -793,6 +866,7 @@ export function FleetDeployView({ apiUrl }) {
             )}
           </div>
         </div>
+        <FleetBuildContext />
       </main>
     </div>
   );

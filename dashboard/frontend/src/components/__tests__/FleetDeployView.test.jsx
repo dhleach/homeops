@@ -53,6 +53,7 @@ describe("FleetDeployView", () => {
     window.sessionStorage.removeItem("homeops.fleetDeployAttemptId");
     window.sessionStorage.removeItem("homeops.previousFleetDeployment");
     window.history.replaceState({}, "", "/");
+    document.title = "HomeOps";
   });
 
   it("renders all twelve simulated targets grouped by environment", async () => {
@@ -147,6 +148,24 @@ describe("FleetDeployView", () => {
     expect(screen.queryByText("What's the temperature right now?")).not.toBeInTheDocument();
   });
 
+  it("identifies the deployment route and links to truthful source context", async () => {
+    window.history.replaceState({}, "", "/deploy");
+
+    render(<App />);
+
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Fleet Deploy Lab" })).toBeInTheDocument());
+    expect(document.title).toBe("Fleet Deploy Lab · HomeOps");
+    expect(screen.getByRole("link", { name: "View frontend source" })).toHaveAttribute(
+      "href",
+      "https://github.com/dhleach/homeops/blob/master/dashboard/frontend/src/components/FleetDeployView.jsx",
+    );
+    expect(screen.getByRole("link", { name: "Frontend README" })).toHaveAttribute(
+      "href",
+      "https://github.com/dhleach/homeops/blob/master/dashboard/frontend/README.md",
+    );
+    expect(screen.queryByTestId("fleet-build-revision")).not.toBeInTheDocument();
+  });
+
   it("describes the live deployment action and target-aware control", async () => {
     render(<FleetDeployView apiUrl="https://api.homeops.now" />);
 
@@ -163,6 +182,10 @@ describe("FleetDeployView", () => {
     expect(screen.getByText("DeploymentSpec JSON")).toBeInTheDocument();
     expect(screen.getByTestId("deployment-capability-note")).toHaveTextContent("Rolling, canary, and rollback");
     expect(screen.getByText("Public simulated control plane")).toBeInTheDocument();
+    expect(screen.getByTestId("fleet-read-boundary")).toHaveTextContent(
+      "does not prove that the protected submission pipeline is healthy",
+    );
+    expect(screen.getByText("Fleet snapshot read")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Deploy to 4 test vehicles" })).not.toBeDisabled();
     expect(screen.getByText("Simulated fleet")).toBeInTheDocument();
   });

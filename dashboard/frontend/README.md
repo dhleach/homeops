@@ -46,7 +46,12 @@ React + Vite + Tailwind single-page dashboard for `homeops.now`.
   rows are current together, including after a reload. The route remains
   bounded at phone widths, exposes visible keyboard focus, explains disabled
   controls, announces live target/run changes, and uses contrast-checked text
-  labels instead of color alone.
+  labels instead of color alone. It sets a route-specific browser title and
+  exposes quiet links to the exact frontend source and README. CI injects the
+  full `GITHUB_SHA` as `VITE_BUILD_SHA`; the deployed route links that commit
+  only when the value is a valid full revision, while local builds omit the
+  build-revision claim. Fleet snapshot read time is labeled separately from
+  deployment-run and workflow timestamps.
 
 The production build is created by
 `.github/workflows/frontend-deploy.yml`, synced to the private S3 frontend
@@ -72,8 +77,9 @@ npm run dev
 
 Set `VITE_API_URL`, `VITE_GRAFANA_URL`, `VITE_OIDC_AUTHORITY`,
 `VITE_OIDC_CLIENT_ID`, and `VITE_OIDC_SCOPE` when pointing the local frontend
-at a different backend or identity configuration. Tests run with
-`NODE_ENV=test npm test`.
+at a different backend or identity configuration. `VITE_BUILD_SHA` is optional
+for local development and should only be set to a known full 40-character
+commit SHA. Tests run with `NODE_ENV=test npm test`.
 
 The browser uses authorization code + PKCE through `oidc-client-ts`; it stores
 the short-lived session in browser session storage and sends only the access
