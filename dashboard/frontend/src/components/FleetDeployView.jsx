@@ -246,14 +246,18 @@ function StatusPill({ status }) {
   );
 }
 
-function FleetTargetCard({ target }) {
+function FleetTargetCard({ target, selected }) {
   const synchronized = target.desired_digest === target.observed_digest;
   const cardTitleId = `fleet-target-${target.target_id}`;
 
   return (
     <article
       aria-labelledby={cardTitleId}
-      className="flex min-h-[19rem] flex-col rounded-2xl border border-border bg-card p-5 shadow-lg shadow-slate-950/10"
+      className={`flex min-h-[19rem] flex-col rounded-2xl border p-5 shadow-lg shadow-slate-950/10 transition-colors ${selected
+        ? "border-blue-400/80 bg-blue-400/10 ring-1 ring-blue-400/40"
+        : "border-border bg-card"}`}
+      data-selected={selected ? "true" : "false"}
+      data-target-id={target.target_id}
       data-testid="fleet-target-card"
     >
       <div className="flex items-start justify-between gap-3">
@@ -265,7 +269,14 @@ function FleetTargetCard({ target }) {
             {target.target_id}
           </h3>
         </div>
-        <StatusPill status={target.status} />
+        <div className="flex flex-col items-end gap-2">
+          {selected && (
+            <span className="rounded-full border border-blue-300/40 bg-blue-300/10 px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-blue-100">
+              Selected
+            </span>
+          )}
+          <StatusPill status={target.status} />
+        </div>
       </div>
 
       <div className="mt-5 flex items-center gap-4 rounded-xl border border-border/70 bg-slate-950/20 p-3">
@@ -463,7 +474,12 @@ function DeploymentRunPanel({ deployment, error, onRefresh }) {
 export function FleetDeployView({ apiUrl }) {
   const { data, loading, error, lastUpdated, refresh } = useFleet(apiUrl);
   const deployment = useDeployment(apiUrl);
+  const [selectedTargetIds, setSelectedTargetIds] = useState([]);
   const groups = groupTargets(data?.targets ?? []);
+
+  const handleTargetSelectionChange = useCallback((targetIds) => {
+    setSelectedTargetIds(targetIds);
+  }, []);
 
   const handleSubmitted = useCallback((submission) => {
     deployment.trackDeployment(submission?.deployment_id);
@@ -546,6 +562,7 @@ export function FleetDeployView({ apiUrl }) {
               capabilities={data?.capabilities}
               onNewAttempt={handleNewAttempt}
               onSubmitted={handleSubmitted}
+              onTargetSelectionChange={handleTargetSelectionChange}
             />
           </div>
 
@@ -590,7 +607,11 @@ export function FleetDeployView({ apiUrl }) {
                     </div>
                     <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                       {targets.map((target) => (
-                        <FleetTargetCard key={target.target_id} target={target} />
+                        <FleetTargetCard
+                          key={target.target_id}
+                          target={target}
+                          selected={selectedTargetIds.includes(target.target_id)}
+                        />
                       ))}
                     </div>
                   </section>

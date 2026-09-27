@@ -122,6 +122,45 @@ describe("FleetDeployView", () => {
     expect(screen.getByText("Simulated fleet")).toBeInTheDocument();
   });
 
+  it("shows the resolved target set and highlights the matching fleet cards", async () => {
+    render(<FleetDeployView apiUrl="https://api.homeops.now" />);
+
+    await screen.findAllByTestId("fleet-target-card");
+    const resolvedTargets = screen.getByTestId("deployment-resolved-targets");
+    expect(resolvedTargets).toHaveTextContent("4 vehicles");
+    expect(resolvedTargets).toHaveTextContent("TEST-01, TEST-02, TEST-03, TEST-04");
+    expect(screen.getAllByTestId("fleet-target-card").filter(
+      (card) => card.dataset.selected === "true",
+    )).toHaveLength(4);
+
+    fireEvent.click(screen.getByRole("radio", { name: /individual targets/i }));
+    await waitFor(() => {
+      expect(resolvedTargets).toHaveTextContent("No targets selected");
+      expect(screen.getAllByTestId("fleet-target-card").filter(
+        (card) => card.dataset.selected === "true",
+      )).toHaveLength(0);
+    });
+    expect(screen.getByRole("checkbox", { name: "TEST-01" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("checkbox", { name: "TEST-01" }));
+    await waitFor(() => {
+      expect(resolvedTargets).toHaveTextContent("1 vehicle");
+      expect(resolvedTargets).toHaveTextContent("TEST-01");
+      expect(screen.getAllByTestId("fleet-target-card").filter(
+        (card) => card.dataset.selected === "true",
+      )).toHaveLength(1);
+    });
+
+    fireEvent.click(screen.getByRole("radio", { name: /^environment/i }));
+    await waitFor(() => {
+      expect(resolvedTargets).toHaveTextContent("TEST-01, TEST-02, TEST-03, TEST-04");
+      expect(screen.getAllByTestId("fleet-target-card").filter(
+        (card) => card.dataset.selected === "true",
+      )).toHaveLength(4);
+    });
+    expect(screen.queryByRole("checkbox", { name: "TEST-01" })).not.toBeInTheDocument();
+  });
+
   it("keeps configuration, the selected fleet, and the run context in a responsive layout", async () => {
     render(<FleetDeployView apiUrl="https://api.homeops.now" />);
 
@@ -250,7 +289,7 @@ describe("FleetDeployView", () => {
     );
     expect(screen.getByRole("button", { name: "Select targets to deploy" })).toBeDisabled();
 
-    fireEvent.click(screen.getByRole("checkbox", { name: "test-vehicle-01" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "TEST-01" }));
     expect(screen.queryByText("Select at least one simulated target.")).not.toBeInTheDocument();
     expect(screen.getByTestId("deployment-spec-preview")).toHaveTextContent('"target_ids": [');
     expect(screen.getByTestId("deployment-spec-preview")).toHaveTextContent('"test-vehicle-01"');

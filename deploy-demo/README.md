@@ -1,10 +1,10 @@
 # Fleet Deploy Lab integration map
 
-Status: REV 05 generated-attempt work merged; REV 06 capability-matrix work in progress
+Status: REV 06 capability-matrix work merged; REV 07 target-selection work in progress
 Repository: `dhleach/homeops`
 Default branch: `master`
-Latest merged integration snapshot: `ef9d903`
-Active GitHub issue: https://github.com/dhleach/homeops/issues/372
+Latest merged integration snapshot: `15f8858`
+Active GitHub issue: https://github.com/dhleach/homeops/issues/374
 
 This document records the real HomeOps integration points for the Fleet Deploy
 Lab as the implementation advances. It is deliberately specific about what
@@ -91,6 +91,16 @@ different spec under an existing ID.
 Submitting creates a validated manifest and dispatches the trusted workflow.
 The browser accepts no repository path, URL, command, arbitrary code, or
 credential; GitHub and protected simulator credentials remain server-side.
+
+## REV 07 — resolved target selection
+
+The form now makes the actual target set visible before submission. Environment
+mode summarizes the four resolved vehicles with short labels such as `TEST-01`,
+while individual mode exposes the same short labels and keeps stable machine IDs
+in the DeploymentSpec details. The Fleet Deploy cards highlight the targets in
+the current resolved set. Switching modes clears inactive individual selection,
+so the summary, highlighted cards, and submitted payload cannot disagree about
+which vehicles will deploy.
 
 ## REV 05 — generated request identifiers and safe retries
 
