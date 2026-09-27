@@ -100,6 +100,18 @@ def test_deployment_job_executes_the_validated_python_or_ansible_implementation(
     assert "Selected implementation: ${implementation}" in deploy_job
 
 
+def test_deployment_job_publishes_the_executed_implementation_proof() -> None:
+    """The completed run must identify its selected implementation and source."""
+    deploy_job = WORKFLOW.split("  deploy-simulator:", maxsplit=1)[1]
+
+    assert 'source_path="deploy_demo/deployer.py"' in deploy_job
+    assert 'source_path="ansible/deploy.yml"' in deploy_job
+    assert 'echo "## Fleet Deploy implementation proof"' in deploy_job
+    assert 'echo "- Executed implementation: \\`${implementation}\\`"' in deploy_job
+    assert "GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/blob/${GITHUB_SHA}/${source_path}" in deploy_job
+    assert '>> "${GITHUB_STEP_SUMMARY}"' in deploy_job
+
+
 def test_workflow_displays_event_sha_separately_from_profile_digest() -> None:
     """The provenance boundary is visible in logs and uploaded metadata."""
     assert 'echo "Event commit SHA: ${EVENT_COMMIT_SHA}"' in WORKFLOW

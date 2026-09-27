@@ -43,9 +43,12 @@ recover within that bounded window.
 The separate frontend workflow runs `npm ci`, builds with
 `VITE_API_URL=https://api.homeops.now` and the triggering full `GITHUB_SHA` as
 `VITE_BUILD_SHA`, syncs the private S3 bucket, invalidates CloudFront, and runs
-the same public smoke checks. The `/deploy` route uses that revision only for
-exact source/build links when it is a valid full commit SHA; local builds do
-not claim a build revision.
+the same public smoke checks. The `/deploy` route uses that revision for exact
+source/build links and read-only revision-pinned Python/Ansible source tabs
+when it is a valid full commit SHA; local builds do not claim a build revision.
+The trusted Fleet workflow adds the selected implementation and checked-in
+source path to the completed run summary so the run link is explicit evidence
+of which allow-listed path executed.
 
 The Bob evaluator is delivered by that existing S3/CloudFront frontend
 deployment. Because Terraform changes are intentionally applied separately

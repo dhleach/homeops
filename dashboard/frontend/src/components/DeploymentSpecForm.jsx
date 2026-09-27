@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { ImplementationSourcePanel } from "./ImplementationSourcePanel.jsx";
 
 // These finite choices mirror deploy_demo/deployment_spec.py. The browser may
 // submit only this closed data structure; the backend validator remains the
@@ -413,21 +414,34 @@ export function DeploymentSpecForm({
     return deploymentId;
   }
 
+  function updateImplementation(value) {
+    if (value === form.implementation) return;
+    const deploymentId = prepareForConfigurationEdit();
+    setForm((current) => {
+      const nextCapability = availableCapabilities.find(
+        (capability) => capability.implementation === value,
+      );
+      return {
+        ...current,
+        implementation: value,
+        strategy: nextCapability?.strategy ?? current.strategy,
+        failure_mode: nextCapability?.failure_mode ?? current.failure_mode,
+        ...(deploymentId ? { deployment_id: deploymentId } : {}),
+      };
+    });
+  }
+
   function updateField(field) {
     return (event) => {
       const value = event.target.value;
+      if (field === "implementation") {
+        updateImplementation(value);
+        return;
+      }
       const deploymentId = prepareForConfigurationEdit();
       setForm((current) => {
         const next = { ...current, [field]: value };
-        if (field === "implementation") {
-          const nextCapability = availableCapabilities.find(
-            (capability) => capability.implementation === value,
-          );
-          if (nextCapability) {
-            next.strategy = nextCapability.strategy;
-            next.failure_mode = nextCapability.failure_mode;
-          }
-        } else if (field === "strategy") {
+        if (field === "strategy") {
           const nextCapability = availableCapabilities.find(
             (capability) => (
               capability.implementation === current.implementation
@@ -663,6 +677,12 @@ export function DeploymentSpecForm({
             Only verified execution paths are enabled. Rolling, canary, and rollback behavior remain
             unavailable until their implementation paths are exercised and proven.
           </p>
+
+          <ImplementationSourcePanel
+            implementation={form.implementation}
+            availableImplementations={implementationOptions}
+            onImplementationChange={updateImplementation}
+          />
 
           {form.target_selection === "target_ids" && (
             <fieldset>

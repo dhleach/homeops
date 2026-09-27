@@ -235,8 +235,10 @@ jobs:
           PY
           )"
           echo "Selected implementation: ${implementation}"
+          source_path=""
           case "${implementation}" in
             python)
+              source_path="deploy_demo/deployer.py"
               PYTHONPATH=. python -m deploy_demo.deployer \
                 --api-base-url "${FLEET_DEPLOY_API_URL}" \
                 --spec "${RUNNER_TEMP}/fleet-artifact/deployment-spec.json" \
@@ -244,6 +246,7 @@ jobs:
                 --artifact-sha256 "${artifact_sha256}"
               ;;
             ansible)
+              source_path="ansible/deploy.yml"
               python -m pip install --disable-pip-version-check ansible-core
               PYTHONPATH=. ANSIBLE_CONFIG=ansible/ansible.cfg ansible-playbook \
                 -i ansible/inventory.yml \
@@ -257,3 +260,10 @@ jobs:
               exit 1
               ;;
           esac
+          {
+            echo "## Fleet Deploy implementation proof"
+            echo
+            echo "- Executed implementation: \`${implementation}\`"
+            echo "- Checked-in source: [\`${source_path}\`](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/blob/${GITHUB_SHA}/${source_path})"
+            echo "- Deployment ID: \`${DEPLOYMENT_ID}\`"
+          } >> "${GITHUB_STEP_SUMMARY}"
