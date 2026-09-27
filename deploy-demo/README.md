@@ -80,6 +80,9 @@ frontend workflow; it is not published as an unrelated static site.
 The public `/deploy` route offers only the finite environments, simulated target
 IDs, profile colors and shapes, Python/Ansible implementations, strategies, and
 failure modes defined by the shared `deploy_demo.deployment_spec` contract. It
+also offers an optional selected-target switch for the deterministic simulated
+verification failure path; that switch names only one logical fleet vehicle and
+cannot carry a command, URL, path, or credential. It
 generates the deployment attempt ID automatically instead of asking a visitor
 to invent one, keeps that ID in tab-scoped session storage across reloads, and
 shows the exact deployment specification that will be submitted. A retry keeps
@@ -435,6 +438,23 @@ from claiming Ansible canary behavior before it has an equivalent implementation
 - Terraform resources changed: **None**
 - Sequence and owner: Derek reviews and merges PR15; no production deployment or simulator mutation is part of the code change itself.
 - Safety gate: canary target subsets are accepted only for the validated Python capability; later targets remain pending until canary verification passes.
+
+## PR 16 — inject a deterministic verification failure
+
+PR 16 adds the optional `failure_target_id` to the canonical DeploymentSpec.
+When present, the simulator deliberately leaves that selected logical target's
+observed profile divergent and records a bounded target-level error. Python and
+Ansible still use their normal queue, apply, and fresh public readback paths;
+the deployer exits nonzero when verification cannot prove the requested state.
+For a canary failure, later targets remain pending and the `/deploy` UI exposes
+the desired-versus-observed drift, target error, manifest commit, and failed
+Actions run.
+
+- Terraform apply required: **No**
+- Manual console/setup required: **None beyond the existing Fleet Deploy simulator/API credentials**
+- Terraform resources changed: **None**
+- Sequence and owner: Derek reviews and merges PR16; no production deployment or simulator mutation is part of the code change itself.
+- Safety gate: the switch is validated against the fixed simulated target set and cannot reach Home Assistant, the normal HomeOps release path, Pi, or EC2.
 
 ## REV 02 — selected implementation live execution
 

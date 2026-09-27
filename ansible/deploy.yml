@@ -135,7 +135,7 @@
       ansible.builtin.assert:
         that:
           - apply_response.status == 200
-          - apply_response.json.status == 'succeeded'
+          - apply_response.json.status in ['applying', 'succeeded']
           - apply_response.json.target_ids == validated_target_ids
           - apply_response.json.desired == validated_profile
           - apply_response.json.desired_digest == validated_artifact_sha256
@@ -160,9 +160,9 @@
           - fresh_readback.json.target_ids == validated_target_ids
           - fresh_readback.json.desired == validated_profile
           - fresh_readback.json.desired_digest == validated_artifact_sha256
-          - fresh_readback.json.status == 'succeeded'
-          - fresh_readback.json.verification == 'verified'
-          - fresh_readback.json.verified is true
+          - fresh_readback.json.status in ['applying', 'succeeded']
+          - fresh_readback.json.verification in ['pending', 'verified']
+          - fresh_readback.json.verified in [true, false]
           - fresh_readback.json.targets | length == validated_target_ids | length
         fail_msg: Fresh public readback did not prove the requested deployment succeeded.
 
@@ -181,6 +181,14 @@
       loop: "{{ fresh_readback.json.targets }}"
       loop_control:
         extended: true
+
+    - name: Require the final public readback to be verified
+      ansible.builtin.assert:
+        that:
+          - fresh_readback.json.status == 'succeeded'
+          - fresh_readback.json.verification == 'verified'
+          - fresh_readback.json.verified is true
+        fail_msg: Fresh public readback did not prove the requested deployment succeeded.
 
     - name: Report the verified Ansible deployment without credentials
       ansible.builtin.debug:

@@ -48,6 +48,20 @@ def test_valid_environment_spec_expands_to_four_known_targets() -> None:
     assert len(spec.expanded_target_ids) == 4
 
 
+def test_failure_target_is_normalized_as_a_bounded_simulator_switch() -> None:
+    spec = validate_deployment_spec(valid_spec(failure_target_id="test-vehicle-02"))
+
+    assert spec.failure_target_id == "test-vehicle-02"
+    assert spec.to_dict()["failure_target_id"] == "test-vehicle-02"
+    assert validate_deployment_spec(spec.to_dict()) == spec
+
+
+@pytest.mark.parametrize("failure_target_id", ["prod-vehicle-99", "stage-vehicle-01"])
+def test_failure_target_must_be_known_and_selected(failure_target_id: str) -> None:
+    with pytest.raises(DeploymentSpecError, match="failure_target_id"):
+        validate_deployment_spec(valid_spec(failure_target_id=failure_target_id))
+
+
 def test_capability_matrix_exposes_only_verified_execution_paths() -> None:
     assert CAPABILITY_MATRIX == (
         ("python", "all_at_once", "abort"),

@@ -60,6 +60,7 @@ _TOP_LEVEL_KEYS = frozenset(
         "deployment_id",
         "environment",
         "failure_mode",
+        "failure_target_id",
         "implementation",
         "profile",
         "schema_version",
@@ -155,6 +156,7 @@ class DeploymentSpec:
     implementation: str
     strategy: str
     failure_mode: str
+    failure_target_id: str | None = None
     schema_version: int = SCHEMA_VERSION
     environment: str | None = None
     target_ids: tuple[str, ...] | None = None
@@ -189,6 +191,14 @@ class DeploymentSpec:
                 "unsupported implementation/strategy/failure-mode combination: "
                 f"{self.implementation}/{self.strategy}/{self.failure_mode}",
             )
+        if self.failure_target_id is not None:
+            if not isinstance(self.failure_target_id, str) or not self.failure_target_id:
+                raise _error("failure_target_id", "must be a known target ID or omitted")
+            if self.failure_target_id not in KNOWN_TARGET_IDS:
+                raise _error(
+                    "failure_target_id",
+                    f"unknown target ID: {self.failure_target_id}",
+                )
 
         has_environment = self.environment is not None
         has_target_ids = self.target_ids is not None
@@ -206,6 +216,14 @@ class DeploymentSpec:
             unknown = sorted(set(self.target_ids) - KNOWN_TARGET_IDS)
             if unknown:
                 raise _error("target_ids", f"unknown target ID(s): {', '.join(unknown)}")
+        if (
+            self.failure_target_id is not None
+            and self.failure_target_id not in self.expanded_target_ids
+        ):
+            raise _error(
+                "failure_target_id",
+                "must be one of the selected deployment targets",
+            )
 
     @property
     def expanded_target_ids(self) -> tuple[str, ...]:
@@ -225,6 +243,8 @@ class DeploymentSpec:
             "schema_version": self.schema_version,
             "strategy": self.strategy,
         }
+        if self.failure_target_id is not None:
+            payload["failure_target_id"] = self.failure_target_id
         if self.environment is not None:
             payload["environment"] = self.environment
         else:
@@ -267,6 +287,9 @@ def validate_deployment_spec(value: object) -> DeploymentSpec:
     implementation = _require_enum(value["implementation"], "implementation", IMPLEMENTATIONS)
     strategy = _require_enum(value["strategy"], "strategy", STRATEGIES)
     failure_mode = _require_enum(value["failure_mode"], "failure_mode", FAILURE_MODES)
+    failure_target_id: str | None = None
+    if "failure_target_id" in value and value["failure_target_id"] is not None:
+        failure_target_id = _require_string(value["failure_target_id"], "failure_target_id")
 
     selectors = [key for key in ("environment", "target_ids") if key in value]
     if len(selectors) != 1:
@@ -285,6 +308,7 @@ def validate_deployment_spec(value: object) -> DeploymentSpec:
         implementation=implementation,
         strategy=strategy,
         failure_mode=failure_mode,
+        failure_target_id=failure_target_id,
         schema_version=schema_version,
         environment=environment,
         target_ids=target_ids,

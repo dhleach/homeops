@@ -140,10 +140,13 @@ browser.
 contract and records desired state. The protected `/apply` operation moves the
 simulator through `applying` and atomically copies desired profiles to observed
 profiles. A validated Python canary may pass the first or remaining target
-subset; later targets stay pending until the canary readback succeeds. Replaying
-an already successful apply is a read-only idempotent response. Public deployment reads expose `verification: "pending"`,
-`"verified"`, or `"failed"` plus the fresh target snapshots for a deployer or
-UI to verify digest, color, shape, and status.
+subset; later targets stay pending until the canary readback succeeds. An
+optional `failure_target_id` is validated against that same finite target set;
+the simulator leaves it divergent with a target-level error so the ordinary
+fresh-readback path fails safely. Replaying an already successful apply is a
+read-only idempotent response. Public deployment reads expose
+`verification: "pending"`, `"verified"`, or `"failed"` plus the fresh target
+snapshots for a deployer or UI to verify digest, color, shape, and status.
 
 `GET /deploy/api/fleet` includes the same verified implementation/strategy/
 failure-mode capability matrix rendered by the frontend. It currently exposes
@@ -203,7 +206,8 @@ The local end-to-end proof suite exercises the real `FleetApiClient` and
 `FleetDeployer` against an isolated FastAPI `TestClient` and temporary SQLite
 store. It covers protected queue/apply/readback behavior, environment target
 expansion, replay idempotence, queue-only web requests, and fail-closed
-verification. Run it from the repository root with:
+verification, including deterministic failure injection and canary stop
+behavior. Run it from the repository root with:
 
 ```bash
 PYTHONPATH=services/consumer:services/observer:services/insights:dashboard/backend:scripts \

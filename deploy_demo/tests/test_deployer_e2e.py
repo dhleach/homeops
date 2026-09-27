@@ -221,6 +221,36 @@ def test_real_python_canary_leaves_remaining_targets_pending_until_verified(harn
         assert vehicle.observed_profile == expected
 
 
+def test_real_python_injected_verification_failure_stops_canary_before_rollout(harness) -> None:
+    spec = valid_spec(
+        deployment_id="demo-e2e-canary-failure",
+        strategy="canary",
+        profile={"color": "orange", "shape": "triangle"},
+        failure_target_id="test-vehicle-01",
+    )
+    artifact = artifact_for(spec)
+    events = []
+
+    with pytest.raises(DeploymentVerificationError, match=r"canary\.readback\.targets\[0\]"):
+        FleetDeployer(harness.api, event_sink=events.append).deploy(spec, artifact)
+
+    assert harness.opener.requests == [
+        ("POST", "/deploy/api/deployments"),
+        ("POST", "/deploy/api/deployments/demo-e2e-canary-failure/apply"),
+        ("GET", "/deploy/api/deployments/demo-e2e-canary-failure"),
+    ]
+    failed = harness.store.get_vehicle("test-vehicle-01")
+    assert failed.status == "failed"
+    assert failed.last_error == (
+        "deterministic verification failure injected for target test-vehicle-01"
+    )
+    assert [
+        harness.store.get_vehicle(target_id).status for target_id in spec.expanded_target_ids[1:]
+    ] == ["pending", "pending", "pending"]
+    assert events[-1].event_type == "deployment_failed"
+    assert all(event.event_type != "deployment_rollout_started" for event in events)
+
+
 def test_canary_api_rejects_skipping_the_next_stable_target(harness) -> None:
     spec = valid_spec(deployment_id="demo-e2e-canary-order", strategy="canary")
     before = {

@@ -116,6 +116,64 @@ def test_pending_and_failed_state_preserve_desired_observed_divergence(
     assert vehicle.last_error == "simulated vehicle timeout"
 
 
+def test_deterministic_verification_failure_preserves_partial_target_state(
+    tmp_path, fixed_clock
+) -> None:
+    store = FleetStateStore(tmp_path / "fleet.sqlite3", clock=fixed_clock)
+    spec = valid_spec(
+        deployment_id="demo-deterministic-failure",
+        profile={"color": "orange", "shape": "triangle"},
+        failure_target_id="test-vehicle-02",
+    )
+
+    store.queue_deployment(spec)
+    store.mark_deployment_status(spec.deployment_id, "applying")
+    applying = store.mark_deployment_status(spec.deployment_id, "succeeded")
+
+    assert applying.status == "applying"
+    assert (
+        applying.error == "deterministic verification failure injected for target test-vehicle-02"
+    )
+    assert store.get_vehicle("test-vehicle-01").status == "succeeded"
+    failed = store.get_vehicle("test-vehicle-02")
+    assert failed.status == "failed"
+    assert failed.last_error == applying.error
+    assert failed.desired_profile != failed.observed_profile
+    assert store.get_vehicle("test-vehicle-03").status == "pending"
+
+    completed = store.mark_deployment_status(
+        spec.deployment_id,
+        "failed",
+        error="GitHub Actions failed: Deploy immutable artifact to simulator (failure)",
+    )
+    assert completed.status == "failed"
+    assert store.get_vehicle("test-vehicle-01").status == "succeeded"
+    assert store.get_vehicle("test-vehicle-02").status == "failed"
+    assert store.get_vehicle("test-vehicle-03").status == "pending"
+
+
+def test_canary_failure_leaves_later_targets_pending(tmp_path, fixed_clock) -> None:
+    store = FleetStateStore(tmp_path / "fleet.sqlite3", clock=fixed_clock)
+    spec = valid_spec(
+        deployment_id="demo-canary-deterministic-failure",
+        strategy="canary",
+        profile={"color": "orange", "shape": "triangle"},
+        failure_target_id="test-vehicle-01",
+    )
+
+    store.queue_deployment(spec)
+    applying = store.apply_deployment_targets(spec.deployment_id, ["test-vehicle-01"])
+
+    assert applying.status == "applying"
+    assert store.get_vehicle("test-vehicle-01").status == "failed"
+    assert store.get_vehicle("test-vehicle-01").last_error == applying.error
+    assert [store.get_vehicle(target_id).status for target_id in spec.expanded_target_ids[1:]] == [
+        "pending",
+        "pending",
+        "pending",
+    ]
+
+
 def test_reopening_store_preserves_queued_state_without_auto_success(tmp_path, fixed_clock) -> None:
     path = tmp_path / "fleet.sqlite3"
     first = FleetStateStore(path, clock=fixed_clock)
