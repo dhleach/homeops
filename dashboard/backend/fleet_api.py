@@ -56,6 +56,7 @@ from deploy_demo import (  # noqa: E402
     DeploymentAdmissionLimitError,
     DeploymentConflictError,
     DeploymentCooldownError,
+    DeploymentEventRecord,
     DeploymentSpecError,
     DeploymentState,
     FleetProfile,
@@ -70,6 +71,7 @@ from deploy_demo import (  # noqa: E402
     VehicleState,
     WorkflowJobReceipt,
     WorkflowRunReceipt,
+    WorkflowStepReceipt,
     supported_capabilities,
     validate_deployment_spec,
 )
@@ -207,6 +209,19 @@ class DeploymentRestoreRequest(BaseModel):
     targets: list[DeploymentRestoreTargetRequest] = Field(..., min_length=1, max_length=12)
 
 
+class FleetWorkflowStepResponse(BaseModel):
+    """Public-safe state for one bounded GitHub Actions step."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    number: int
+    name: str
+    status: str
+    conclusion: str | None
+    started_at: str | None
+    completed_at: str | None
+
+
 class FleetWorkflowJobResponse(BaseModel):
     """Public-safe state for one GitHub Actions job."""
 
@@ -220,6 +235,7 @@ class FleetWorkflowJobResponse(BaseModel):
     completed_at: str | None
     url: str | None
     failed_step: str | None
+    steps: list[FleetWorkflowStepResponse] = Field(default_factory=list)
 
 
 class FleetWorkflowResponse(BaseModel):
@@ -234,6 +250,21 @@ class FleetWorkflowResponse(BaseModel):
     created_at: str
     updated_at: str
     jobs: list[FleetWorkflowJobResponse]
+
+
+class FleetDeploymentEventResponse(BaseModel):
+    """Public-safe persisted deployment evidence."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    sequence: int
+    event_type: str
+    schema_version: int
+    artifact_sha256: str
+    target_ids: list[str]
+    status: str
+    detail: str | None
+    recorded_at: str
 
 
 class FleetDeploymentResponse(BaseModel):
@@ -254,6 +285,7 @@ class FleetDeploymentResponse(BaseModel):
     verification: VerificationStatus
     verified: bool
     targets: list[FleetTargetResponse]
+    events: list[FleetDeploymentEventResponse] = Field(default_factory=list)
     request_summary: dict[str, object] | None = None
     idempotent: bool = False
     manifest_path: str | None = None
@@ -276,6 +308,32 @@ class FleetDeploymentResponse(BaseModel):
     error_code: str | None = None
     error_recovery: str | None = None
     retry_after_seconds: int | None = None
+
+
+class FleetDeploymentEventRequest(BaseModel):
+    """One bounded lifecycle event emitted by a trusted deployer."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    event_type: Literal[
+        "deployment_started",
+        "deployment_queued",
+        "deployment_applying",
+        "deployment_canary_started",
+        "deployment_canary_verified",
+        "deployment_rollout_started",
+        "deployment_rollout_verified",
+        "deployment_rollback_started",
+        "deployment_rollback_verified",
+        "deployment_rollback_failed",
+        "deployment_verified",
+        "deployment_failed",
+    ]
+    schema_version: int = Field(..., ge=1, le=10)
+    artifact_sha256: str = Field(..., min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$")
+    target_ids: list[str] = Field(..., min_length=1, max_length=12)
+    status: str = Field(..., min_length=1, max_length=64, pattern=r"^[a-z][a-z0-9_-]*$")
+    detail: str | None = Field(default=None, max_length=2_000)
 
 
 def _profile_response(color: str, shape: str) -> FleetProfileResponse:
@@ -315,6 +373,18 @@ def _manifest_commit_url(commit_sha: str | None) -> str | None:
     return f"https://github.com/{repository}/commit/{commit_sha}"
 
 
+def _workflow_step_response(step: WorkflowStepReceipt) -> FleetWorkflowStepResponse:
+    """Translate a bounded Actions step receipt into the public contract."""
+    return FleetWorkflowStepResponse(
+        number=step.number,
+        name=step.name,
+        status=step.status,
+        conclusion=step.conclusion,
+        started_at=step.started_at,
+        completed_at=step.completed_at,
+    )
+
+
 def _workflow_job_response(job: WorkflowJobReceipt) -> FleetWorkflowJobResponse:
     """Translate a bounded provider job receipt into the public contract."""
     return FleetWorkflowJobResponse(
@@ -326,6 +396,7 @@ def _workflow_job_response(job: WorkflowJobReceipt) -> FleetWorkflowJobResponse:
         completed_at=job.completed_at,
         url=job.workflow_url,
         failed_step=job.failed_step,
+        steps=[_workflow_step_response(step) for step in job.steps],
     )
 
 
@@ -341,6 +412,20 @@ def _workflow_response(run: WorkflowRunReceipt | None) -> FleetWorkflowResponse 
         created_at=run.created_at,
         updated_at=run.updated_at,
         jobs=[_workflow_job_response(job) for job in run.jobs],
+    )
+
+
+def _deployment_event_response(event: DeploymentEventRecord) -> FleetDeploymentEventResponse:
+    """Translate durable deployer evidence into the public timeline contract."""
+    return FleetDeploymentEventResponse(
+        sequence=event.sequence,
+        event_type=event.event_type,
+        schema_version=event.schema_version,
+        artifact_sha256=event.artifact_sha256,
+        target_ids=list(event.target_ids),
+        status=event.status,
+        detail=event.detail,
+        recorded_at=event.recorded_at,
     )
 
 
@@ -498,6 +583,7 @@ def _deployment_response(
         verification=verification,
         verified=verification == "verified",
         targets=targets,
+        events=[_deployment_event_response(event) for event in deployment.events],
         request_summary=deployment.request_summary,
         idempotent=idempotent,
         manifest_path=deployment.manifest_path,
@@ -953,6 +1039,43 @@ def queue_deployment(
 
 
 @router.post(
+    "/deployments/{deployment_id}/events",
+    response_model=FleetDeploymentResponse,
+)
+def append_deployment_event(
+    deployment_id: str,
+    payload: FleetDeploymentEventRequest,
+    store: FleetStoreDependency,
+    _: None = Depends(require_fleet_management_credential),
+) -> FleetDeploymentResponse:
+    """Persist trusted deployer evidence for public readback and reloads."""
+    try:
+        deployment = store.append_deployment_event(
+            deployment_id,
+            event_type=payload.event_type,
+            schema_version=payload.schema_version,
+            artifact_sha256=payload.artifact_sha256,
+            target_ids=payload.target_ids,
+            status=payload.status,
+            detail=payload.detail,
+        )
+        return _deployment_response(store, deployment)
+    except UnknownDeploymentError as exc:
+        raise _deployment_not_found(exc) from None
+    except (DeploymentConflictError, InvalidStateTransitionError) as exc:
+        raise _deployment_conflict(exc) from None
+    except UnknownTargetError as exc:
+        raise _target_not_found(exc) from None
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"code": "invalid_deployment_event", "message": str(exc)},
+        ) from None
+    except (OSError, sqlite3.Error, FleetStateError) as exc:
+        _state_unavailable(exc)
+
+
+@router.post(
     "/deployments/{deployment_id}/apply",
     response_model=FleetDeploymentResponse,
 )
@@ -1051,10 +1174,13 @@ __all__ = [
     "FLEET_API_PREFIX",
     "FLEET_MANAGEMENT_KEY_ENV",
     "FleetCapabilityResponse",
+    "FleetDeploymentEventRequest",
+    "FleetDeploymentEventResponse",
     "FleetDeploymentResponse",
     "FleetHealthResponse",
     "FleetReadResponse",
     "FleetTargetResponse",
+    "FleetWorkflowStepResponse",
     "get_fleet_state_store",
     "require_fleet_management_credential",
     "router",

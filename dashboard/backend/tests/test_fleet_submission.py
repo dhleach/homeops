@@ -16,6 +16,7 @@ from deploy_demo import (
     WorkflowDispatchReceipt,
     WorkflowJobReceipt,
     WorkflowRunReceipt,
+    WorkflowStepReceipt,
 )
 
 SUBMISSION = {
@@ -279,6 +280,16 @@ def test_public_read_reconciles_running_workflow_and_exposes_job_state(submissio
                 started_at="2026-09-26T12:00:01Z",
                 completed_at="2026-09-26T12:00:10Z",
                 workflow_url="https://github.com/dhleach/homeops/actions/runs/456/job/10",
+                steps=(
+                    WorkflowStepReceipt(
+                        number=1,
+                        name="Validate exact manifest before build gates",
+                        status="completed",
+                        conclusion="success",
+                        started_at="2026-09-26T12:00:02Z",
+                        completed_at="2026-09-26T12:00:09Z",
+                    ),
+                ),
             ),
         ),
     )
@@ -290,8 +301,48 @@ def test_public_read_reconciles_running_workflow_and_exposes_job_state(submissio
     assert body["status"] == "applying"
     assert body["workflow_status"] == "in_progress"
     assert body["workflow"]["jobs"][0]["name"] == "Validate manifest and build profile artifact"
+    assert body["workflow"]["jobs"][0]["steps"][0]["name"] == (
+        "Validate exact manifest before build gates"
+    )
     assert body["manifest_commit_url"].endswith("/commit/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee")
     assert body["targets"][0]["observed"] == {"color": "blue", "shape": "circle"}
+
+
+def test_protected_deployer_event_is_durable_and_visible_on_public_read(
+    submission_harness, monkeypatch
+) -> None:
+    client, store, _github = submission_harness
+    monkeypatch.setenv(fleet_api.FLEET_MANAGEMENT_KEY_ENV, "management-secret")
+    client.post("/deploy/api/deployments/submit", json=SUBMISSION)
+    digest = store.get_deployment("public-submit-001").profile_digest
+    event = {
+        "event_type": "deployment_started",
+        "schema_version": 1,
+        "artifact_sha256": digest,
+        "target_ids": ["test-vehicle-01"],
+        "status": "started",
+        "detail": "trusted deployer started",
+    }
+
+    first = client.post(
+        "/deploy/api/deployments/public-submit-001/events",
+        json=event,
+        headers={"Authorization": "Bearer management-secret"},
+    )
+    repeated = client.post(
+        "/deploy/api/deployments/public-submit-001/events",
+        json=event,
+        headers={"Authorization": "Bearer management-secret"},
+    )
+
+    assert first.status_code == 200
+    assert repeated.status_code == 200
+    assert first.json()["events"] == repeated.json()["events"]
+    assert first.json()["events"][0]["event_type"] == "deployment_started"
+    assert (
+        client.get("/deploy/api/deployments/public-submit-001").json()["events"]
+        == first.json()["events"]
+    )
 
 
 def test_failed_workflow_marks_deployment_failed_without_changing_observed_state(

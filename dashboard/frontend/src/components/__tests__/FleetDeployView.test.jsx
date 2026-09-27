@@ -78,6 +78,38 @@ function failedCanaryDeployment(deploymentId) {
     verification: "failed",
     verified: false,
     targets,
+    events: [
+      {
+        sequence: 1,
+        event_type: "deployment_canary_started",
+        schema_version: 1,
+        artifact_sha256: "a".repeat(64),
+        target_ids: ["test-vehicle-01"],
+        status: "applying",
+        detail: "verifying canary target test-vehicle-01",
+        recorded_at: "2026-09-27T16:00:06Z",
+      },
+      {
+        sequence: 2,
+        event_type: "deployment_canary_verified",
+        schema_version: 1,
+        artifact_sha256: "a".repeat(64),
+        target_ids: ["test-vehicle-01"],
+        status: "applying",
+        detail: "verified canary target test-vehicle-01",
+        recorded_at: "2026-09-27T16:00:10Z",
+      },
+      {
+        sequence: 3,
+        event_type: "deployment_failed",
+        schema_version: 1,
+        artifact_sha256: "a".repeat(64),
+        target_ids: ["test-vehicle-02"],
+        status: "failed",
+        detail: "readback failed for test-vehicle-02",
+        recorded_at: "2026-09-27T16:00:18Z",
+      },
+    ],
     request_summary: {
       deployment_id: deploymentId,
       environment: "test",
@@ -108,13 +140,33 @@ function failedCanaryDeployment(deploymentId) {
       updated_at: "2026-09-27T16:00:19Z",
       jobs: [{
         id: 1,
-        name: "Deploy immutable artifact to simulator",
+        name: "Validate manifest and build profile artifact",
         status: "completed",
         conclusion: "failure",
         started_at: "2026-09-27T16:00:05Z",
-        completed_at: "2026-09-27T16:00:18Z",
+        completed_at: "2026-09-27T16:00:08Z",
         url: "https://github.com/dhleach/homeops/actions/runs/901/job/1",
-        failed_step: "Verify fleet readback",
+        failed_step: "Validate exact manifest before build gates",
+        steps: [
+          {
+            number: 1,
+            name: "Validate exact manifest before build gates",
+            status: "completed",
+            conclusion: "failure",
+            started_at: "2026-09-27T16:00:06Z",
+            completed_at: "2026-09-27T16:00:08Z",
+          },
+        ],
+      }, {
+        id: 2,
+        name: "Deploy immutable artifact to simulator",
+        status: "completed",
+        conclusion: "skipped",
+        started_at: null,
+        completed_at: null,
+        url: "https://github.com/dhleach/homeops/actions/runs/901/job/2",
+        failed_step: null,
+        steps: [],
       }],
     },
     dispatch_status: "dispatched",
@@ -857,6 +909,12 @@ describe("FleetDeployView", () => {
     const first = render(<FleetDeployView apiUrl="https://api.homeops.now" />);
     expect(await screen.findByTestId("deployment-run-state")).toHaveTextContent(failedId);
     expect(screen.getByTestId("deployment-run-state")).toHaveTextContent("Verification failed");
+    expect(screen.getByTestId("deployment-timeline")).toBeInTheDocument();
+    expect(screen.getByTestId("github-actions-timeline")).toHaveTextContent("GitHub Actions jobs and steps");
+    expect(screen.getByTestId("github-actions-timeline")).toHaveTextContent("Validate exact manifest before build gates");
+    expect(screen.getByTestId("workflow-job-skipped")).toHaveTextContent("Skipped because an earlier GitHub Actions job did not complete successfully");
+    expect(screen.getByTestId("deployment-events-timeline")).toHaveTextContent("Canary Started");
+    expect(screen.getByTestId("deployment-events-timeline")).toHaveTextContent("TEST-02");
 
     fireEvent.change(screen.getByLabelText("Profile color"), { target: { value: "green" } });
 

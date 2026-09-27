@@ -203,7 +203,24 @@ def test_workflow_run_lookup_requires_exact_run_name_and_reads_jobs() -> None:
             "started_at": "2026-09-26T12:00:05Z",
             "completed_at": None,
             "html_url": "https://github.com/dhleach/homeops/actions/runs/9876/job/123",
-            "steps": [],
+            "steps": [
+                {
+                    "number": 1,
+                    "name": "Checkout trusted master code",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "started_at": "2026-09-26T12:00:01Z",
+                    "completed_at": "2026-09-26T12:00:02Z",
+                },
+                {
+                    "number": 2,
+                    "name": "Deploy artifact and verify fresh API readback",
+                    "status": "completed",
+                    "conclusion": "failure",
+                    "started_at": "2026-09-26T12:00:03Z",
+                    "completed_at": "2026-09-26T12:00:05Z",
+                },
+            ],
         }
     ]
 
@@ -214,6 +231,9 @@ def test_workflow_run_lookup_requires_exact_run_name_and_reads_jobs() -> None:
     assert receipt.status == "in_progress"
     assert receipt.jobs[0].name == "Deploy immutable artifact to simulator"
     assert receipt.jobs[0].status == "in_progress"
+    assert receipt.jobs[0].steps[0].name == "Checkout trusted master code"
+    assert receipt.jobs[0].steps[1].conclusion == "failure"
+    assert receipt.jobs[0].failed_step == "Deploy artifact and verify fresh API readback"
     assert any(
         "/actions/workflows/" in request.full_url and "event=workflow_dispatch" in request.full_url
         for request in harness.requests

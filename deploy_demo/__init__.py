@@ -24,6 +24,7 @@ from .deployment_spec import (
 )
 from .fleet_state import (
     DEFAULT_STATE_PATH,
+    DEPLOYMENT_EVENT_TYPES,
     DEPLOYMENT_STATUSES,
     DISPATCH_STATUSES,
     ROLLBACK_STATUSES,
@@ -34,6 +35,7 @@ from .fleet_state import (
     DeploymentAdmissionLimitError,
     DeploymentConflictError,
     DeploymentCooldownError,
+    DeploymentEventRecord,
     DeploymentState,
     DispatchClaimError,
     FleetProfile,
@@ -61,6 +63,7 @@ from .github_dispatch import (
     WorkflowDispatchReceipt,
     WorkflowJobReceipt,
     WorkflowRunReceipt,
+    WorkflowStepReceipt,
 )
 
 _DEPLOYER_EXPORTS = frozenset(
@@ -116,6 +119,7 @@ __all__ = [
     "supported_capabilities",
     "validate_deployment_spec",
     "DEFAULT_STATE_PATH",
+    "DEPLOYMENT_EVENT_TYPES",
     "DEPLOYMENT_STATUSES",
     "DISPATCH_STATUSES",
     "SIMULATED_VERIFICATION_FAILURE_PREFIX",
@@ -126,6 +130,7 @@ __all__ = [
     "DeploymentAdmissionLimitError",
     "DeploymentConflictError",
     "DeploymentCooldownError",
+    "DeploymentEventRecord",
     "DeploymentState",
     "DispatchClaimError",
     "FleetProfile",
@@ -151,6 +156,7 @@ __all__ = [
     "WorkflowDispatchReceipt",
     "WorkflowJobReceipt",
     "WorkflowRunReceipt",
+    "WorkflowStepReceipt",
     "API_BASE_URL_ENV",
     "API_KEY_ENV",
     "ArtifactIdentityError",

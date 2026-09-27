@@ -51,7 +51,12 @@ React + Vite + Tailwind single-page dashboard for `homeops.now`.
   The bounded previous-attempt record retains status, workflow/error evidence,
   target verification, timestamps, and manifest/workflow links across reloads.
   Run polling continues until the workflow conclusion and job rows are current
-  together, including after a reload. The route remains
+  together, including after a reload. The run panel also renders a traceable deployment timeline: GitHub Actions
+  jobs expose their real step conclusions, skipped downstream jobs are labeled
+  as skipped after an upstream failure, and server-recorded Python deployer
+  events retain their target IDs, status, detail, and recording order across
+  reloads. Green evidence is shown only when it comes from an Actions step or
+  stored simulator event. The route remains
   bounded at phone widths, exposes visible keyboard focus, explains disabled
   controls, announces live target/run changes, and uses contrast-checked text
   labels instead of color alone. It sets a route-specific browser title and

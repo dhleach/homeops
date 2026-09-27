@@ -389,6 +389,46 @@ def test_same_deployment_and_profile_digest_are_idempotent(tmp_path, fixed_clock
     assert len(store.list_vehicles()) == 12
 
 
+def test_deployment_events_are_durable_and_idempotent(tmp_path, fixed_clock) -> None:
+    path = tmp_path / "fleet.sqlite3"
+    store = FleetStateStore(path, clock=fixed_clock)
+    spec = valid_spec(
+        deployment_id="demo-event-history",
+        target_ids=["test-vehicle-01", "test-vehicle-02"],
+        profile={"color": "green", "shape": "square"},
+    )
+    queued = store.queue_deployment(spec).deployment
+
+    first = store.append_deployment_event(
+        spec.deployment_id,
+        event_type="deployment_canary_started",
+        schema_version=1,
+        artifact_sha256=queued.profile_digest,
+        target_ids=["test-vehicle-01"],
+        status="applying",
+        detail="verifying canary target test-vehicle-01",
+    )
+    repeated = store.append_deployment_event(
+        spec.deployment_id,
+        event_type="deployment_canary_started",
+        schema_version=1,
+        artifact_sha256=queued.profile_digest,
+        target_ids=["test-vehicle-01"],
+        status="applying",
+        detail="verifying canary target test-vehicle-01",
+    )
+
+    assert len(first.events) == 1
+    assert repeated.events == first.events
+    assert first.events[0].sequence == 1
+    assert first.events[0].target_ids == ("test-vehicle-01",)
+
+    reopened = FleetStateStore(path, clock=fixed_clock)
+    persisted = reopened.get_deployment(spec.deployment_id)
+    assert persisted.events == first.events
+    assert persisted.to_dict()["events"][0]["event_type"] == "deployment_canary_started"
+
+
 def test_same_deployment_id_with_new_profile_fails_closed(tmp_path, fixed_clock) -> None:
     store = FleetStateStore(tmp_path / "fleet.sqlite3", clock=fixed_clock)
     store.queue_deployment(valid_spec(deployment_id="demo-collision"))

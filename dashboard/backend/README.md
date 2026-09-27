@@ -15,9 +15,10 @@ interface at `https://api.homeops.now`.
 | `GET /deploy/api/health` | Read-only Fleet Deploy Lab simulator readiness |
 | `GET /deploy/api/fleet` | Anonymous desired/observed state for all twelve explicitly simulated targets |
 | `GET /deploy/api/fleet/{target_id}` | Anonymous read of one simulated target |
-| `GET /deploy/api/deployments/{deployment_id}` | Anonymous fresh deployment state, GitHub Actions run/jobs, timestamps, and verification result |
+| `GET /deploy/api/deployments/{deployment_id}` | Anonymous fresh deployment state, GitHub Actions jobs/steps, durable deployer events, timestamps, and verification result |
 | `POST /deploy/api/deployments/submit` | Anonymous constrained submission; commits one manifest and dispatches the trusted workflow through the server-only GitHub adapter |
 | `POST /deploy/api/deployments` | Protected desired-state queue operation |
+| `POST /deploy/api/deployments/{deployment_id}/events` | Protected idempotent append of bounded deployer lifecycle evidence |
 | `POST /deploy/api/deployments/{deployment_id}/apply` | Protected simulator apply/observation operation; accepts a target subset only for validated Python canary phases and is safe to replay |
 | `GET /metrics` | Internal diagnostic abuse/cost metrics for EC2-local Prometheus; not a public route |
 | `GET /openapi.json` | Generated API contract |
@@ -177,8 +178,12 @@ the read route resolves the exact `run-name`-identified run after GitHub creates
 it and then reads the run's jobs.
 
 The public deployment read reconciles Actions state with the simulator on every
-poll. It shows real run/job statuses, conclusions, timestamps, and failed-step
-details. A completed Actions failure marks the deployment failed without
+poll. It shows real run/job/step statuses, conclusions, timestamps, and
+failed-step details, plus server-ordered deployer events recorded by the
+trusted Python client. Event records are bound to the validated artifact and
+target set, deduplicated by their canonical lifecycle fields, and retained in
+the SQLite deployment row so a reload reconstructs the same evidence. A
+completed Actions failure marks the deployment failed without
 copying desired profiles into observed state. A completed Actions success is
 accepted only when the observed simulator digests already match every target;
 the API never advances a run because a client timer elapsed. Public submission
