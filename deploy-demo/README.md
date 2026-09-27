@@ -152,6 +152,23 @@ not change the `DeploymentSpec`, fleet API payload, or reported simulator state.
 - Safety gate: no API schema, credential, workflow, Home Assistant, thermostat,
   Pi/EC2 deployment, or normal release path is changed.
 
+## DEFECT 03 — collapsed implementation source disclosure
+
+The implementation source view is collapsed on first load so the resolved
+targets and Deploy control remain visible without excessive scrolling. The
+native disclosure remains keyboard and pointer accessible; opening it exposes
+the commit-pinned Python/Ansible tabs and read-only source without changing the
+trusted implementation selection or submitting the form. Desktop and narrow
+viewport regression coverage protects the initial collapsed state, disclosure,
+source-tab access, and Deploy-button visibility.
+
+- Terraform apply required: **No**
+- Manual console/setup: **None**
+- Terraform resources changed: **None**
+- Sequence and owner: Derek reviews and merges the frontend-only implementation.
+- Safety gate: no API schema, credential, workflow, Home Assistant, thermostat,
+  Pi/EC2 deployment, or normal release path is changed.
+
 ## REV 05 — generated request identifiers and safe retries
 
 The Fleet Deploy form now generates a unique attempt ID with browser-side
