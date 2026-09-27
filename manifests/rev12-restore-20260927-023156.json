@@ -1,0 +1,1 @@
+{"deployment_id":"rev12-restore-20260927-023156","environment":"test","failure_mode":"abort","implementation":"python","profile":{"color":"blue","shape":"circle"},"schema_version":1,"strategy":"all_at_once"}
