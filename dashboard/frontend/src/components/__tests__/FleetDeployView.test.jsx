@@ -257,6 +257,10 @@ describe("FleetDeployView", () => {
     render(<FleetDeployView apiUrl="https://api.homeops.now" />);
 
     await screen.findAllByTestId("fleet-target-card");
+    const disclosure = screen.getByTestId("implementation-source-disclosure");
+    expect(disclosure).not.toHaveAttribute("open");
+    fireEvent.click(disclosure.querySelector("summary"));
+    expect(disclosure).toHaveAttribute("open");
     expect(screen.getByRole("tab", { name: "Python deployer" })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByTestId("implementation-source-code")).toHaveTextContent("class FleetDeployer");
     expect(screen.getByRole("link", { name: "Open Python deployer on GitHub" })).toHaveAttribute(
@@ -275,6 +279,30 @@ describe("FleetDeployView", () => {
       "https://github.com/dhleach/homeops/blob/master/ansible/deploy.yml",
     );
     expect(screen.getByTestId("deployment-spec-preview")).toHaveTextContent('"implementation": "ansible"');
+  });
+
+  it("collapses source by default and keeps the deploy control reachable through keyboard disclosure", async () => {
+    render(<FleetDeployView apiUrl="https://api.homeops.now" />);
+
+    await screen.findAllByTestId("fleet-target-card");
+    const disclosure = screen.getByTestId("implementation-source-disclosure");
+    const summary = disclosure.querySelector("summary");
+    expect(summary).not.toBeNull();
+    expect(disclosure).not.toHaveAttribute("open");
+    expect(screen.getByTestId("deployment-config-panel")).toHaveClass("min-w-0");
+    expect(screen.getByRole("button", { name: "Deploy to 4 test vehicles" })).toBeInTheDocument();
+
+    summary.focus();
+    fireEvent.keyDown(summary, { key: "Enter" });
+    expect(disclosure).toHaveAttribute("open");
+    expect(screen.getByRole("tab", { name: "Python deployer" })).toBeInTheDocument();
+
+    const environment = screen.getByLabelText("Environment");
+    fireEvent.click(screen.getByRole("tab", { name: "Ansible playbook" }));
+    await waitFor(() => expect(screen.getByLabelText("Implementation")).toHaveValue("ansible"));
+    expect(environment).toHaveValue("test");
+    expect(screen.getByRole("button", { name: "Deploy to 4 test vehicles" })).toBeInTheDocument();
+    expect(fetch.mock.calls.filter(([url]) => url.endsWith("/deployments/submit"))).toHaveLength(0);
   });
 
   it("describes the live deployment action and target-aware control", async () => {
