@@ -1,0 +1,1 @@
+{"deployment_id":"demo-6a8106cab17544838347aee13d5ff00a","environment":"test","failure_mode":"abort","failure_target_id":"test-vehicle-01","implementation":"python","profile":{"color":"green","shape":"square"},"schema_version":1,"strategy":"canary"}
