@@ -472,6 +472,23 @@ desired/observed state instead of becoming a false success.
 - Sequence and owner: Derek reviews and merges PR17; no production deployment or simulator mutation is part of the code change itself.
 - Safety gate: rollback accepts only bounded finite profiles for selected simulated targets and cannot reach Home Assistant, the normal HomeOps release path, Pi, or EC2.
 
+## DEFECT 01 — clear stale Fleet busy capacity after a failed canary
+
+The public submission boundary now reconciles every queued/applying dispatched
+workflow before counting active capacity. This covers the case where editing
+the next request or reloading stops the browser from polling the older attempt
+while its Actions run finishes. Terminal success and failure transitions also
+clear the deployment's target reservations atomically; target status, desired /
+observed drift, and pending later-canary evidence remain intact. Repeated
+reconciliation and a backend restart are safe, and a new retry or independent
+baseline restore is no longer blocked by a stale reservation.
+
+- Terraform apply required: **No**
+- Manual console/setup required: **None beyond the existing Fleet Deploy simulator/API credentials**
+- Terraform resources changed: **None**
+- Sequence and owner: Derek reviews and merges the defect-fix PR; no production deployment or simulator mutation is part of the code change itself.
+- Safety gate: reconciliation reads only bounded simulated workflow/state records and releases only reservations owned by terminal simulated deployments; Home Assistant, the normal HomeOps release path, Pi, and EC2 remain outside this boundary.
+
 ## REV 02 — selected implementation live execution
 
 The trusted simulator job reads the already validated `implementation` field

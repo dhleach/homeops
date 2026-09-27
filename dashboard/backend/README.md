@@ -181,7 +181,13 @@ poll. It shows real run/job statuses, conclusions, timestamps, and failed-step
 details. A completed Actions failure marks the deployment failed without
 copying desired profiles into observed state. A completed Actions success is
 accepted only when the observed simulator digests already match every target;
-the API never advances a run because a client timer elapsed.
+the API never advances a run because a client timer elapsed. Public submission
+also performs a bounded reconciliation of queued/applying dispatched runs
+before checking the active-deployment limit, so editing a form or reloading
+cannot strand capacity merely because the browser stopped polling the older
+attempt. Terminal success/failure transitions release target reservations
+atomically while preserving target-level drift, failed, and pending evidence;
+the cleanup is idempotent across repeated reads and backend restarts.
 
 The trusted workflow's downstream deploy job consumes only the validated
 profile/provenance artifact and the separate `FLEET_DEPLOY_API_KEY` Actions

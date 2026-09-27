@@ -596,7 +596,11 @@ class FleetDeployer:
                     raise DeploymentVerificationError(
                         f"{phase}.targets[{index}].status is not succeeded"
                     )
-                if target.get("active_deployment_id") != spec.deployment_id:
+                active_deployment_id = target.get("active_deployment_id")
+                allowed_active_deployment_ids = {spec.deployment_id}
+                if payload.get("status") == "succeeded":
+                    allowed_active_deployment_ids.add(None)
+                if active_deployment_id not in allowed_active_deployment_ids:
                     raise DeploymentVerificationError(
                         f"{phase}.targets[{index}].active_deployment_id mismatch"
                     )

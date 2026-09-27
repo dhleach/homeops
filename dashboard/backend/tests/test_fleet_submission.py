@@ -28,6 +28,20 @@ SUBMISSION = {
     "failure_mode": "abort",
 }
 
+CANARY_FAILURE_SUBMISSION = {
+    **SUBMISSION,
+    "deployment_id": "public-canary-failure-001",
+    "target_ids": [
+        "test-vehicle-01",
+        "test-vehicle-02",
+        "test-vehicle-03",
+        "test-vehicle-04",
+    ],
+    "profile": {"color": "green", "shape": "hexagon"},
+    "strategy": "canary",
+    "failure_target_id": "test-vehicle-02",
+}
+
 
 class FakeGitHub:
     """Observable Contents/Actions adapter with a dispatch failure switch."""
@@ -59,9 +73,18 @@ class FakeGitHub:
         )
 
     def read_workflow_run(self, workflow_run_id: int) -> WorkflowRunReceipt:
-        assert self.workflow_run is not None
-        assert self.workflow_run.workflow_run_id == workflow_run_id
-        return self.workflow_run
+        if self.workflow_run is not None:
+            assert self.workflow_run.workflow_run_id == workflow_run_id
+            return self.workflow_run
+        return WorkflowRunReceipt(
+            workflow_run_id=workflow_run_id,
+            workflow_url=f"https://github.com/dhleach/homeops/actions/runs/{workflow_run_id}",
+            status="in_progress",
+            conclusion=None,
+            created_at="2026-09-26T12:00:00Z",
+            updated_at="2026-09-26T12:00:30Z",
+            jobs=(),
+        )
 
     def find_workflow_run(self, _deployment_id: str) -> WorkflowRunReceipt | None:
         return self.workflow_run
@@ -306,6 +329,58 @@ def test_failed_workflow_marks_deployment_failed_without_changing_observed_state
     assert "Deploy artifact and verify fresh API readback" in body["error"]
     assert body["targets"][0]["observed"] == baseline
     assert body["targets"][0]["desired"] != body["targets"][0]["observed"]
+
+
+def test_new_submission_reconciles_terminal_canary_before_capacity_check(
+    submission_harness, monkeypatch
+) -> None:
+    client, store, github = submission_harness
+    monkeypatch.setenv(fleet_api.FLEET_MAX_ACTIVE_ENV, "1")
+
+    first = client.post("/deploy/api/deployments/submit", json=CANARY_FAILURE_SUBMISSION)
+    assert first.status_code == 202
+    store.apply_deployment_targets(CANARY_FAILURE_SUBMISSION["deployment_id"], ["test-vehicle-01"])
+    store.apply_deployment_targets(
+        CANARY_FAILURE_SUBMISSION["deployment_id"],
+        ["test-vehicle-02", "test-vehicle-03", "test-vehicle-04"],
+    )
+    github.workflow_run = _workflow_run(
+        status="completed",
+        conclusion="failure",
+        jobs=(
+            WorkflowJobReceipt(
+                job_id=12,
+                name="Deploy immutable artifact to simulator",
+                status="completed",
+                conclusion="failure",
+                started_at="2026-09-26T12:00:11Z",
+                completed_at="2026-09-26T12:00:20Z",
+                workflow_url="https://github.com/dhleach/homeops/actions/runs/456/job/12",
+                failed_step="Deploy artifact and verify fresh API readback",
+            ),
+        ),
+    )
+
+    second = client.post(
+        "/deploy/api/deployments/submit",
+        json={
+            **SUBMISSION,
+            "deployment_id": "public-after-canary-failure",
+            "target_ids": ["stage-vehicle-01"],
+            "profile": {"color": "orange", "shape": "triangle"},
+        },
+    )
+
+    assert second.status_code == 202
+    assert second.json()["deployment_id"] == "public-after-canary-failure"
+    assert store.get_deployment(CANARY_FAILURE_SUBMISSION["deployment_id"]).status == "failed"
+    assert all(
+        store.get_vehicle(target_id).active_deployment_id is None
+        for target_id in CANARY_FAILURE_SUBMISSION["target_ids"]
+    )
+    assert store.get_vehicle("stage-vehicle-01").active_deployment_id == (
+        "public-after-canary-failure"
+    )
 
 
 def test_successful_workflow_requires_verified_observed_state(submission_harness) -> None:

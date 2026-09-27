@@ -605,6 +605,21 @@ class FleetStateStore:
         finally:
             connection.close()
 
+    def list_active_deployments(self) -> tuple[DeploymentState, ...]:
+        """Return queued/applying deployments that may still hold capacity."""
+        connection = self._read_connection()
+        try:
+            rows = connection.execute(
+                """
+                SELECT * FROM fleet_deployments
+                WHERE status IN ('queued', 'applying')
+                ORDER BY created_at, deployment_id
+                """
+            ).fetchall()
+            return tuple(self._deployment_from_row(row) for row in rows)
+        finally:
+            connection.close()
+
     @staticmethod
     def _validate_manifest_metadata(manifest_path: str, manifest_sha256: str) -> None:
         """Keep persisted manifest identity bounded and path-safe."""
@@ -638,7 +653,9 @@ class FleetStateStore:
         placeholders = ", ".join("?" for _ in target_ids)
         active_rows = connection.execute(
             f"SELECT target_id, active_deployment_id FROM fleet_vehicles "
-            f"WHERE target_id IN ({placeholders}) AND status IN ('pending', 'applying')",
+            f"WHERE target_id IN ({placeholders}) "
+            "AND status IN ('pending', 'applying') "
+            "AND active_deployment_id IS NOT NULL",
             target_ids,
         ).fetchall()
         conflicts = [f"{row['target_id']} ({row['active_deployment_id']})" for row in active_rows]
@@ -766,6 +783,7 @@ class FleetStateStore:
             if existing.status == "failed":
                 raise InvalidStateTransitionError(f"deployment {deployment_id} is already failed")
             if existing.status == "succeeded":
+                self._release_deployment_reservations(connection, deployment_id, timestamp)
                 return existing
             failure_target_id = _failure_target_id(existing)
             failure_message = (
@@ -907,6 +925,8 @@ class FleetStateStore:
                 """,
                 (next_status, timestamp, deployment_id),
             )
+            if next_status == "succeeded":
+                self._release_deployment_reservations(connection, deployment_id, timestamp)
             updated = connection.execute(
                 "SELECT * FROM fleet_deployments WHERE deployment_id = ?",
                 (deployment_id,),
@@ -1006,6 +1026,7 @@ class FleetStateStore:
                     ),
                 )
 
+            self._release_deployment_reservations(connection, deployment_id, timestamp)
             connection.execute(
                 """
                 UPDATE fleet_deployments
@@ -1087,6 +1108,22 @@ class FleetStateStore:
         timestamp = _now_iso(lambda: now)
 
         with self._transaction() as connection:
+            # Recover reservations written by older runtimes or a process that
+            # reached terminal deployment state just before a restart.  The
+            # terminal deployment row is authoritative; target reservations
+            # must not strand the next admission.
+            connection.execute(
+                """
+                UPDATE fleet_vehicles
+                SET active_deployment_id = NULL, updated_at = ?
+                WHERE active_deployment_id IN (
+                    SELECT deployment_id
+                    FROM fleet_deployments
+                    WHERE status IN ('succeeded', 'failed')
+                )
+                """,
+                (timestamp,),
+            )
             row = connection.execute(
                 "SELECT * FROM fleet_deployments WHERE deployment_id = ?",
                 (spec.deployment_id,),
@@ -1390,6 +1427,7 @@ class FleetStateStore:
             existing = self._deployment_from_row(row)
             if existing.status in ("succeeded", "failed"):
                 if existing.status == status and existing.error == error:
+                    self._release_deployment_reservations(connection, deployment_id, timestamp)
                     return existing
                 raise InvalidStateTransitionError(
                     f"deployment {deployment_id} is already {existing.status}"
@@ -1479,6 +1517,7 @@ class FleetStateStore:
                     """,
                     (timestamp, *target_ids, deployment_id),
                 )
+                self._release_deployment_reservations(connection, deployment_id, timestamp)
             elif status == "failed":
                 preserve_partial = (existing.error or "").startswith(
                     SIMULATED_VERIFICATION_FAILURE_PREFIX
@@ -1494,6 +1533,7 @@ class FleetStateStore:
                     """,
                     (error, timestamp, *target_ids, deployment_id),
                 )
+                self._release_deployment_reservations(connection, deployment_id, timestamp)
             else:
                 vehicle_status = "pending" if status == "queued" else "applying"
                 if is_canary and status == "applying":
@@ -1529,6 +1569,22 @@ class FleetStateStore:
             ).fetchone()
             assert updated is not None
             return self._deployment_from_row(updated)
+
+    @staticmethod
+    def _release_deployment_reservations(
+        connection: sqlite3.Connection,
+        deployment_id: str,
+        timestamp: str,
+    ) -> None:
+        """Release target reservations when a deployment reaches a terminal state."""
+        connection.execute(
+            """
+            UPDATE fleet_vehicles
+            SET active_deployment_id = NULL, updated_at = ?
+            WHERE active_deployment_id = ?
+            """,
+            (timestamp, deployment_id),
+        )
 
 
 __all__ = [
