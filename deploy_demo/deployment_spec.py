@@ -29,6 +29,9 @@ SHAPES = ("circle", "hexagon", "square", "triangle")
 IMPLEMENTATIONS = ("python", "ansible")
 STRATEGIES = ("all_at_once", "rolling", "canary")
 FAILURE_MODES = ("abort", "rollback")
+OPERATIONS = ("deploy", "reset")
+DEFAULT_OPERATION = "deploy"
+RESET_OPERATION = "reset"
 
 # Only these combinations have a real, exercised execution path today.  Keep
 # the reserved enum values in the contract so a later rollout can add them
@@ -63,6 +66,7 @@ _TOP_LEVEL_KEYS = frozenset(
         "failure_mode",
         "failure_target_id",
         "implementation",
+        "operation",
         "profile",
         "schema_version",
         "strategy",
@@ -158,6 +162,7 @@ class DeploymentSpec:
     strategy: str
     failure_mode: str
     failure_target_id: str | None = None
+    operation: str = DEFAULT_OPERATION
     schema_version: int = SCHEMA_VERSION
     environment: str | None = None
     target_ids: tuple[str, ...] | None = None
@@ -180,6 +185,8 @@ class DeploymentSpec:
             raise _error("strategy", f"must be one of: {', '.join(STRATEGIES)}")
         if self.failure_mode not in FAILURE_MODES:
             raise _error("failure_mode", f"must be one of: {', '.join(FAILURE_MODES)}")
+        if self.operation not in OPERATIONS:
+            raise _error("operation", f"must be one of: {', '.join(OPERATIONS)}")
         if self.failure_mode not in _FAILURE_MODES_BY_STRATEGY[self.strategy]:
             allowed = ", ".join(sorted(_FAILURE_MODES_BY_STRATEGY[self.strategy]))
             raise _error(
@@ -225,6 +232,18 @@ class DeploymentSpec:
                 "failure_target_id",
                 "must be one of the selected deployment targets",
             )
+        if self.operation == RESET_OPERATION:
+            if self.implementation != "python":
+                raise _error("operation", "reset requires the verified Python implementation")
+            if self.strategy != "all_at_once" or self.failure_mode != "abort":
+                raise _error(
+                    "operation",
+                    "reset requires all_at_once strategy and abort failure mode",
+                )
+            if self.failure_target_id is not None:
+                raise _error("operation", "reset cannot inject a verification failure")
+            if self.expanded_target_ids != TARGET_ORDER:
+                raise _error("operation", "reset must target the complete simulated fleet")
 
     @property
     def expanded_target_ids(self) -> tuple[str, ...]:
@@ -244,6 +263,8 @@ class DeploymentSpec:
             "schema_version": self.schema_version,
             "strategy": self.strategy,
         }
+        if self.operation != DEFAULT_OPERATION:
+            payload["operation"] = self.operation
         if self.failure_target_id is not None:
             payload["failure_target_id"] = self.failure_target_id
         if self.environment is not None:
@@ -291,6 +312,7 @@ def validate_deployment_spec(value: object) -> DeploymentSpec:
     failure_target_id: str | None = None
     if "failure_target_id" in value and value["failure_target_id"] is not None:
         failure_target_id = _require_string(value["failure_target_id"], "failure_target_id")
+    operation = _require_enum(value.get("operation", DEFAULT_OPERATION), "operation", OPERATIONS)
 
     selectors = [key for key in ("environment", "target_ids") if key in value]
     if len(selectors) != 1:
@@ -310,6 +332,7 @@ def validate_deployment_spec(value: object) -> DeploymentSpec:
         strategy=strategy,
         failure_mode=failure_mode,
         failure_target_id=failure_target_id,
+        operation=operation,
         schema_version=schema_version,
         environment=environment,
         target_ids=target_ids,

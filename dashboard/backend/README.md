@@ -15,11 +15,12 @@ interface at `https://api.homeops.now`.
 | `GET /deploy/api/health` | Read-only Fleet Deploy Lab simulator readiness |
 | `GET /deploy/api/fleet` | Anonymous desired/observed state for all twelve explicitly simulated targets |
 | `GET /deploy/api/fleet/{target_id}` | Anonymous read of one simulated target |
+| `GET /deploy/api/deployments/history` | Anonymous bounded recent deployment history with selector, implementation, artifact digest, outcome, timestamp, and run link |
 | `GET /deploy/api/deployments/{deployment_id}` | Anonymous fresh deployment state, GitHub Actions jobs/steps, durable deployer events, timestamps, and verification result |
 | `POST /deploy/api/deployments/submit` | Anonymous constrained submission; commits one manifest and dispatches the trusted workflow through the server-only GitHub adapter |
 | `POST /deploy/api/deployments` | Protected desired-state queue operation |
 | `POST /deploy/api/deployments/{deployment_id}/events` | Protected idempotent append of bounded deployer lifecycle evidence |
-| `POST /deploy/api/deployments/{deployment_id}/apply` | Protected simulator apply/observation operation; accepts a target subset only for validated Python canary phases and is safe to replay |
+| `POST /deploy/api/deployments/{deployment_id}/apply` | Protected simulator apply/observation operation; accepts a target subset only for validated Python canary phases, executes the validated full-fleet reset operation, and is safe to replay |
 | `GET /metrics` | Internal diagnostic abuse/cost metrics for EC2-local Prometheus; not a public route |
 | `GET /openapi.json` | Generated API contract |
 
@@ -176,6 +177,22 @@ ID, so a recovery request cannot create a second manifest commit. The backend
 does not guess a workflow-run URL when the dispatch endpoint returns `204`;
 the read route resolves the exact `run-name`-identified run after GitHub creates
 it and then reads the run's jobs.
+
+`GET /deploy/api/deployments/history` returns a bounded newest-first summary
+from the durable SQLite deployment rows. It includes the request selector,
+implementation, profile-artifact digest, outcome, timestamps, manifest commit,
+and exact workflow URL when one is known. The endpoint is anonymous and
+read-only; selecting a row in the frontend then reads the full deployment by
+its durable ID.
+
+The shared `DeploymentSpec` also accepts the closed `operation: "reset"` value
+only for a full twelve-target Python all-at-once abort request. Reset admission
+uses the same client cooldown, active-run limit, manifest commit, trusted
+workflow, and protected apply boundary as an ordinary deployment. The protected
+reset apply restores each target's deterministic baseline profile only after
+workflow execution reaches the simulator, and the default
+`FLEET_DEPLOY_RESET_DAILY_CAP=1` cap is enforced atomically in SQLite per UTC
+day. A reset never writes the simulator database directly from the browser.
 
 The public deployment read reconciles Actions state with the simulator on every
 poll. It shows real run/job/step statuses, conclusions, timestamps, and

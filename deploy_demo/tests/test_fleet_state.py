@@ -8,9 +8,11 @@ from datetime import UTC, datetime
 import pytest
 
 from deploy_demo import (
+    TARGET_ORDER,
     DeploymentAdmissionLimitError,
     DeploymentConflictError,
     DeploymentCooldownError,
+    DeploymentDailyLimitError,
     FleetStateStore,
     UnknownDeploymentError,
     UnknownTargetError,
@@ -427,6 +429,89 @@ def test_deployment_events_are_durable_and_idempotent(tmp_path, fixed_clock) -> 
     persisted = reopened.get_deployment(spec.deployment_id)
     assert persisted.events == first.events
     assert persisted.to_dict()["events"][0]["event_type"] == "deployment_canary_started"
+
+
+def test_recent_deployment_history_is_durable_and_newest_first(tmp_path, fixed_clock) -> None:
+    path = tmp_path / "fleet.sqlite3"
+    store = FleetStateStore(path, clock=fixed_clock)
+    first = valid_spec(deployment_id="demo-history-first")
+    second = valid_spec(deployment_id="demo-history-second", target_ids=["stage-vehicle-01"])
+
+    store.queue_deployment(first)
+    store.mark_deployment_status(first.deployment_id, "failed", error="first failed")
+    store.queue_deployment(second)
+
+    history = store.list_deployments()
+    assert [deployment.deployment_id for deployment in history[:2]] == [
+        second.deployment_id,
+        first.deployment_id,
+    ]
+    reopened = FleetStateStore(path, clock=fixed_clock)
+    assert [deployment.deployment_id for deployment in reopened.list_deployments()] == [
+        second.deployment_id,
+        first.deployment_id,
+    ]
+
+
+def test_reset_restores_every_target_to_the_readable_baseline(tmp_path, fixed_clock) -> None:
+    store = FleetStateStore(tmp_path / "fleet.sqlite3", clock=fixed_clock)
+    spec = valid_spec(
+        deployment_id="demo-reset",
+        operation="reset",
+        environment=None,
+        target_ids=list(reversed(TARGET_ORDER)),
+    )
+
+    queued = store.queue_deployment(spec).deployment
+    assert queued.status == "queued"
+    assert store.get_vehicle("test-vehicle-01").desired_profile.to_dict() == {
+        "color": "blue",
+        "shape": "circle",
+    }
+    completed = store.reset_deployment_targets(spec.deployment_id)
+
+    assert completed.status == "succeeded"
+    assert all(
+        vehicle.status == "succeeded"
+        and vehicle.active_deployment_id is None
+        and vehicle.desired_profile == vehicle.observed_profile
+        for vehicle in store.list_vehicles()
+    )
+
+
+def test_reset_daily_admission_cap_is_atomic(tmp_path, fixed_clock) -> None:
+    store = FleetStateStore(tmp_path / "fleet.sqlite3", clock=fixed_clock)
+    reset = valid_spec(
+        deployment_id="demo-reset-cap-1",
+        operation="reset",
+        environment=None,
+        target_ids=list(TARGET_ORDER),
+    )
+    store.admit_public_deployment(
+        reset,
+        client_ip="198.51.100.10",
+        manifest_path="manifests/demo-reset-cap-1.json",
+        manifest_sha256="a" * 64,
+        cooldown_seconds=0,
+        max_active=2,
+        reset_daily_cap=1,
+    )
+
+    with pytest.raises(DeploymentDailyLimitError):
+        store.admit_public_deployment(
+            valid_spec(
+                deployment_id="demo-reset-cap-2",
+                operation="reset",
+                environment=None,
+                target_ids=list(TARGET_ORDER),
+            ),
+            client_ip="198.51.100.10",
+            manifest_path="manifests/demo-reset-cap-2.json",
+            manifest_sha256="b" * 64,
+            cooldown_seconds=0,
+            max_active=2,
+            reset_daily_cap=1,
+        )
 
 
 def test_same_deployment_id_with_new_profile_fails_closed(tmp_path, fixed_clock) -> None:

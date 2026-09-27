@@ -11,6 +11,7 @@ import pytest
 
 from deploy_demo.deployment_spec import (
     CAPABILITY_MATRIX,
+    TARGET_ORDER,
     TARGETS_BY_ENVIRONMENT,
     DeploymentSpecError,
     canonicalize_deployment_spec,
@@ -144,6 +145,36 @@ def test_round_trip_from_normalized_dict() -> None:
     spec = validate_deployment_spec(valid_spec(environment=None, target_ids=["test-vehicle-03"]))
 
     assert validate_deployment_spec(spec.to_dict()) == spec
+
+
+def test_reset_is_a_full_fleet_python_deployment_operation() -> None:
+    spec = validate_deployment_spec(
+        valid_spec(
+            operation="reset",
+            environment=None,
+            target_ids=list(reversed(TARGET_ORDER)),
+        )
+    )
+
+    assert spec.operation == "reset"
+    assert spec.expanded_target_ids == TARGET_ORDER
+    assert validate_deployment_spec(spec.to_dict()) == spec
+
+
+def test_reset_rejects_partial_or_unsafe_execution_choices() -> None:
+    with pytest.raises(DeploymentSpecError, match="complete simulated fleet"):
+        validate_deployment_spec(
+            valid_spec(operation="reset", environment=None, target_ids=["test-vehicle-01"])
+        )
+    with pytest.raises(DeploymentSpecError, match="reset requires the verified Python"):
+        validate_deployment_spec(
+            valid_spec(
+                operation="reset",
+                environment=None,
+                target_ids=list(TARGET_ORDER),
+                implementation="ansible",
+            )
+        )
 
 
 @pytest.mark.parametrize(

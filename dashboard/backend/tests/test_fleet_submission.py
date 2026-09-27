@@ -10,6 +10,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from deploy_demo import (
+    TARGET_ORDER,
     FleetStateStore,
     GitHubFleetError,
     ManifestCommitReceipt,
@@ -17,6 +18,7 @@ from deploy_demo import (
     WorkflowJobReceipt,
     WorkflowRunReceipt,
     WorkflowStepReceipt,
+    validate_deployment_spec,
 )
 
 SUBMISSION = {
@@ -41,6 +43,17 @@ CANARY_FAILURE_SUBMISSION = {
     "profile": {"color": "green", "shape": "hexagon"},
     "strategy": "canary",
     "failure_target_id": "test-vehicle-02",
+}
+
+RESET_SUBMISSION = {
+    "schema_version": 1,
+    "deployment_id": "public-reset-001",
+    "target_ids": list(TARGET_ORDER),
+    "profile": {"color": "blue", "shape": "circle"},
+    "implementation": "python",
+    "strategy": "all_at_once",
+    "failure_mode": "abort",
+    "operation": "reset",
 }
 
 
@@ -142,6 +155,70 @@ def test_public_submission_commits_once_and_dispatches_matching_identity(
     assert deployment.request_summary == body["request_summary"]
     assert github.dispatch_calls[0] == ("public-submit-001", "e" * 40)
     assert "FLEET_DEPLOY_API_KEY" not in response.text
+
+
+def test_recent_history_exposes_durable_run_identity(submission_harness) -> None:
+    client, store, _github = submission_harness
+
+    submitted = client.post("/deploy/api/deployments/submit", json=SUBMISSION)
+    history = client.get("/deploy/api/deployments/history")
+
+    assert submitted.status_code == 202
+    assert history.status_code == 200
+    entry = next(
+        item
+        for item in history.json()["deployments"]
+        if item["deployment_id"] == SUBMISSION["deployment_id"]
+    )
+    assert entry["operation"] == "deploy"
+    assert entry["selector"] == {"target_ids": ["test-vehicle-01"]}
+    assert entry["implementation"] == "python"
+    assert (
+        entry["artifact_sha256"] == store.get_deployment(SUBMISSION["deployment_id"]).profile_digest
+    )
+    assert entry["outcome"] == "queued"
+    assert entry["workflow_url"].endswith("/456")
+
+
+def test_reset_uses_the_normal_submission_and_protected_apply_path(
+    submission_harness, monkeypatch
+) -> None:
+    client, store, _github = submission_harness
+    monkeypatch.setenv(fleet_api.FLEET_MANAGEMENT_KEY_ENV, "management-secret")
+
+    prior = validate_deployment_spec(
+        {
+            **SUBMISSION,
+            "deployment_id": "public-reset-prior",
+            "profile": {"color": "purple", "shape": "hexagon"},
+        }
+    )
+    store.queue_deployment(prior)
+    store.mark_deployment_status(prior.deployment_id, "succeeded")
+
+    submitted = client.post("/deploy/api/deployments/submit", json=RESET_SUBMISSION)
+    assert submitted.status_code == 202
+    assert submitted.json()["operation"] == "reset"
+    assert store.get_vehicle("test-vehicle-01").desired_profile.to_dict() == {
+        "color": "blue",
+        "shape": "circle",
+    }
+    assert store.get_vehicle("test-vehicle-01").observed_profile.to_dict() == {
+        "color": "purple",
+        "shape": "hexagon",
+    }
+
+    applied = client.post(
+        "/deploy/api/deployments/public-reset-001/apply",
+        headers={"Authorization": "Bearer management-secret"},
+    )
+
+    assert applied.status_code == 200
+    body = applied.json()
+    assert body["operation"] == "reset"
+    assert body["status"] == "succeeded"
+    assert body["verification"] == "verified"
+    assert all(target["desired"] == target["observed"] for target in body["targets"])
 
 
 def test_replaying_same_public_submission_is_idempotent(submission_harness) -> None:
