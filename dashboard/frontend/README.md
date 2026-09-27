@@ -46,8 +46,12 @@ React + Vite + Tailwind single-page dashboard for `homeops.now`.
   normal HomeOps infrastructure. Submitted runs retain a frozen request summary, classify known
   service/busy/validation/commit/dispatch failures with credential-safe next
   steps, and keep older results in an explicit Previous attempt area when the
-  form is edited. Run polling continues until the workflow conclusion and job
-  rows are current together, including after a reload. The route remains
+  form is edited. Editing rotates only the next form attempt: a tracked active
+  run remains visible and continues polling while the new request is prepared.
+  The bounded previous-attempt record retains status, workflow/error evidence,
+  target verification, timestamps, and manifest/workflow links across reloads.
+  Run polling continues until the workflow conclusion and job rows are current
+  together, including after a reload. The route remains
   bounded at phone widths, exposes visible keyboard focus, explains disabled
   controls, announces live target/run changes, and uses contrast-checked text
   labels instead of color alone. It sets a route-specific browser title and

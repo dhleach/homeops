@@ -41,6 +41,91 @@ function fleetSnapshot() {
   };
 }
 
+function failedCanaryDeployment(deploymentId) {
+  const targetIds = [
+    "test-vehicle-01",
+    "test-vehicle-02",
+    "test-vehicle-03",
+    "test-vehicle-04",
+  ];
+  const targets = fleetSnapshot().targets.slice(0, 4).map((target, index) => (
+    index === 1
+      ? {
+        ...target,
+        desired: { color: "orange", shape: "triangle" },
+        desired_digest: "orange-triangle-digest",
+        status: "failed",
+        last_error: "deterministic verification failure",
+      }
+      : {
+        ...target,
+        status: index === 0 ? "succeeded" : "pending",
+      }
+  ));
+  return {
+    simulated: true,
+    target_kind: "simulated",
+    deployment_id: deploymentId,
+    target_ids: targetIds,
+    desired: { color: "orange", shape: "triangle" },
+    desired_digest: "orange-triangle-digest",
+    status: "failed",
+    error: "deterministic verification failure injected for target test-vehicle-02",
+    error_code: "verification_failed",
+    error_recovery: "Compare desired and observed target state before retrying this request.",
+    created_at: "2026-09-27T16:00:00Z",
+    updated_at: "2026-09-27T16:00:20Z",
+    verification: "failed",
+    verified: false,
+    targets,
+    request_summary: {
+      deployment_id: deploymentId,
+      environment: "test",
+      failure_mode: "abort",
+      failure_target_id: "test-vehicle-02",
+      implementation: "python",
+      profile: { color: "orange", shape: "triangle" },
+      schema_version: 1,
+      strategy: "canary",
+    },
+    manifest_path: `manifests/${deploymentId}.json`,
+    manifest_sha256: "a".repeat(64),
+    manifest_commit_sha: "b".repeat(40),
+    manifest_commit_url: "https://github.com/dhleach/homeops/commit/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    workflow_run_id: 901,
+    workflow_url: "https://github.com/dhleach/homeops/actions/runs/901",
+    workflow_status: "completed",
+    workflow_conclusion: "failure",
+    workflow_created_at: "2026-09-27T16:00:01Z",
+    workflow_updated_at: "2026-09-27T16:00:19Z",
+    workflow_error: null,
+    workflow: {
+      id: 901,
+      url: "https://github.com/dhleach/homeops/actions/runs/901",
+      status: "completed",
+      conclusion: "failure",
+      created_at: "2026-09-27T16:00:01Z",
+      updated_at: "2026-09-27T16:00:19Z",
+      jobs: [{
+        id: 1,
+        name: "Deploy immutable artifact to simulator",
+        status: "completed",
+        conclusion: "failure",
+        started_at: "2026-09-27T16:00:05Z",
+        completed_at: "2026-09-27T16:00:18Z",
+        url: "https://github.com/dhleach/homeops/actions/runs/901/job/1",
+        failed_step: "Verify fleet readback",
+      }],
+    },
+    dispatch_status: "dispatched",
+    dispatch_error: null,
+    rollback_status: "not_started",
+    rollback_target_ids: [],
+    rollback_error: null,
+    retry_after_seconds: null,
+  };
+}
+
 describe("FleetDeployView", () => {
   beforeEach(() => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
@@ -696,6 +781,91 @@ describe("FleetDeployView", () => {
     await waitFor(() => expect(screen.queryByTestId("workflow-convergence")).not.toBeInTheDocument());
     expect(screen.getByText("Completed")).toBeInTheDocument();
     expect(deploymentReads).toBeGreaterThanOrEqual(2);
+  });
+
+  it("keeps failed canary evidence active while editing, survives reload, and submits only the next attempt", async () => {
+    const failedId = "demo-failed-canary-002";
+    const failedDeployment = failedCanaryDeployment(failedId);
+    const submitCalls = [];
+    const fetchMock = vi.fn((url, options) => {
+      if (url.endsWith("/deployments/submit")) {
+        const request = JSON.parse(options.body);
+        submitCalls.push(request);
+        const nextDeployment = failedCanaryDeployment(request.deployment_id);
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            ...nextDeployment,
+            status: "queued",
+            error: null,
+            error_code: null,
+            error_recovery: null,
+            verification: "pending",
+            verified: false,
+            dispatch_status: "dispatched",
+            workflow_run_id: null,
+            workflow_url: null,
+            workflow_status: null,
+            workflow_conclusion: null,
+            workflow: null,
+          }),
+        });
+      }
+      if (url.includes("/deploy/api/deployments/")) {
+        const requestedId = decodeURIComponent(url.split("/").pop());
+        return Promise.resolve({
+          ok: true,
+          json: async () => requestedId === failedId
+            ? failedDeployment
+            : { ...failedDeployment, deployment_id: requestedId },
+        });
+      }
+      return Promise.resolve({ ok: true, json: async () => fleetSnapshot() });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    window.sessionStorage.setItem("homeops.activeFleetDeploymentId", failedId);
+    window.sessionStorage.setItem("homeops.fleetDeployAttemptId", failedId);
+
+    const first = render(<FleetDeployView apiUrl="https://api.homeops.now" />);
+    expect(await screen.findByTestId("deployment-run-state")).toHaveTextContent(failedId);
+    expect(screen.getByTestId("deployment-run-state")).toHaveTextContent("Verification failed");
+
+    fireEvent.change(screen.getByLabelText("Profile color"), { target: { value: "green" } });
+
+    expect(await screen.findByTestId("active-run-preserved")).toHaveTextContent("has not submitted");
+    expect(screen.getByTestId("deployment-run-state")).toBeInTheDocument();
+    expect(screen.getByTestId("previous-attempt-execution")).toHaveTextContent("python / canary");
+    expect(screen.getByTestId("previous-attempt-targets")).toHaveTextContent("TEST-01, TEST-02, TEST-03, TEST-04");
+    expect(screen.getByTestId("previous-attempt-workflow")).toHaveTextContent("completed · failure");
+    expect(screen.getByTestId("previous-attempt-verification")).toHaveTextContent("failed");
+    expect(screen.getByRole("link", { name: "View previous manifest commit" })).toHaveAttribute(
+      "href",
+      failedDeployment.manifest_commit_url,
+    );
+    expect(submitCalls).toHaveLength(0);
+
+    const persistedPrevious = JSON.parse(window.sessionStorage.getItem("homeops.previousFleetDeployment"));
+    expect(persistedPrevious).toEqual(expect.objectContaining({
+      deployment_id: failedId,
+      status: "failed",
+      error_code: "verification_failed",
+      manifest_commit_url: failedDeployment.manifest_commit_url,
+      workflow_conclusion: "failure",
+      target_ids: failedDeployment.target_ids,
+    }));
+
+    first.unmount();
+    render(<FleetDeployView apiUrl="https://api.homeops.now" />);
+
+    expect(await screen.findByTestId("active-run-preserved")).toBeInTheDocument();
+    expect(screen.getByTestId("previous-attempt-error")).toHaveTextContent("Verification failed");
+    expect(screen.getByTestId("previous-attempt-workflow")).toHaveTextContent("completed · failure");
+
+    fireEvent.click(screen.getByTestId("deploy-submit"));
+    await waitFor(() => expect(submitCalls).toHaveLength(1));
+    expect(submitCalls[0].deployment_id).not.toBe(failedId);
+    expect(screen.getByTestId("previous-attempt")).toHaveTextContent(failedId);
+    expect(screen.getByTestId("previous-attempt")).toHaveTextContent("View previous workflow run");
   });
 
   it("classifies busy submissions and keeps their result under Previous attempt when edited", async () => {

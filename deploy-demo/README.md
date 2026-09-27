@@ -115,6 +115,14 @@ that never exposes provider credentials. Editing a failed or completed form
 creates a new attempt while preserving the prior result in an explicit
 Previous attempt area.
 
+Editing a setting on a run that is still being reconciled rotates only the next
+form attempt ID; it does not clear the tracked run panel or submit a duplicate.
+The existing run remains server-backed and continues polling while the visitor
+prepares the next request. The bounded Previous attempt record preserves the
+status, dispatch/workflow conclusion, error and recovery evidence, selected
+implementation and strategy, target set and verification summary, timestamps,
+and manifest/workflow links through a reload.
+
 Run reconciliation remains server-backed and idempotent. The browser keeps
 polling after simulator state becomes terminal until the workflow conclusion
 and its job rows are both current, so a stale Running row cannot survive behind
