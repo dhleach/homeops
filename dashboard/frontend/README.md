@@ -36,10 +36,10 @@ React + Vite + Tailwind single-page dashboard for `homeops.now`.
   summary always matches the payload. Repeating an unchanged attempt is
   therefore safe at the backend's idempotent boundary. It never sends a GitHub
   or protected fleet-management credential to the browser. The form consumes
-  the backend-published capability matrix and exposes only the verified
-  Python/Ansible + all-at-once/abort paths; rolling, canary, and rollback remain
-  visibly unavailable until their execution semantics are implemented and
-  proven. Submitted runs retain a frozen request summary, classify known
+  the backend-published capability matrix and exposes the verified
+  Python + all-at-once/abort, Python + canary/abort, and Ansible +
+  all-at-once/abort paths. Canary remains hidden when Ansible is selected until
+  equivalent serial behavior is implemented and proven. Submitted runs retain a frozen request summary, classify known
   service/busy/validation/commit/dispatch failures with credential-safe next
   steps, and keep older results in an explicit Previous attempt area when the
   form is edited. Run polling continues until the workflow conclusion and job

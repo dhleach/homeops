@@ -51,10 +51,12 @@ def test_valid_environment_spec_expands_to_four_known_targets() -> None:
 def test_capability_matrix_exposes_only_verified_execution_paths() -> None:
     assert CAPABILITY_MATRIX == (
         ("python", "all_at_once", "abort"),
+        ("python", "canary", "abort"),
         ("ansible", "all_at_once", "abort"),
     )
     assert supported_capabilities() == (
         {"implementation": "python", "strategy": "all_at_once", "failure_mode": "abort"},
+        {"implementation": "python", "strategy": "canary", "failure_mode": "abort"},
         {"implementation": "ansible", "strategy": "all_at_once", "failure_mode": "abort"},
     )
 
@@ -63,7 +65,8 @@ def test_capability_matrix_exposes_only_verified_execution_paths() -> None:
     ("implementation", "strategy", "failure_mode"),
     [
         ("python", "rolling", "rollback"),
-        ("python", "canary", "abort"),
+        ("python", "canary", "rollback"),
+        ("ansible", "canary", "abort"),
         ("ansible", "rolling", "rollback"),
     ],
 )

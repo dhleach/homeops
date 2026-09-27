@@ -54,11 +54,23 @@ def snapshot(
     verified: bool,
     observed: Mapping[str, str] | None = None,
     target_status: str = "succeeded",
+    observed_target_ids: tuple[str, ...] | None = None,
 ) -> dict[str, object]:
     desired = artifact.profile.to_dict()
     observed_profile = dict(observed or desired)
+    observed_target_set = (
+        set(spec.expanded_target_ids) if observed_target_ids is None else set(observed_target_ids)
+    )
     targets = []
     for target_id in spec.expanded_target_ids:
+        target_observed = (
+            observed_profile
+            if observed_target_ids is None or target_id not in observed_target_set
+            else desired
+        )
+        target_observed_digest = hashlib.sha256(
+            json.dumps(target_observed, separators=(",", ":"), sort_keys=True).encode()
+        ).hexdigest()
         targets.append(
             {
                 "target_id": target_id,
@@ -67,11 +79,9 @@ def snapshot(
                 "simulated": True,
                 "desired": desired,
                 "desired_digest": artifact.sha256,
-                "observed": observed_profile,
-                "observed_digest": hashlib.sha256(
-                    json.dumps(observed_profile, separators=(",", ":"), sort_keys=True).encode()
-                ).hexdigest(),
-                "status": target_status,
+                "observed": target_observed,
+                "observed_digest": target_observed_digest,
+                "status": target_status if target_id in observed_target_set else "pending",
                 "active_deployment_id": spec.deployment_id,
                 "last_error": None,
                 "updated_at": "2026-09-26T00:00:00Z",
@@ -101,17 +111,27 @@ class FakeClient:
     apply_response: Mapping[str, object]
     read_response: Mapping[str, object]
     calls: list[tuple[str, object]] = field(default_factory=list)
+    apply_responses: list[Mapping[str, object]] | None = None
+    read_responses: list[Mapping[str, object]] | None = None
 
     def queue_deployment(self, spec) -> Mapping[str, object]:
         self.calls.append(("queue", spec))
         return self.queue_response
 
-    def apply_deployment(self, deployment_id: str) -> Mapping[str, object]:
-        self.calls.append(("apply", deployment_id))
+    def apply_deployment(
+        self,
+        deployment_id: str,
+        target_ids: tuple[str, ...] | None = None,
+    ) -> Mapping[str, object]:
+        self.calls.append(("apply", target_ids if target_ids is not None else deployment_id))
+        if self.apply_responses:
+            return self.apply_responses.pop(0)
         return self.apply_response
 
     def read_deployment(self, deployment_id: str) -> Mapping[str, object]:
         self.calls.append(("read", deployment_id))
+        if self.read_responses:
+            return self.read_responses.pop(0)
         return self.read_response
 
 
@@ -163,6 +183,102 @@ def test_deployer_queues_applies_and_verifies_fresh_observed_state() -> None:
     ]
     assert all(event.deployment_id == spec.deployment_id for event in events)
     assert all(event.artifact_sha256 == artifact.sha256 for event in events)
+
+
+def test_python_canary_verifies_first_target_before_remaining_rollout() -> None:
+    spec = valid_spec(strategy="canary")
+    artifact = artifact_for(spec)
+    queued = snapshot(
+        spec,
+        artifact,
+        status="queued",
+        verified=False,
+        observed={"color": "blue", "shape": "circle"},
+        target_status="pending",
+    )
+    canary = snapshot(
+        spec,
+        artifact,
+        status="applying",
+        verified=False,
+        observed={"color": "blue", "shape": "circle"},
+        target_status="succeeded",
+        observed_target_ids=("test-vehicle-01",),
+    )
+    completed = snapshot(spec, artifact, status="succeeded", verified=True)
+    client = FakeClient(
+        queued,
+        canary,
+        completed,
+        apply_responses=[canary, completed],
+        read_responses=[canary, completed],
+    )
+    events = []
+
+    result = FleetDeployer(client, event_sink=events.append).deploy(spec, artifact)
+
+    assert result.response["verified"] is True
+    assert client.calls == [
+        ("queue", spec),
+        ("apply", ("test-vehicle-01",)),
+        ("read", spec.deployment_id),
+        ("apply", ("test-vehicle-02", "test-vehicle-03", "test-vehicle-04")),
+        ("read", spec.deployment_id),
+    ]
+    assert [event.event_type for event in events] == [
+        "deployment_started",
+        "deployment_queued",
+        "deployment_canary_started",
+        "deployment_canary_verified",
+        "deployment_rollout_started",
+        "deployment_rollout_verified",
+        "deployment_verified",
+    ]
+    assert events[2].target_ids == ("test-vehicle-01",)
+    assert events[4].target_ids == (
+        "test-vehicle-02",
+        "test-vehicle-03",
+        "test-vehicle-04",
+    )
+
+
+def test_python_canary_failure_stops_before_remaining_targets() -> None:
+    spec = valid_spec(strategy="canary")
+    artifact = artifact_for(spec)
+    queued = snapshot(
+        spec,
+        artifact,
+        status="queued",
+        verified=False,
+        observed={"color": "blue", "shape": "circle"},
+        target_status="pending",
+    )
+    failed_canary = snapshot(
+        spec,
+        artifact,
+        status="failed",
+        verified=False,
+        observed={"color": "blue", "shape": "circle"},
+        target_status="failed",
+        observed_target_ids=("test-vehicle-01",),
+    )
+    client = FakeClient(
+        queued,
+        failed_canary,
+        failed_canary,
+        apply_responses=[failed_canary],
+    )
+    events = []
+
+    with pytest.raises(DeploymentVerificationError, match="canary.apply.status"):
+        FleetDeployer(client, event_sink=events.append).deploy(spec, artifact)
+
+    assert client.calls == [
+        ("queue", spec),
+        ("apply", ("test-vehicle-01",)),
+    ]
+    assert events[-1].event_type == "deployment_failed"
+    assert all(event.event_type != "deployment_rollout_started" for event in events)
 
 
 def test_deployer_accepts_concurrent_applying_queue_state() -> None:

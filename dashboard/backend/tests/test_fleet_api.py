@@ -67,6 +67,7 @@ def test_public_fleet_reads_identify_every_target_as_simulated(fleet_store) -> N
     assert len(body["targets"]) == 12
     assert body["capabilities"] == [
         {"implementation": "python", "strategy": "all_at_once", "failure_mode": "abort"},
+        {"implementation": "python", "strategy": "canary", "failure_mode": "abort"},
         {"implementation": "ansible", "strategy": "all_at_once", "failure_mode": "abort"},
     ]
     assert body["targets"][0]["label"] == "TEST-01"

@@ -33,6 +33,7 @@ function fleetSnapshot() {
     target_kind: "simulated",
     capabilities: [
       { implementation: "python", strategy: "all_at_once", failure_mode: "abort" },
+      { implementation: "python", strategy: "canary", failure_mode: "abort" },
       { implementation: "ansible", strategy: "all_at_once", failure_mode: "abort" },
     ],
     targets,
@@ -204,7 +205,7 @@ describe("FleetDeployView", () => {
     expect(preview).toHaveTextContent('"failure_mode": "abort"');
     expect(screen.getByRole("heading", { name: "Configure a deployment" })).toBeInTheDocument();
     expect(screen.getByText("DeploymentSpec JSON")).toBeInTheDocument();
-    expect(screen.getByTestId("deployment-capability-note")).toHaveTextContent("Rolling, canary, and rollback");
+    expect(screen.getByTestId("deployment-capability-note")).toHaveTextContent("Python canary verifies the first target");
     expect(screen.getByText("Public simulated control plane")).toBeInTheDocument();
     expect(screen.getByTestId("fleet-read-boundary")).toHaveTextContent(
       "does not prove that the protected submission pipeline is healthy",
@@ -390,10 +391,11 @@ describe("FleetDeployView", () => {
     expect(screen.getByLabelText("Strategy")).toHaveValue("all_at_once");
     expect(screen.getByLabelText("Failure mode")).toHaveValue("abort");
     expect(screen.queryByRole("option", { name: "rolling" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("option", { name: "canary" })).not.toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "canary" })).toBeInTheDocument();
     expect(screen.queryByRole("option", { name: "rollback" })).not.toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("Implementation"), { target: { value: "ansible" } });
     expect(screen.getByTestId("deployment-spec-preview")).toHaveTextContent('"implementation": "ansible"');
+    expect(screen.queryByRole("option", { name: "canary" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Deploy to 1 selected vehicle" })).not.toBeDisabled();
   });
 

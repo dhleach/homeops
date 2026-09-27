@@ -174,6 +174,82 @@ def test_real_deployer_applies_one_target_and_verifies_fresh_readback(harness) -
     assert vehicle.observed_digest == artifact.sha256
 
 
+def test_real_python_canary_leaves_remaining_targets_pending_until_verified(harness) -> None:
+    spec = valid_spec(
+        deployment_id="demo-e2e-canary",
+        strategy="canary",
+        profile={"color": "orange", "shape": "triangle"},
+    )
+    artifact = artifact_for(spec)
+    events = []
+
+    result = FleetDeployer(harness.api, event_sink=events.append).deploy(spec, artifact)
+
+    assert harness.opener.requests == [
+        ("POST", "/deploy/api/deployments"),
+        ("POST", "/deploy/api/deployments/demo-e2e-canary/apply"),
+        ("GET", "/deploy/api/deployments/demo-e2e-canary"),
+        ("POST", "/deploy/api/deployments/demo-e2e-canary/apply"),
+        ("GET", "/deploy/api/deployments/demo-e2e-canary"),
+    ]
+    canary_apply = harness.opener.responses[1]
+    canary_readback = harness.opener.responses[2]
+    assert canary_apply["status"] == "applying"
+    assert canary_readback["status"] == "applying"
+    assert canary_readback["targets"][0]["status"] == "succeeded"
+    assert [target["status"] for target in canary_readback["targets"][1:]] == [
+        "pending",
+        "pending",
+        "pending",
+    ]
+    assert result.response["status"] == "succeeded"
+    assert result.response["verified"] is True
+    assert [event.event_type for event in events] == [
+        "deployment_started",
+        "deployment_queued",
+        "deployment_canary_started",
+        "deployment_canary_verified",
+        "deployment_rollout_started",
+        "deployment_rollout_verified",
+        "deployment_verified",
+    ]
+
+    expected = FleetProfile(color="orange", shape="triangle")
+    for target_id in spec.expanded_target_ids:
+        vehicle = harness.store.get_vehicle(target_id)
+        assert vehicle.status == "succeeded"
+        assert vehicle.observed_profile == expected
+
+
+def test_canary_api_rejects_skipping_the_next_stable_target(harness) -> None:
+    spec = valid_spec(deployment_id="demo-e2e-canary-order", strategy="canary")
+    before = {
+        target_id: harness.store.get_vehicle(target_id) for target_id in spec.expanded_target_ids
+    }
+    queued = harness.http.post(
+        "/deploy/api/deployments",
+        headers=FLEET_HEADERS,
+        json=spec.to_dict(),
+    )
+    assert queued.status_code == 200
+
+    skipped = harness.http.post(
+        "/deploy/api/deployments/demo-e2e-canary-order/apply",
+        headers=FLEET_HEADERS,
+        json={"target_ids": ["test-vehicle-02"]},
+    )
+
+    assert skipped.status_code == 409
+    assert skipped.json()["detail"]["code"] == "deployment_conflict"
+    assert [
+        harness.store.get_vehicle(target_id).status for target_id in spec.expanded_target_ids
+    ] == ["pending", "pending", "pending", "pending"]
+    assert (
+        harness.store.get_vehicle("test-vehicle-01").observed_profile
+        == before["test-vehicle-01"].observed_profile
+    )
+
+
 def test_real_deployer_expands_environment_without_touching_other_targets(harness) -> None:
     """An environment selector must affect exactly its four simulator targets."""
     before = {vehicle.target_id: vehicle for vehicle in harness.store.list_vehicles()}

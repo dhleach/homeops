@@ -18,7 +18,7 @@ interface at `https://api.homeops.now`.
 | `GET /deploy/api/deployments/{deployment_id}` | Anonymous fresh deployment state, GitHub Actions run/jobs, timestamps, and verification result |
 | `POST /deploy/api/deployments/submit` | Anonymous constrained submission; commits one manifest and dispatches the trusted workflow through the server-only GitHub adapter |
 | `POST /deploy/api/deployments` | Protected desired-state queue operation |
-| `POST /deploy/api/deployments/{deployment_id}/apply` | Protected simulator apply/observation operation; safe to replay |
+| `POST /deploy/api/deployments/{deployment_id}/apply` | Protected simulator apply/observation operation; accepts a target subset only for validated Python canary phases and is safe to replay |
 | `GET /metrics` | Internal diagnostic abuse/cost metrics for EC2-local Prometheus; not a public route |
 | `GET /openapi.json` | Generated API contract |
 
@@ -139,13 +139,16 @@ browser.
 `POST /deploy/api/deployments` validates the exact shared `DeploymentSpec`
 contract and records desired state. The protected `/apply` operation moves the
 simulator through `applying` and atomically copies desired profiles to observed
-profiles. Replaying an already successful apply is a read-only idempotent
-response. Public deployment reads expose `verification: "pending"`,
+profiles. A validated Python canary may pass the first or remaining target
+subset; later targets stay pending until the canary readback succeeds. Replaying
+an already successful apply is a read-only idempotent response. Public deployment reads expose `verification: "pending"`,
 `"verified"`, or `"failed"` plus the fresh target snapshots for a deployer or
 UI to verify digest, color, shape, and status.
 
 `GET /deploy/api/fleet` includes the same verified implementation/strategy/
-failure-mode capability matrix rendered by the frontend. `POST /deploy/api/deployments/submit`
+failure-mode capability matrix rendered by the frontend. It currently exposes
+Python all-at-once/abort, Python canary/abort, and Ansible all-at-once/abort;
+Ansible canary remains hidden until its serial path is implemented. `POST /deploy/api/deployments/submit`
 accepts only the shared closed `DeploymentSpec`
 JSON and rejects combinations outside that matrix before any manifest or
 workflow side effect. It never accepts a repository, branch, path, URL,
