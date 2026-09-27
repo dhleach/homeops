@@ -41,8 +41,11 @@ intervals. The check remains fail-closed if the public interfaces do not
 recover within that bounded window.
 
 The separate frontend workflow runs `npm ci`, builds with
-`VITE_API_URL=https://api.homeops.now`, syncs the private S3 bucket, invalidates
-CloudFront, and runs the same public smoke checks.
+`VITE_API_URL=https://api.homeops.now` and the triggering full `GITHUB_SHA` as
+`VITE_BUILD_SHA`, syncs the private S3 bucket, invalidates CloudFront, and runs
+the same public smoke checks. The `/deploy` route uses that revision only for
+exact source/build links when it is a valid full commit SHA; local builds do
+not claim a build revision.
 
 The Bob evaluator is delivered by that existing S3/CloudFront frontend
 deployment. Because Terraform changes are intentionally applied separately
