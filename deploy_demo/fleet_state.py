@@ -18,7 +18,7 @@ import sqlite3
 from collections.abc import Callable, Iterable, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Literal
 
@@ -33,9 +33,10 @@ from .deployment_spec import (
 
 STATE_PATH_ENV = "FLEET_DEPLOY_STATE_PATH"
 DEFAULT_STATE_PATH = "/var/lib/homeops/deploy-demo/fleet-state.sqlite3"
-STATE_SCHEMA_VERSION = 5
+STATE_SCHEMA_VERSION = 6
 SIMULATED_VERIFICATION_FAILURE_PREFIX = "deterministic verification failure injected for target "
 MAX_DEPLOYMENT_EVENTS = 128
+MAX_DEPLOYMENT_HISTORY = 50
 
 VehicleStatus = Literal["ready", "pending", "applying", "succeeded", "failed"]
 DeploymentStatus = Literal["queued", "applying", "succeeded", "failed"]
@@ -108,6 +109,14 @@ class DeploymentCooldownError(FleetStateError):
 
 class DeploymentAdmissionLimitError(FleetStateError):
     """Raised when the bounded global active-deployment admission limit is full."""
+
+
+class DeploymentDailyLimitError(FleetStateError):
+    """Raised when the conservative daily reset limit has been exhausted."""
+
+    def __init__(self, retry_after_seconds: int) -> None:
+        self.retry_after_seconds = max(1, retry_after_seconds)
+        super().__init__("the daily Fleet reset limit has been reached")
 
 
 class DispatchClaimError(FleetStateError):
@@ -257,6 +266,12 @@ def _baseline_profile(target_id: str) -> FleetProfile:
     suffix = int(target_id.rsplit("-", 1)[1])
     color, shape = _BASELINE_PROFILES[(suffix - 1) % len(_BASELINE_PROFILES)]
     return FleetProfile(color=color, shape=shape)
+
+
+def baseline_profile(target_id: str) -> FleetProfile:
+    """Return the deterministic profile used by the validated reset operation."""
+    _target_metadata(target_id)
+    return _baseline_profile(target_id)
 
 
 def _target_metadata(target_id: str) -> tuple[str, str]:
@@ -582,6 +597,14 @@ class FleetStateStore:
                 """
             )
             connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS fleet_reset_admissions (
+                    utc_day TEXT PRIMARY KEY,
+                    reset_count INTEGER NOT NULL CHECK(reset_count >= 0)
+                )
+                """
+            )
+            connection.execute(
                 "CREATE INDEX IF NOT EXISTS fleet_deployments_profile_digest "
                 "ON fleet_deployments(profile_digest)"
             )
@@ -766,6 +789,28 @@ class FleetStateStore:
         finally:
             connection.close()
 
+    def list_deployments(self, limit: int = MAX_DEPLOYMENT_HISTORY) -> tuple[DeploymentState, ...]:
+        """Return bounded recent deployment records in newest-first order."""
+        if not isinstance(limit, int) or isinstance(limit, bool):
+            raise ValueError("deployment history limit must be an integer")
+        if limit < 1 or limit > MAX_DEPLOYMENT_HISTORY:
+            raise ValueError(
+                f"deployment history limit must be between 1 and {MAX_DEPLOYMENT_HISTORY}"
+            )
+        connection = self._read_connection()
+        try:
+            rows = connection.execute(
+                """
+                SELECT * FROM fleet_deployments
+                ORDER BY created_at DESC, deployment_id DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+            return tuple(self._deployment_from_row(row) for row in rows)
+        finally:
+            connection.close()
+
     def append_deployment_event(
         self,
         deployment_id: str,
@@ -938,27 +983,53 @@ class FleetStateStore:
                 dispatch_status,
             ),
         )
-        updated = connection.execute(
-            f"""
-            UPDATE fleet_vehicles
-            SET desired_color = ?, desired_shape = ?, desired_digest = ?,
-                status = 'pending', active_deployment_id = ?, last_error = NULL,
-                updated_at = ?
-            WHERE target_id IN ({placeholders})
-            """,
-            (
-                profile.color,
-                profile.shape,
-                profile.digest,
-                spec.deployment_id,
-                timestamp,
-                *target_ids,
-            ),
-        )
-        if updated.rowcount != len(target_ids):
-            raise FleetStateError(
-                f"deployment {spec.deployment_id} did not update every target atomically"
+        if spec.operation == "reset":
+            updated_count = 0
+            for target_id in target_ids:
+                reset_profile = _baseline_profile(target_id)
+                updated_count += connection.execute(
+                    """
+                    UPDATE fleet_vehicles
+                    SET desired_color = ?, desired_shape = ?, desired_digest = ?,
+                        status = 'pending', active_deployment_id = ?, last_error = NULL,
+                        updated_at = ?
+                    WHERE target_id = ?
+                    """,
+                    (
+                        reset_profile.color,
+                        reset_profile.shape,
+                        reset_profile.digest,
+                        spec.deployment_id,
+                        timestamp,
+                        target_id,
+                    ),
+                ).rowcount
+            if updated_count != len(target_ids):
+                raise FleetStateError(
+                    f"deployment {spec.deployment_id} did not update every target atomically"
+                )
+        else:
+            updated = connection.execute(
+                f"""
+                UPDATE fleet_vehicles
+                SET desired_color = ?, desired_shape = ?, desired_digest = ?,
+                    status = 'pending', active_deployment_id = ?, last_error = NULL,
+                    updated_at = ?
+                WHERE target_id IN ({placeholders})
+                """,
+                (
+                    profile.color,
+                    profile.shape,
+                    profile.digest,
+                    spec.deployment_id,
+                    timestamp,
+                    *target_ids,
+                ),
             )
+            if updated.rowcount != len(target_ids):
+                raise FleetStateError(
+                    f"deployment {spec.deployment_id} did not update every target atomically"
+                )
         row = connection.execute(
             "SELECT * FROM fleet_deployments WHERE deployment_id = ?",
             (spec.deployment_id,),
@@ -1186,6 +1257,91 @@ class FleetStateStore:
             assert updated is not None
             return self._deployment_from_row(updated)
 
+    def reset_deployment_targets(self, deployment_id: str) -> DeploymentState:
+        """Apply the validated reset request to every target and verify it atomically."""
+        timestamp = _now_iso(self._clock)
+        with self._transaction() as connection:
+            row = connection.execute(
+                "SELECT * FROM fleet_deployments WHERE deployment_id = ?",
+                (deployment_id,),
+            ).fetchone()
+            if row is None:
+                raise UnknownDeploymentError(f"unknown deployment: {deployment_id}")
+            existing = self._deployment_from_row(row)
+            if (existing.request_summary or {}).get("operation") != "reset":
+                raise DeploymentConflictError("deployment is not a validated Fleet reset request")
+            if existing.status == "succeeded":
+                return existing
+            if existing.status == "failed":
+                raise InvalidStateTransitionError(f"deployment {deployment_id} is already failed")
+            if existing.target_ids != _TARGET_ORDER:
+                raise DeploymentConflictError("reset must target the complete simulated fleet")
+
+            placeholders = ", ".join("?" for _ in existing.target_ids)
+            rows = connection.execute(
+                f"SELECT target_id, active_deployment_id FROM fleet_vehicles "
+                f"WHERE target_id IN ({placeholders})",
+                existing.target_ids,
+            ).fetchall()
+            by_id = {vehicle["target_id"]: vehicle for vehicle in rows}
+            if len(by_id) != len(existing.target_ids):
+                raise FleetStateError("reset could not resolve every target")
+            invalid = [
+                target_id
+                for target_id in existing.target_ids
+                if by_id[target_id]["active_deployment_id"] != deployment_id
+            ]
+            if invalid:
+                raise DeploymentConflictError(
+                    "reset target reservation is not owned by this deployment: "
+                    + ", ".join(invalid)
+                )
+
+            for target_id in existing.target_ids:
+                profile = _baseline_profile(target_id)
+                updated = connection.execute(
+                    """
+                    UPDATE fleet_vehicles
+                    SET desired_color = ?, desired_shape = ?, desired_digest = ?,
+                        observed_color = ?, observed_shape = ?, observed_digest = ?,
+                        status = 'succeeded', active_deployment_id = ?,
+                        last_error = NULL, updated_at = ?
+                    WHERE target_id = ? AND active_deployment_id = ?
+                    """,
+                    (
+                        profile.color,
+                        profile.shape,
+                        profile.digest,
+                        profile.color,
+                        profile.shape,
+                        profile.digest,
+                        deployment_id,
+                        timestamp,
+                        target_id,
+                        deployment_id,
+                    ),
+                )
+                if updated.rowcount != 1:
+                    raise FleetStateError(
+                        f"reset {deployment_id} did not update target {target_id}"
+                    )
+
+            connection.execute(
+                """
+                UPDATE fleet_deployments
+                SET status = 'succeeded', error = NULL, updated_at = ?
+                WHERE deployment_id = ?
+                """,
+                (timestamp, deployment_id),
+            )
+            self._release_deployment_reservations(connection, deployment_id, timestamp)
+            updated = connection.execute(
+                "SELECT * FROM fleet_deployments WHERE deployment_id = ?",
+                (deployment_id,),
+            ).fetchone()
+            assert updated is not None
+            return self._deployment_from_row(updated)
+
     def restore_deployment_targets(
         self,
         deployment_id: str,
@@ -1341,6 +1497,7 @@ class FleetStateStore:
         manifest_sha256: str,
         cooldown_seconds: int,
         max_active: int,
+        reset_daily_cap: int = 1,
     ) -> QueueResult:
         """Admit one browser request under SQLite's cross-process write lock.
 
@@ -1351,7 +1508,7 @@ class FleetStateStore:
         """
         if not client_ip.strip():
             raise ValueError("client IP must not be blank")
-        if cooldown_seconds < 0 or max_active < 1:
+        if cooldown_seconds < 0 or max_active < 1 or reset_daily_cap < 1:
             raise ValueError("public admission limits are invalid")
         self._validate_manifest_metadata(manifest_path, manifest_sha256)
         profile = FleetProfile(spec.profile_color, spec.profile_shape)
@@ -1415,6 +1572,24 @@ class FleetStateStore:
             if active_count >= max_active:
                 raise DeploymentAdmissionLimitError("active deployment limit is reached")
 
+            utc_day = now.astimezone(UTC).date().isoformat()
+            if spec.operation == "reset":
+                reset_admission = connection.execute(
+                    "SELECT reset_count FROM fleet_reset_admissions WHERE utc_day = ?",
+                    (utc_day,),
+                ).fetchone()
+                if (
+                    reset_admission is not None
+                    and reset_admission["reset_count"] >= reset_daily_cap
+                ):
+                    next_day = datetime.combine(
+                        now.astimezone(UTC).date() + timedelta(days=1),
+                        datetime.min.time(),
+                        tzinfo=UTC,
+                    )
+                    retry_after = int((next_day - now.astimezone(UTC)).total_seconds()) + 1
+                    raise DeploymentDailyLimitError(retry_after)
+
             deployment = self._insert_new_deployment(
                 connection,
                 spec,
@@ -1433,6 +1608,15 @@ class FleetStateStore:
                 """,
                 (client_ip, timestamp),
             )
+            if spec.operation == "reset":
+                connection.execute(
+                    """
+                    INSERT INTO fleet_reset_admissions(utc_day, reset_count)
+                    VALUES (?, 1)
+                    ON CONFLICT(utc_day) DO UPDATE SET reset_count = reset_count + 1
+                    """,
+                    (utc_day,),
+                )
             return QueueResult(deployment=deployment, idempotent=False)
 
     def claim_dispatch(
@@ -1844,6 +2028,7 @@ __all__ = [
     "DEPLOYMENT_STATUSES",
     "DEPLOYMENT_EVENT_TYPES",
     "DISPATCH_STATUSES",
+    "MAX_DEPLOYMENT_HISTORY",
     "STATE_PATH_ENV",
     "STATE_SCHEMA_VERSION",
     "ROLLBACK_STATUSES",
@@ -1851,6 +2036,7 @@ __all__ = [
     "DeploymentConflictError",
     "DeploymentCooldownError",
     "DeploymentAdmissionLimitError",
+    "DeploymentDailyLimitError",
     "DeploymentState",
     "DeploymentEventRecord",
     "DispatchClaimError",
@@ -1862,4 +2048,5 @@ __all__ = [
     "UnknownDeploymentError",
     "UnknownTargetError",
     "VehicleState",
+    "baseline_profile",
 ]

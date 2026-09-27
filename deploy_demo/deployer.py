@@ -25,7 +25,7 @@ from urllib.parse import urlsplit
 from urllib.request import Request, build_opener
 
 from .deployment_spec import KNOWN_TARGET_IDS, DeploymentSpec, validate_deployment_spec
-from .fleet_state import FleetProfile
+from .fleet_state import FleetProfile, baseline_profile
 
 API_BASE_URL_ENV = "FLEET_DEPLOY_API_URL"
 API_KEY_ENV = "FLEET_DEPLOY_API_KEY"
@@ -534,6 +534,11 @@ class FleetDeployer:
             raise DeploymentVerificationError(f"{phase} is not marked simulated")
         if payload.get("target_kind", "simulated") != "simulated":
             raise DeploymentVerificationError(f"{phase} has an unexpected target kind")
+        if payload.get("operation", "deploy") != spec.operation:
+            raise DeploymentVerificationError(
+                f"{phase}.operation mismatch: expected {spec.operation!r}, "
+                f"got {payload.get('operation')!r}"
+            )
 
         target_ids = _as_target_ids(payload.get("target_ids"), f"{phase}.target_ids")
         expected_target_ids = spec.expanded_target_ids
@@ -582,22 +587,27 @@ class FleetDeployer:
                 raise DeploymentVerificationError(
                     f"{phase}.targets[{index}] is not marked simulated"
                 )
-            _assert_profile(
-                target.get("desired"), expected_profile, f"{phase}.targets[{index}].desired"
+            target_profile = (
+                baseline_profile(target_id) if spec.operation == "reset" else expected_profile
             )
-            if target.get("desired_digest") != artifact.sha256:
+            _assert_profile(
+                target.get("desired"), target_profile, f"{phase}.targets[{index}].desired"
+            )
+            if target.get("desired_digest") != target_profile.digest:
                 raise DeploymentVerificationError(
-                    f"{phase}.targets[{index}].desired_digest does not match artifact"
+                    f"{phase}.targets[{index}].desired_digest does not match "
+                    "expected target profile"
                 )
             if target_id in expected_observed_ids:
                 _assert_profile(
                     target.get("observed"),
-                    expected_profile,
+                    target_profile,
                     f"{phase}.targets[{index}].observed",
                 )
-                if target.get("observed_digest") != artifact.sha256:
+                if target.get("observed_digest") != target_profile.digest:
                     raise DeploymentVerificationError(
-                        f"{phase}.targets[{index}].observed_digest does not match artifact"
+                        f"{phase}.targets[{index}].observed_digest does not match "
+                        "expected target profile"
                     )
                 if target.get("status") != "succeeded":
                     raise DeploymentVerificationError(

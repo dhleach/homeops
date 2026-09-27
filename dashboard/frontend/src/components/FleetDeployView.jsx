@@ -1,11 +1,15 @@
 import { useCallback, useEffect, useState } from "react";
-import { DeploymentSpecForm } from "./DeploymentSpecForm.jsx";
+import { createDeploymentId, DeploymentSpecForm } from "./DeploymentSpecForm.jsx";
 import { IMPLEMENTATION_SOURCES, sourceUrl } from "../fleetDeploymentSources.js";
 
 const REFRESH_INTERVAL_MS = 30_000;
 const DEPLOYMENT_REFRESH_INTERVAL_MS = 2_000;
+const HISTORY_REFRESH_INTERVAL_MS = 30_000;
 const ACTIVE_DEPLOYMENT_STORAGE_KEY = "homeops.activeFleetDeploymentId";
 const ENVIRONMENTS = ["test", "stage", "prod"];
+const RESET_TARGET_IDS = ENVIRONMENTS.flatMap((environment) => (
+  [1, 2, 3, 4].map((index) => `${environment}-vehicle-${String(index).padStart(2, "0")}`)
+));
 const SOURCE_REPOSITORY_URL = "https://github.com/dhleach/homeops";
 const FRONTEND_SOURCE_PATH = "dashboard/frontend/src/components/FleetDeployView.jsx";
 const FRONTEND_README_PATH = "dashboard/frontend/README.md";
@@ -110,6 +114,10 @@ function fleetApiUrl(apiUrl) {
 
 function deploymentApiUrl(apiUrl, deploymentId) {
   return `${apiUrl.replace(/\/$/, "")}/deploy/api/deployments/${encodeURIComponent(deploymentId)}`;
+}
+
+function deploymentHistoryApiUrl(apiUrl) {
+  return `${apiUrl.replace(/\/$/, "")}/deploy/api/deployments/history?limit=20`;
 }
 
 function displayStatus(status) {
@@ -227,6 +235,53 @@ export function useFleet(apiUrl) {
   const refreshFleet = useCallback(() => refresh(), [refresh]);
 
   return { data, loading, error, lastUpdated, refresh: refreshFleet };
+}
+
+export function useDeploymentHistory(apiUrl) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  const refresh = useCallback(async (signal) => {
+    try {
+      const response = await fetch(deploymentHistoryApiUrl(apiUrl), {
+        cache: "no-store",
+        headers: { Accept: "application/json" },
+        signal,
+      });
+      if (!response.ok) {
+        throw new Error(`Deployment history API returned HTTP ${response.status}`);
+      }
+      const payload = await response.json();
+      if (
+        payload?.simulated !== true
+        || payload?.target_kind !== "simulated"
+        || !Array.isArray(payload?.deployments)
+      ) {
+        throw new Error("Deployment history API returned an incomplete snapshot");
+      }
+      setData(payload);
+      setError(null);
+    } catch (requestError) {
+      if (requestError?.name !== "AbortError") {
+        setError(requestError instanceof Error ? requestError.message : "Unable to read deployment history");
+      }
+    } finally {
+      if (!signal?.aborted) setLoading(false);
+    }
+  }, [apiUrl]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    refresh(controller.signal);
+    const interval = window.setInterval(() => refresh(controller.signal), HISTORY_REFRESH_INTERVAL_MS);
+    return () => {
+      controller.abort();
+      window.clearInterval(interval);
+    };
+  }, [refresh]);
+
+  return { data, loading, error, refresh };
 }
 
 function readStoredDeploymentId() {
@@ -586,7 +641,119 @@ function requestSummaryText(deployment) {
   const failure = summary.failure_target_id
     ? ` · injected verification failure at ${targetDisplayLabel(summary.failure_target_id)}`
     : "";
+  if (summary.operation === "reset") {
+    return `Full simulated-fleet reset · ${summary.implementation} / ${summary.strategy} / ${summary.failure_mode}`;
+  }
   return `${targets} · ${summary.implementation} / ${summary.strategy} / ${summary.failure_mode}${failure}`;
+}
+
+function historySelectorText(entry) {
+  if (entry.operation === "reset") return "Complete simulated fleet";
+  if (entry.selector?.environment) return `${entry.selector.environment.toUpperCase()} environment`;
+  return (entry.selector?.target_ids ?? []).map(targetDisplayLabel).join(", ") || "Targets unavailable";
+}
+
+function historyOutcomeLabel(entry) {
+  if (entry.outcome === "verified") return "Verified";
+  if (entry.outcome === "failed" || entry.outcome.endsWith("failed")) return "Failed";
+  if (entry.outcome === "queued") return "Queued";
+  if (entry.outcome === "applying") return "Applying";
+  return entry.outcome;
+}
+
+function historyOutcomeClass(entry) {
+  if (entry.outcome === "verified") return "text-emerald-300";
+  if (entry.outcome === "failed" || entry.outcome.endsWith("failed")) return "text-red-300";
+  return "text-amber-200";
+}
+
+function DeploymentHistory({ data, loading, error, activeDeploymentId, onSelect }) {
+  const deployments = data?.deployments ?? [];
+  return (
+    <section
+      aria-labelledby="deployment-history-heading"
+      className="mb-8 min-w-0 rounded-2xl border border-border bg-card/70 p-4 shadow-lg shadow-slate-950/10 sm:p-6"
+      data-testid="deployment-history"
+    >
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-[0.22em] text-blue-300">
+            Durable run history
+          </p>
+          <h2 id="deployment-history-heading" className="mt-1 text-xl font-semibold text-white">
+            Recent deployment attempts
+          </h2>
+          <p className="mt-2 max-w-3xl text-sm text-slate-400">
+            Stored in the simulator database, so these attempts survive a backend restart. Select a row
+            to reopen its exact run evidence. Fleet reset uses this same validated path and is limited to
+            one request per UTC day.
+          </p>
+        </div>
+      </div>
+      {error && (
+        <p className="mt-4 rounded-lg border border-amber-400/30 bg-amber-400/10 p-3 text-xs text-amber-100" role="alert">
+          Deployment history refresh failed: {error}
+        </p>
+      )}
+      {loading && !data && (
+        <p className="mt-4 text-sm text-slate-400">Loading recent attempts…</p>
+      )}
+      {!loading && deployments.length === 0 && (
+        <p className="mt-4 rounded-lg border border-border bg-slate-950/30 p-3 text-sm text-slate-400">
+          No deployment attempts have been recorded yet.
+        </p>
+      )}
+      {deployments.length > 0 && (
+        <ol className="mt-4 grid gap-3 lg:grid-cols-2" data-testid="deployment-history-list">
+          {deployments.map((entry) => (
+            <li
+              key={entry.deployment_id}
+              className={`rounded-xl border p-3 ${entry.deployment_id === activeDeploymentId
+                ? "border-blue-400/70 bg-blue-400/10"
+                : "border-border bg-slate-950/30"}`}
+              data-testid="deployment-history-entry"
+            >
+              <button
+                type="button"
+                onClick={() => onSelect(entry.deployment_id)}
+                className="w-full rounded-lg text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-300 focus-visible:ring-offset-2 focus-visible:ring-offset-surface"
+                data-testid="deployment-history-row"
+                aria-label={`Open deployment run ${entry.deployment_id}`}
+              >
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="font-mono text-sm font-semibold text-white">{entry.deployment_id}</span>
+                  <span className={historyOutcomeClass(entry)}>{historyOutcomeLabel(entry)}</span>
+                </div>
+                <p className="mt-2 text-xs text-slate-300">
+                  {entry.operation === "reset" ? "Fleet reset" : entry.implementation}
+                  {entry.operation !== "reset" && ` · ${entry.selector?.environment
+                    ? `${entry.selector.environment.toUpperCase()} environment`
+                    : historySelectorText(entry)}`}
+                  {` · ${formatTimestamp(entry.created_at)}`}
+                </p>
+                <p className="mt-1 text-xs text-slate-400">
+                  Artifact {formatDigest(entry.artifact_sha256)} · {historySelectorText(entry)}
+                </p>
+              </button>
+              <div className="mt-2 flex flex-wrap gap-3 text-xs">
+                <span className="text-slate-500">{entry.verification}</span>
+                {entry.workflow_url && (
+                  <a
+                    href={entry.workflow_url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-blue-300 underline"
+                  >
+                    Actions run
+                  </a>
+                )}
+              </div>
+            </li>
+          ))}
+        </ol>
+      )}
+    </section>
+  );
 }
 
 function deploymentStatusLabel(deployment) {
@@ -862,7 +1029,15 @@ function DeploymentRunPanel({ deployment, error, onRefresh }) {
 export function FleetDeployView({ apiUrl }) {
   const { data, loading, error, lastUpdated, refresh } = useFleet(apiUrl);
   const deployment = useDeployment(apiUrl);
+  const {
+    data: historyData,
+    loading: historyLoading,
+    error: historyError,
+    refresh: refreshHistory,
+  } = useDeploymentHistory(apiUrl);
   const [selectedTargetIds, setSelectedTargetIds] = useState([]);
+  const [resetting, setResetting] = useState(false);
+  const [resetError, setResetError] = useState(null);
   const groups = groupTargets(data?.targets ?? []);
 
   const handleTargetSelectionChange = useCallback((targetIds) => {
@@ -872,18 +1047,69 @@ export function FleetDeployView({ apiUrl }) {
   const handleSubmitted = useCallback((submission) => {
     deployment.trackDeployment(submission?.deployment_id, submission);
     refresh();
-  }, [deployment, refresh]);
+    refreshHistory();
+  }, [deployment, refresh, refreshHistory]);
 
   const handleNewAttempt = useCallback(() => {
     deployment.trackDeployment(null);
     refresh();
   }, [deployment, refresh]);
 
+  const handleHistorySelect = useCallback((deploymentId) => {
+    deployment.trackDeployment(deploymentId);
+  }, [deployment]);
+
+  const handleReset = useCallback(async () => {
+    if (resetting) return;
+    setResetting(true);
+    setResetError(null);
+    const payload = {
+      operation: "reset",
+      deployment_id: createDeploymentId(),
+      target_ids: RESET_TARGET_IDS,
+      profile: { color: "blue", shape: "circle" },
+      schema_version: 1,
+      implementation: "python",
+      strategy: "all_at_once",
+      failure_mode: "abort",
+    };
+    try {
+      const response = await fetch(`${apiUrl.replace(/\/$/, "")}/deploy/api/deployments/submit`, {
+        method: "POST",
+        cache: "no-store",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(payload),
+      });
+      const body = await response.json().catch(() => null);
+      if (!response.ok) {
+        const detail = body?.detail;
+        const message = detail && typeof detail === "object"
+          ? detail.message
+          : typeof detail === "string" ? detail : `Fleet reset returned HTTP ${response.status}`;
+        throw new Error(message);
+      }
+      if (body?.deployment_id !== payload.deployment_id) {
+        throw new Error("Fleet reset response did not preserve the request identity.");
+      }
+      deployment.trackDeployment(body.deployment_id, body);
+      refresh();
+      refreshHistory();
+    } catch (requestError) {
+      setResetError(requestError instanceof Error ? requestError.message : "Unable to request fleet reset");
+    } finally {
+      setResetting(false);
+    }
+  }, [apiUrl, deployment, refresh, refreshHistory, resetting]);
+
   useEffect(() => {
     if (deployment.data?.status === "succeeded" || deployment.data?.status === "failed") {
       refresh();
+      refreshHistory();
     }
-  }, [deployment.data?.status, refresh]);
+  }, [deployment.data?.status, refresh, refreshHistory]);
 
   return (
     <div className="min-h-screen w-full min-w-0 overflow-x-clip bg-surface text-slate-100" data-testid="fleet-deploy-page">
@@ -918,8 +1144,26 @@ export function FleetDeployView({ apiUrl }) {
             >
               Refresh fleet
             </button>
+            <button
+              type="button"
+              onClick={handleReset}
+              disabled={resetting}
+              className="flex-1 rounded-xl border border-amber-400/40 bg-amber-400/10 px-4 py-2 text-sm font-medium text-amber-200 transition-colors hover:bg-amber-400/20 disabled:cursor-not-allowed disabled:opacity-50 sm:flex-none"
+              data-testid="fleet-reset"
+            >
+              {resetting ? "Requesting reset…" : "Reset simulated fleet"}
+            </button>
           </div>
         </div>
+        {resetError && (
+          <p
+            className="mx-auto mt-3 max-w-6xl rounded-lg border border-red-400/30 bg-red-400/10 px-4 py-3 text-sm text-red-200"
+            data-testid="fleet-reset-error"
+            role="alert"
+          >
+            Fleet reset was not accepted: {resetError}
+          </p>
+        )}
       </header>
 
       <main className="mx-auto min-w-0 w-full max-w-7xl px-4 py-6 sm:px-6 sm:py-10" data-testid="fleet-deploy-main">
@@ -945,6 +1189,14 @@ export function FleetDeployView({ apiUrl }) {
             </p>
           </div>
         </div>
+
+        <DeploymentHistory
+          data={historyData}
+          loading={historyLoading}
+          error={historyError}
+          activeDeploymentId={deployment.deploymentId}
+          onSelect={handleHistorySelect}
+        />
 
         <div
           className="grid min-w-0 items-start gap-8 lg:grid-cols-[minmax(22rem,0.82fr)_minmax(0,1.18fr)]"

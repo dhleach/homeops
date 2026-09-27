@@ -1,10 +1,10 @@
 # Fleet Deploy Lab integration map
 
-Status: PR 18 traceable workflow-step and deployer-event timeline in progress; Defect 03 merged
+Status: PR 19 deployment history and auditable reset in progress; PR 18 merged
 Repository: `dhleach/homeops`
 Default branch: `master`
-Latest merged integration snapshot: `master` after PR #397
-Active GitHub issue: https://github.com/dhleach/homeops/issues/398
+Latest merged integration snapshot: `master` after PR #399
+Active GitHub issue: https://github.com/dhleach/homeops/issues/400
 
 This document records the real HomeOps integration points for the Fleet Deploy
 Lab as the implementation advances. It is deliberately specific about what
@@ -514,6 +514,30 @@ after a reload.
 - Sequence and owner: Derek reviews and merges PR18; no production deployment or simulator mutation is part of the code change itself.
 - Safety gate: the timeline is read-only, simulated-only evidence; it never exposes credentials, accepts arbitrary event types or targets, or changes Home Assistant, the normal HomeOps release path, Pi, or EC2.
 
+## PR 19 — add deployment history and a real reset
+
+PR 19 adds a bounded anonymous recent-run history backed by the same durable
+SQLite deployment rows used by the active run panel. Each entry exposes the
+request selector, implementation, profile-artifact digest, outcome, timestamp,
+manifest commit, and exact Actions run link; selecting an entry reopens the
+server-backed deployment read rather than relying on browser-only state.
+
+Fleet reset is a first-class `DeploymentSpec` operation. The browser submits a
+full-fleet reset through the ordinary manifest admission, cooldown, active-run,
+GitHub commit, trusted workflow, protected apply, and fresh-readback path. The
+trusted simulator restores each target's deterministic readable baseline only
+after the workflow reaches the protected deploy step. Reset admission is capped
+at one request per UTC day by default through
+`FLEET_DEPLOY_RESET_DAILY_CAP`; an active run still wins with the ordinary
+busy-fleet response. No reset path directly mutates the database from the
+browser.
+
+- Terraform apply required: **No**
+- Manual console/setup required: **None beyond the existing Fleet Deploy simulator/API credentials**
+- Terraform resources changed: **None**
+- Sequence and owner: Derek reviews and merges PR19; no production deployment or simulator mutation is part of the code change itself.
+- Safety gate: reset accepts only the closed full-fleet operation, uses the existing trusted manifest/workflow boundary, and changes only the simulated Fleet API; Home Assistant, the normal HomeOps release path, Pi, and EC2 remain outside this boundary.
+
 ## DEFECT 01 — clear stale Fleet busy capacity after a failed canary
 
 The public submission boundary now reconciles every queued/applying dispatched
@@ -550,7 +574,7 @@ never executes commands or paths supplied by the manifest.
 | Backend Compose | `dashboard/docker-compose.yml` | `backend`, `valkey`, `prometheus`, and `grafana` services |
 | Public edge | `dashboard/nginx/api.homeops.now.conf` | TLS Nginx on `api.homeops.now`, default location proxies to `localhost:8000` |
 | Backend deployment | `deploy/deploy-ec2.sh` | Fast-forward EC2 checkout, refresh runtime env, rebuild/recreate backend, wait for `/health`, validate Nginx |
-| Current routes | `dashboard/backend/main.py`, `dashboard/backend/fleet_api.py` | `/health`, `/metrics`, `/api/current-temps`, `/api/diagnostic`, `/deploy/api/health`, `/deploy/api/fleet`, `/deploy/api/fleet/{target_id}`, `/deploy/api/deployments/{deployment_id}`, anonymous `/deploy/api/deployments/submit`, and protected deployment queue/apply routes |
+| Current routes | `dashboard/backend/main.py`, `dashboard/backend/fleet_api.py` | `/health`, `/metrics`, `/api/current-temps`, `/api/diagnostic`, `/deploy/api/health`, `/deploy/api/fleet`, `/deploy/api/fleet/{target_id}`, `/deploy/api/deployments/history`, `/deploy/api/deployments/{deployment_id}`, anonymous `/deploy/api/deployments/submit`, and protected deployment queue/apply routes |
 
 The demo management API is a new authorization boundary. Public reads may be
 anonymous, but desired-state/apply/verification writes must require a

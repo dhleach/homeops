@@ -246,7 +246,7 @@ function formatAttemptTimestamp(value) {
   return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString();
 }
 
-function createDeploymentId() {
+export function createDeploymentId() {
   const uuid = globalThis.crypto?.randomUUID?.();
   if (uuid) return `demo-${uuid.replaceAll("-", "")}`;
 

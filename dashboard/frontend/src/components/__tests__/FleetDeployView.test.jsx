@@ -178,6 +178,61 @@ function failedCanaryDeployment(deploymentId) {
   };
 }
 
+function resetDeployment(deploymentId, overrides = {}) {
+  const snapshot = fleetSnapshot();
+  const targetIds = snapshot.targets.map((target) => target.target_id);
+  return {
+    simulated: true,
+    target_kind: "simulated",
+    deployment_id: deploymentId,
+    operation: "reset",
+    target_ids: targetIds,
+    desired: { color: "blue", shape: "circle" },
+    desired_digest: "blue-circle-digest",
+    status: "succeeded",
+    error: null,
+    created_at: "2026-09-27T17:00:00Z",
+    updated_at: "2026-09-27T17:00:20Z",
+    verification: "verified",
+    verified: true,
+    targets: snapshot.targets.map((target) => ({
+      ...target,
+      status: "succeeded",
+      active_deployment_id: null,
+    })),
+    request_summary: {
+      deployment_id: deploymentId,
+      target_ids: targetIds,
+      operation: "reset",
+      profile: { color: "blue", shape: "circle" },
+      schema_version: 1,
+      implementation: "python",
+      strategy: "all_at_once",
+      failure_mode: "abort",
+    },
+    manifest_commit_url: "https://github.com/dhleach/homeops/commit/cccccccccccccccccccccccccccccccccccccccc",
+    workflow_run_id: 902,
+    workflow_url: "https://github.com/dhleach/homeops/actions/runs/902",
+    workflow_status: "completed",
+    workflow_conclusion: "success",
+    workflow: {
+      id: 902,
+      url: "https://github.com/dhleach/homeops/actions/runs/902",
+      status: "completed",
+      conclusion: "success",
+      created_at: "2026-09-27T17:00:01Z",
+      updated_at: "2026-09-27T17:00:19Z",
+      jobs: [],
+    },
+    dispatch_status: "dispatched",
+    dispatch_error: null,
+    rollback_status: "not_started",
+    rollback_target_ids: [],
+    rollback_error: null,
+    ...overrides,
+  };
+}
+
 describe("FleetDeployView", () => {
   beforeEach(() => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
@@ -206,6 +261,103 @@ describe("FleetDeployView", () => {
     expect(screen.getAllByText("test-vehicle-01").length).toBeGreaterThan(0);
     expect(screen.getAllByText("blue circle")).toHaveLength(9);
     expect(screen.getAllByText("Desired = observed")).toHaveLength(12);
+  });
+
+  it("loads durable history and reopens the selected run", async () => {
+    const deploymentId = "demo-history-001";
+    const deployment = failedCanaryDeployment(deploymentId);
+    const historyEntry = {
+      deployment_id: deploymentId,
+      operation: "deploy",
+      selector: { environment: "test" },
+      implementation: "python",
+      artifact_sha256: "a".repeat(64),
+      outcome: "failed",
+      status: "failed",
+      verification: "failed",
+      created_at: deployment.created_at,
+      updated_at: deployment.updated_at,
+      manifest_commit_url: deployment.manifest_commit_url,
+      workflow_run_id: deployment.workflow_run_id,
+      workflow_url: deployment.workflow_url,
+    };
+    const fetchMock = vi.fn((url) => {
+      if (url.includes("/deploy/api/deployments/history")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ simulated: true, target_kind: "simulated", deployments: [historyEntry] }),
+        });
+      }
+      if (url.includes(`/deploy/api/deployments/${deploymentId}`)) {
+        return Promise.resolve({ ok: true, json: async () => deployment });
+      }
+      return Promise.resolve({ ok: true, json: async () => fleetSnapshot() });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<FleetDeployView apiUrl="https://api.homeops.now" />);
+
+    expect(await screen.findByTestId("deployment-history-entry")).toHaveTextContent("demo-history-001");
+    expect(screen.getByTestId("deployment-history-entry")).toHaveTextContent("TEST environment");
+    expect(screen.getByRole("link", { name: "Actions run" })).toHaveAttribute(
+      "href",
+      deployment.workflow_url,
+    );
+    fireEvent.click(screen.getByTestId("deployment-history-row"));
+
+    expect(await screen.findByTestId("deployment-run-state")).toHaveTextContent(deploymentId);
+    expect(fetchMock.mock.calls.some(([url]) => url.includes(`/deployments/${deploymentId}`))).toBe(true);
+  });
+
+  it("submits fleet reset through the normal audited deployment path", async () => {
+    const resetId = "demo-reset-ui-001";
+    const completed = resetDeployment(resetId);
+    const fetchMock = vi.fn((url, options) => {
+      if (url.includes("/deploy/api/deployments/history")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ simulated: true, target_kind: "simulated", deployments: [] }),
+        });
+      }
+      if (url.endsWith("/deployments/submit")) {
+        const request = JSON.parse(options.body);
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            ...completed,
+            deployment_id: request.deployment_id,
+            status: "queued",
+            verification: "pending",
+            verified: false,
+            workflow_status: "in_progress",
+            workflow_conclusion: null,
+            workflow: null,
+          }),
+        });
+      }
+      if (url.includes("/deploy/api/deployments/")) {
+        return Promise.resolve({ ok: true, json: async () => completed });
+      }
+      return Promise.resolve({ ok: true, json: async () => fleetSnapshot() });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<FleetDeployView apiUrl="https://api.homeops.now" />);
+    await screen.findAllByTestId("fleet-target-card");
+    fireEvent.click(screen.getByTestId("fleet-reset"));
+
+    await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => url.endsWith("/deployments/submit"))).toBe(true));
+    const submitCall = fetchMock.mock.calls.find(([url]) => url.endsWith("/deployments/submit"));
+    const request = JSON.parse(submitCall[1].body);
+    expect(request).toEqual(expect.objectContaining({
+      operation: "reset",
+      implementation: "python",
+      strategy: "all_at_once",
+      failure_mode: "abort",
+    }));
+    expect(request.target_ids).toHaveLength(12);
+    expect(submitCall[1].headers).not.toHaveProperty("Authorization");
+    expect(await screen.findByTestId("deployment-run-state")).toHaveTextContent(request.deployment_id);
   });
 
   it("keeps the narrow layout bounded and explains accessible control states", async () => {
@@ -461,7 +613,9 @@ describe("FleetDeployView", () => {
     fireEvent.click(screen.getByTestId("deploy-submit"));
 
     await waitFor(() => expect(fetchMock.mock.calls.length).toBeGreaterThanOrEqual(2));
-    const [url, options] = fetchMock.mock.calls[1];
+    const submitCall = fetchMock.mock.calls.find(([url]) => url.endsWith("/deployments/submit"));
+    expect(submitCall).toBeDefined();
+    const [url, options] = submitCall;
     expect(url).toBe("https://api.homeops.now/deploy/api/deployments/submit");
     expect(options.method).toBe("POST");
     expect(options.headers).toEqual({
@@ -664,7 +818,7 @@ describe("FleetDeployView", () => {
     };
     window.sessionStorage.setItem("homeops.activeFleetDeploymentId", "demo-reload-001");
     const fetchMock = vi.fn((url) => {
-      if (url.includes("/deploy/api/deployments/")) {
+      if (url.includes("/deploy/api/deployments/") && !url.includes("/deploy/api/deployments/history")) {
         return Promise.resolve({ ok: true, json: async () => deployment });
       }
       return Promise.resolve({ ok: true, json: async () => fleetSnapshot() });
@@ -742,7 +896,7 @@ describe("FleetDeployView", () => {
     };
     window.sessionStorage.setItem("homeops.activeFleetDeploymentId", "demo-rollback-ui-001");
     vi.stubGlobal("fetch", vi.fn((url) => {
-      if (url.includes("/deploy/api/deployments/")) {
+      if (url.includes("/deploy/api/deployments/") && !url.includes("/deploy/api/deployments/history")) {
         return Promise.resolve({ ok: true, json: async () => deployment });
       }
       return Promise.resolve({ ok: true, json: async () => fleetSnapshot() });
@@ -838,7 +992,7 @@ describe("FleetDeployView", () => {
     window.sessionStorage.setItem("homeops.activeFleetDeploymentId", "demo-converge-001");
     let deploymentReads = 0;
     const fetchMock = vi.fn((url) => {
-      if (url.includes("/deploy/api/deployments/")) {
+      if (url.includes("/deploy/api/deployments/") && !url.includes("/deploy/api/deployments/history")) {
         deploymentReads += 1;
         return Promise.resolve({
           ok: true,
@@ -891,7 +1045,7 @@ describe("FleetDeployView", () => {
           }),
         });
       }
-      if (url.includes("/deploy/api/deployments/")) {
+      if (url.includes("/deploy/api/deployments/") && !url.includes("/deploy/api/deployments/history")) {
         const requestedId = decodeURIComponent(url.split("/").pop());
         return Promise.resolve({
           ok: true,

@@ -56,7 +56,13 @@ React + Vite + Tailwind single-page dashboard for `homeops.now`.
   as skipped after an upstream failure, and server-recorded Python deployer
   events retain their target IDs, status, detail, and recording order across
   reloads. Green evidence is shown only when it comes from an Actions step or
-  stored simulator event. The route remains
+  stored simulator event. The route also reads the bounded durable
+  `/deploy/api/deployments/history` list, showing selector, implementation,
+  artifact digest, outcome, timestamps, manifest commit, and Actions run link;
+  selecting a history row reopens that exact deployment read. The header's
+  Reset simulated fleet control submits the closed full-fleet `operation:
+  "reset"` DeploymentSpec through the same manifest/workflow/apply/readback
+  path and explains the default one-reset-per-UTC-day cap. The route remains
   bounded at phone widths, exposes visible keyboard focus, explains disabled
   controls, announces live target/run changes, and uses contrast-checked text
   labels instead of color alone. It sets a route-specific browser title and

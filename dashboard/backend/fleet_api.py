@@ -21,7 +21,7 @@ import uuid
 from pathlib import Path
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, ConfigDict, Field
 from security import extract_client_ip, load_proxy_config
@@ -52,10 +52,12 @@ _ensure_deploy_demo_importable(Path(__file__))
 from deploy_demo import (  # noqa: E402
     DEFAULT_REPOSITORY,
     GITHUB_REPOSITORY_ENV,
+    MAX_DEPLOYMENT_HISTORY,
     SIMULATED_VERIFICATION_FAILURE_PREFIX,
     DeploymentAdmissionLimitError,
     DeploymentConflictError,
     DeploymentCooldownError,
+    DeploymentDailyLimitError,
     DeploymentEventRecord,
     DeploymentSpecError,
     DeploymentState,
@@ -72,6 +74,7 @@ from deploy_demo import (  # noqa: E402
     WorkflowJobReceipt,
     WorkflowRunReceipt,
     WorkflowStepReceipt,
+    baseline_profile,
     supported_capabilities,
     validate_deployment_spec,
 )
@@ -87,9 +90,11 @@ FLEET_GITHUB_UNAVAILABLE_ERROR = "Fleet deployment temporarily unavailable"
 FLEET_SUBMISSION_COOLDOWN_ENV = "FLEET_DEPLOY_IP_COOLDOWN_SECONDS"
 FLEET_MAX_ACTIVE_ENV = "FLEET_DEPLOY_MAX_ACTIVE"
 FLEET_DISPATCH_LEASE_ENV = "FLEET_DEPLOY_DISPATCH_LEASE_SECONDS"
+FLEET_RESET_DAILY_CAP_ENV = "FLEET_DEPLOY_RESET_DAILY_CAP"
 DEFAULT_FLEET_SUBMISSION_COOLDOWN_SECONDS = 60
 DEFAULT_FLEET_MAX_ACTIVE = 1
 DEFAULT_FLEET_DISPATCH_LEASE_SECONDS = 300
+DEFAULT_FLEET_RESET_DAILY_CAP = 1
 
 VehicleStatusResponse = Literal["ready", "pending", "applying", "succeeded", "failed"]
 DeploymentStatusResponse = Literal["queued", "applying", "succeeded", "failed"]
@@ -182,6 +187,7 @@ class DeploymentSpecRequest(BaseModel):
     strategy: str
     failure_mode: str
     failure_target_id: str | None = None
+    operation: Literal["deploy", "reset"] = "deploy"
 
 
 class DeploymentApplyRequest(BaseModel):
@@ -275,6 +281,7 @@ class FleetDeploymentResponse(BaseModel):
     simulated: Literal[True] = True
     target_kind: Literal["simulated"] = "simulated"
     deployment_id: str
+    operation: Literal["deploy", "reset"] = "deploy"
     target_ids: list[str]
     desired: FleetProfileResponse
     desired_digest: str
@@ -308,6 +315,36 @@ class FleetDeploymentResponse(BaseModel):
     error_code: str | None = None
     error_recovery: str | None = None
     retry_after_seconds: int | None = None
+
+
+class FleetDeploymentHistoryEntryResponse(BaseModel):
+    """Public-safe summary for one durable recent deployment record."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    deployment_id: str
+    operation: Literal["deploy", "reset"]
+    selector: dict[str, object]
+    implementation: str
+    artifact_sha256: str
+    outcome: str
+    status: DeploymentStatusResponse
+    verification: VerificationStatus
+    created_at: str
+    updated_at: str
+    manifest_commit_url: str | None = None
+    workflow_run_id: int | None = None
+    workflow_url: str | None = None
+
+
+class FleetDeploymentHistoryResponse(BaseModel):
+    """Bounded durable history returned to the anonymous demo frontend."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    simulated: Literal[True] = True
+    target_kind: Literal["simulated"] = "simulated"
+    deployments: list[FleetDeploymentHistoryEntryResponse]
 
 
 class FleetDeploymentEventRequest(BaseModel):
@@ -429,6 +466,64 @@ def _deployment_event_response(event: DeploymentEventRecord) -> FleetDeploymentE
     )
 
 
+def _deployment_operation(deployment: DeploymentState) -> Literal["deploy", "reset"]:
+    """Return the validated operation recorded with the deployment request."""
+    operation = (deployment.request_summary or {}).get("operation", "deploy")
+    return operation if operation in {"deploy", "reset"} else "deploy"
+
+
+def _deployment_is_verified(store: FleetStateStore, deployment: DeploymentState) -> bool:
+    """Check the durable desired/observed convergence without provider calls."""
+    if deployment.status != "succeeded":
+        return False
+    return all(
+        (vehicle := store.get_vehicle(target_id)).desired_digest == vehicle.observed_digest
+        for target_id in deployment.target_ids
+    )
+
+
+def _deployment_history_entry(
+    store: FleetStateStore,
+    deployment: DeploymentState,
+) -> FleetDeploymentHistoryEntryResponse:
+    """Translate one durable deployment into the bounded recent-run contract."""
+    summary = deployment.request_summary or {}
+    operation = _deployment_operation(deployment)
+    environment = summary.get("environment")
+    target_ids = summary.get("target_ids") or list(deployment.target_ids)
+    selector: dict[str, object]
+    if isinstance(environment, str):
+        selector = {"environment": environment}
+    else:
+        selector = {"target_ids": list(target_ids) if isinstance(target_ids, list) else []}
+    verified = _deployment_is_verified(store, deployment)
+    if verified:
+        outcome = "verified"
+    elif deployment.dispatch_status == "failed":
+        outcome = deployment.dispatch_error or "dispatch_failed"
+    elif deployment.status == "failed":
+        outcome = "failed"
+    else:
+        outcome = deployment.status
+    return FleetDeploymentHistoryEntryResponse(
+        deployment_id=deployment.deployment_id,
+        operation=operation,
+        selector=selector,
+        implementation=str(summary.get("implementation", "unknown")),
+        artifact_sha256=deployment.profile_digest,
+        outcome=outcome,
+        status=deployment.status,
+        verification=(
+            "verified" if verified else ("failed" if deployment.status == "failed" else "pending")
+        ),
+        created_at=deployment.created_at,
+        updated_at=deployment.updated_at,
+        manifest_commit_url=_manifest_commit_url(deployment.manifest_commit_sha),
+        workflow_run_id=deployment.workflow_run_id,
+        workflow_url=deployment.workflow_url,
+    )
+
+
 def _workflow_failure_message(run: WorkflowRunReceipt) -> str:
     """Return an actionable, bounded failure summary for a completed run."""
     failed_jobs = [
@@ -538,6 +633,11 @@ def _deployment_error_metadata(
 
 def _deployment_observed_matches(store: FleetStateStore, deployment: DeploymentState) -> bool:
     """Verify every requested target has the requested observed profile."""
+    if _deployment_operation(deployment) == "reset":
+        return all(
+            store.get_vehicle(target_id).observed_digest == baseline_profile(target_id).digest
+            for target_id in deployment.target_ids
+        )
     return all(
         store.get_vehicle(target_id).observed_digest == deployment.profile_digest
         for target_id in deployment.target_ids
@@ -573,6 +673,7 @@ def _deployment_response(
     )
     return FleetDeploymentResponse(
         deployment_id=deployment.deployment_id,
+        operation=_deployment_operation(deployment),
         target_ids=list(deployment.target_ids),
         desired=_profile_response(deployment.profile.color, deployment.profile.shape),
         desired_digest=deployment.profile_digest,
@@ -872,6 +973,21 @@ def read_target(target_id: str, store: FleetStoreDependency) -> FleetTargetRespo
     return _target_response(vehicle)
 
 
+@router.get("/deployments/history", response_model=FleetDeploymentHistoryResponse)
+def read_deployment_history(
+    store: FleetStoreDependency,
+    limit: int = Query(default=20, ge=1, le=MAX_DEPLOYMENT_HISTORY),
+) -> FleetDeploymentHistoryResponse:
+    """Return recent durable attempts without requiring a browser session."""
+    try:
+        deployments = store.list_deployments(limit)
+        return FleetDeploymentHistoryResponse(
+            deployments=[_deployment_history_entry(store, deployment) for deployment in deployments]
+        )
+    except (OSError, sqlite3.Error, FleetStateError, ValueError) as exc:
+        _state_unavailable(exc)
+
+
 @router.get("/deployments/{deployment_id}", response_model=FleetDeploymentResponse)
 def read_deployment(
     deployment_id: str,
@@ -940,6 +1056,10 @@ def submit_public_deployment(
                 allow_zero=True,
             ),
             max_active=_positive_fleet_int(FLEET_MAX_ACTIVE_ENV, DEFAULT_FLEET_MAX_ACTIVE),
+            reset_daily_cap=_positive_fleet_int(
+                FLEET_RESET_DAILY_CAP_ENV,
+                DEFAULT_FLEET_RESET_DAILY_CAP,
+            ),
         )
     except DeploymentCooldownError as exc:
         raise _submission_limit_error(
@@ -954,6 +1074,13 @@ def submit_public_deployment(
             message="Fleet deployment capacity is temporarily full.",
             recovery="Wait for the active run to finish, then retry the same attempt.",
             retry_after_seconds=30,
+        ) from None
+    except DeploymentDailyLimitError as exc:
+        raise _submission_limit_error(
+            code="reset_daily_cap",
+            message="The conservative daily Fleet reset limit has been reached.",
+            recovery="Wait until the next UTC day before requesting another reset.",
+            retry_after_seconds=exc.retry_after_seconds,
         ) from None
     except DeploymentConflictError as exc:
         raise _deployment_conflict(exc) from None
@@ -1093,6 +1220,11 @@ def apply_deployment(
     """
     try:
         deployment = store.get_deployment(deployment_id)
+        if _deployment_operation(deployment) == "reset":
+            if payload is not None and payload.target_ids is not None:
+                raise DeploymentConflictError("reset applies the complete simulated fleet")
+            deployment = store.reset_deployment_targets(deployment_id)
+            return _deployment_response(store, deployment)
         if payload is not None and payload.target_ids is not None:
             deployment = store.apply_deployment_targets(deployment_id, payload.target_ids)
             return _deployment_response(store, deployment)
@@ -1173,7 +1305,10 @@ def restore_deployment(
 __all__ = [
     "FLEET_API_PREFIX",
     "FLEET_MANAGEMENT_KEY_ENV",
+    "FLEET_RESET_DAILY_CAP_ENV",
     "FleetCapabilityResponse",
+    "FleetDeploymentHistoryEntryResponse",
+    "FleetDeploymentHistoryResponse",
     "FleetDeploymentEventRequest",
     "FleetDeploymentEventResponse",
     "FleetDeploymentResponse",

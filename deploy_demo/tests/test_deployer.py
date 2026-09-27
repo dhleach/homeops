@@ -12,6 +12,7 @@ import pytest
 
 import deploy_demo.deployer as deployer
 from deploy_demo import (
+    TARGET_ORDER,
     ArtifactIdentityError,
     DeploymentArtifact,
     DeploymentSpecError,
@@ -20,6 +21,7 @@ from deploy_demo import (
     FleetApiError,
     FleetDeployer,
     FleetProfile,
+    baseline_profile,
     validate_deployment_spec,
 )
 
@@ -93,6 +95,47 @@ def snapshot(
         "deployment_id": spec.deployment_id,
         "target_ids": list(spec.expanded_target_ids),
         "desired": desired,
+        "desired_digest": artifact.sha256,
+        "status": status,
+        "error": None,
+        "created_at": "2026-09-26T00:00:00Z",
+        "updated_at": "2026-09-26T00:00:00Z",
+        "verification": "verified" if verified else "pending",
+        "verified": verified,
+        "targets": targets,
+        "idempotent": False,
+    }
+
+
+def reset_snapshot(spec, artifact, *, status: str, verified: bool) -> dict[str, object]:
+    """Build a reset response whose target profiles return to their baselines."""
+    targets = []
+    for target_id in spec.expanded_target_ids:
+        profile = baseline_profile(target_id)
+        succeeded = status == "succeeded"
+        targets.append(
+            {
+                "target_id": target_id,
+                "label": target_id.upper(),
+                "environment": target_id.split("-vehicle-", 1)[0],
+                "simulated": True,
+                "desired": profile.to_dict(),
+                "desired_digest": profile.digest,
+                "observed": profile.to_dict(),
+                "observed_digest": profile.digest,
+                "status": "succeeded" if succeeded else "pending",
+                "active_deployment_id": None if succeeded else spec.deployment_id,
+                "last_error": None,
+                "updated_at": "2026-09-26T00:00:00Z",
+            }
+        )
+    return {
+        "simulated": True,
+        "target_kind": "simulated",
+        "deployment_id": spec.deployment_id,
+        "operation": "reset",
+        "target_ids": list(spec.expanded_target_ids),
+        "desired": artifact.profile.to_dict(),
         "desired_digest": artifact.sha256,
         "status": status,
         "error": None,
@@ -187,6 +230,25 @@ def test_deployer_queues_applies_and_verifies_fresh_observed_state() -> None:
     ]
     assert all(event.deployment_id == spec.deployment_id for event in events)
     assert all(event.artifact_sha256 == artifact.sha256 for event in events)
+
+
+def test_reset_deployment_verifies_per_target_baseline_profiles() -> None:
+    spec = valid_spec(
+        deployment_id="demo-reset-deployer-001",
+        operation="reset",
+        environment=None,
+        target_ids=list(reversed(TARGET_ORDER)),
+    )
+    artifact = artifact_for(spec)
+    queued = reset_snapshot(spec, artifact, status="queued", verified=False)
+    completed = reset_snapshot(spec, artifact, status="succeeded", verified=True)
+    client = FakeClient(queued, completed, completed)
+
+    result = FleetDeployer(client).deploy(spec, artifact)
+
+    assert result.response["operation"] == "reset"
+    assert result.response["verified"] is True
+    assert [name for name, _ in client.calls] == ["queue", "apply", "read"]
 
 
 def test_python_canary_verifies_first_target_before_remaining_rollout() -> None:

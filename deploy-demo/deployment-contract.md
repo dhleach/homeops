@@ -26,11 +26,18 @@ For a bounded interview failure demonstration, the optional
 {"deployment_id":"demo-20260927-failure","environment":"test","failure_mode":"abort","failure_target_id":"test-vehicle-01","implementation":"python","profile":{"color":"orange","shape":"triangle"},"schema_version":1,"strategy":"canary"}
 ```
 
+The full simulated fleet can be returned to its deterministic readable
+baselines through the validated reset operation:
+
+```json
+{"deployment_id":"demo-20260927-reset","failure_mode":"abort","implementation":"python","operation":"reset","profile":{"color":"blue","shape":"circle"},"schema_version":1,"strategy":"all_at_once","target_ids":["test-vehicle-01","test-vehicle-02","test-vehicle-03","test-vehicle-04","stage-vehicle-01","stage-vehicle-02","stage-vehicle-03","stage-vehicle-04","prod-vehicle-01","prod-vehicle-02","prod-vehicle-03","prod-vehicle-04"]}
+```
+
 The validator requires exactly one of `environment` or `target_ids`. It rejects
 unknown keys, missing fields, empty selections, duplicate IDs, unknown target
 IDs, more than twelve targets, invalid enum values, unselected failure targets,
-and invalid strategy/failure mode combinations. The profile has only finite
-`color` and `shape` values.
+invalid reset selectors, and invalid strategy/failure mode combinations. The
+profile has only finite `color` and `shape` values.
 
 The known targets are four logical vehicles in each environment:
 
@@ -63,6 +70,7 @@ The complete reserved enum vocabulary is:
 | `profile.color` | `blue`, `green`, `orange`, `purple` |
 | `profile.shape` | `circle`, `hexagon`, `square`, `triangle` |
 | `implementation` | `python`, `ansible` |
+| `operation` | `deploy`, `reset` (reset requires the complete fleet, Python, `all_at_once`, and `abort`) |
 | `strategy` | `all_at_once`, `rolling`, `canary` |
 | `failure_mode` | `abort`, `rollback` |
 | `failure_target_id` | optional known target selected by `environment` or `target_ids` |
@@ -76,6 +84,13 @@ restores only targets that reached the new observed profile and verifies their
 pre-deployment snapshots through a protected restore API. It cannot identify a
 real host, carry a command, or reach Home Assistant or the normal HomeOps
 release path.
+
+`operation` defaults to `deploy` for backwards-compatible manifests. The
+closed `reset` operation must target all twelve simulated vehicles and uses
+the trusted Python path to restore each target's deterministic baseline profile;
+it is never a browser-side database mutation. Public reset admission shares the
+ordinary cooldown and active-run controls and is capped conservatively at one
+reset per UTC day by default.
 
 ## Deterministic serialization
 
