@@ -22,7 +22,10 @@ React + Vite + Tailwind single-page dashboard for `homeops.now`.
 - Renders the existing HVAC dashboard at `/` and the Fleet Deploy Lab at
   `/deploy`. The fleet route reads `VITE_API_URL/deploy/api/fleet`, groups all
   twelve explicitly simulated targets by TEST, STAGE, and PROD, and displays
-  desired versus observed profiles, digests, and status. Its bounded control
+  compact vehicle-themed cards with short target IDs, observed profiles,
+  health, and desired-versus-observed state readable without relying on color;
+  full target identifiers and digests remain available in an on-demand details
+  disclosure. Its bounded control
   plane lets a visitor configure and submit only the finite `DeploymentSpec` to
   `VITE_API_URL/deploy/api/deployments/submit`. The form generates the
   deployment attempt ID automatically, keeps it in tab-scoped session storage

@@ -1,10 +1,10 @@
 # Fleet Deploy Lab integration map
 
-Status: REV 08 actionable submission/failure status work in progress; REV 07 target-selection work merged
+Status: REV 09 compact vehicle-themed fleet cards in progress; REV 08 actionable submission/failure status merged
 Repository: `dhleach/homeops`
 Default branch: `master`
-Latest merged integration snapshot: `a135e24`
-Active GitHub issue: https://github.com/dhleach/homeops/issues/376
+Latest merged integration snapshot: `3681b92`
+Active GitHub issue: https://github.com/dhleach/homeops/issues/378
 
 This document records the real HomeOps integration points for the Fleet Deploy
 Lab as the implementation advances. It is deliberately specific about what
@@ -123,6 +123,23 @@ recoverable after reload.
 - Terraform resources changed: **None**
 - Safety gate: no browser credential, provider response, Home Assistant state,
   thermostat, Pi/EC2 deployment, or normal release path is exposed or changed.
+
+## REV 09 — compact vehicle-themed fleet cards
+
+The fleet snapshot now presents each target as a compact vehicle-themed card.
+The short target label, observed profile, and health state lead the card, while
+the desired-versus-observed comparison remains explicit and uses text as well
+as visual treatment so it does not depend on color perception. Full machine
+identifiers and profile digests remain available in an on-demand details
+disclosure. The vehicle silhouette is decorative presentation only; it does
+not change the `DeploymentSpec`, fleet API payload, or reported simulator state.
+
+- Terraform apply required: **No**
+- Manual console/setup: **None**
+- Terraform resources changed: **None**
+- Sequence and owner: Derek reviews and merges the frontend-only implementation.
+- Safety gate: no API schema, credential, workflow, Home Assistant, thermostat,
+  Pi/EC2 deployment, or normal release path is changed.
 
 ## REV 05 — generated request identifiers and safe retries
 

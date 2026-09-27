@@ -106,6 +106,11 @@ function profileText(profile) {
   return `${profile.color} ${profile.shape}`;
 }
 
+function targetDisplayLabel(target) {
+  const match = /^(test|stage|prod)-vehicle-(\d{2})$/.exec(target);
+  return match ? `${match[1].toUpperCase()}-${match[2]}` : target;
+}
+
 function groupTargets(targets) {
   return ENVIRONMENTS.map((environment) => ({
     environment,
@@ -283,6 +288,16 @@ function ProfileGlyph({ profile, label }) {
   );
 }
 
+function VehicleGlyph({ environment }) {
+  return (
+    <span
+      aria-hidden="true"
+      className={`fleet-vehicle-glyph fleet-vehicle-glyph--${environment}`}
+      data-testid="fleet-vehicle-glyph"
+    />
+  );
+}
+
 function StatusPill({ status }) {
   const statusClass = status === "failed"
     ? "border-red-400/30 bg-red-400/10 text-red-300"
@@ -301,11 +316,16 @@ function StatusPill({ status }) {
 function FleetTargetCard({ target, selected }) {
   const synchronized = target.desired_digest === target.observed_digest;
   const cardTitleId = `fleet-target-${target.target_id}`;
+  const displayLabel = target.label ?? targetDisplayLabel(target.target_id);
+  const syncClass = synchronized
+    ? "border-emerald-400/30 bg-emerald-400/5"
+    : "border-amber-400/40 bg-amber-400/10";
+  const syncTextClass = synchronized ? "text-emerald-200" : "text-amber-100";
 
   return (
     <article
       aria-labelledby={cardTitleId}
-      className={`flex min-h-[19rem] flex-col rounded-2xl border p-5 shadow-lg shadow-slate-950/10 transition-colors ${selected
+      className={`flex flex-col rounded-2xl border p-4 shadow-lg shadow-slate-950/10 transition-colors ${selected
         ? "border-blue-400/80 bg-blue-400/10 ring-1 ring-blue-400/40"
         : "border-border bg-card"}`}
       data-selected={selected ? "true" : "false"}
@@ -313,75 +333,110 @@ function FleetTargetCard({ target, selected }) {
       data-testid="fleet-target-card"
     >
       <div className="flex items-start justify-between gap-3">
-        <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-blue-300">
-            {target.environment}
-          </p>
-          <h3 id={cardTitleId} className="mt-1 font-mono text-sm font-semibold text-white">
-            {target.target_id}
-          </h3>
+        <div className="flex min-w-0 items-center gap-3">
+          <VehicleGlyph environment={target.environment} />
+          <div className="min-w-0">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-blue-300">
+              Fleet target
+            </p>
+            <h3 id={cardTitleId} className="mt-1 font-mono text-lg font-semibold text-white">
+              {displayLabel}
+            </h3>
+            <p className="mt-0.5 text-xs text-slate-500">
+              {target.environment.toUpperCase()} · simulated vehicle
+            </p>
+          </div>
         </div>
-        <div className="flex flex-col items-end gap-2">
+        <div className="flex shrink-0 flex-col items-end gap-2">
           {selected && (
             <span className="rounded-full border border-blue-300/40 bg-blue-300/10 px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-blue-100">
               Selected
             </span>
           )}
-          <StatusPill status={target.status} />
         </div>
       </div>
 
-      <div className="mt-5 flex items-center gap-4 rounded-xl border border-border/70 bg-slate-950/20 p-3">
+      <div className="mt-4 flex items-center gap-3 rounded-xl border border-border/70 bg-slate-950/20 p-3">
         <ProfileGlyph
           profile={target.observed}
           label={`Observed ${profileText(target.observed)}`}
         />
-        <div>
-          <p className="text-sm font-medium text-slate-200">Simulated target</p>
-          <p className="text-xs text-slate-500">{target.label}</p>
+        <div className="min-w-0">
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Observed profile</p>
+          <p className="mt-1 truncate text-sm font-medium text-slate-200">{profileText(target.observed)}</p>
         </div>
-        <span className="ml-auto rounded-full border border-slate-600/80 px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-slate-400">
-          SIM
-        </span>
+        <div className="ml-auto flex shrink-0 flex-col items-end gap-1">
+          <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Health</span>
+          <StatusPill status={target.status} />
+        </div>
       </div>
 
-      <dl className="mt-5 space-y-3 text-xs">
+      <div
+        aria-label={synchronized ? "Desired matches observed" : "Desired differs from observed"}
+        className={`mt-4 rounded-xl border p-3 ${syncClass}`}
+        data-synchronized={synchronized ? "true" : "false"}
+        data-testid="fleet-target-sync"
+      >
         <div className="flex items-start justify-between gap-3">
-          <dt className="text-slate-500">Desired</dt>
-          <dd className="flex items-center gap-2 text-right text-slate-300">
-            <ProfileGlyph profile={target.desired} label={`Desired ${profileText(target.desired)}`} />
-            <span>
-              <span className="block">{profileText(target.desired)}</span>
-              <code className="text-slate-500" title={target.desired_digest}>
-                {formatDigest(target.desired_digest)}
-              </code>
-            </span>
-          </dd>
-        </div>
-        <div className="flex items-start justify-between gap-3">
-          <dt className="text-slate-500">Observed</dt>
-          <dd className="flex items-center gap-2 text-right text-slate-300">
-            <ProfileGlyph profile={target.observed} label={`Observed ${profileText(target.observed)}`} />
-            <span>
-              <span className="block">{profileText(target.observed)}</span>
-              <code className="text-slate-500" title={target.observed_digest}>
-                {formatDigest(target.observed_digest)}
-              </code>
-            </span>
-          </dd>
-        </div>
-      </dl>
-
-      <div className="mt-auto flex items-center justify-between gap-3 border-t border-border/70 pt-4 text-xs">
-        <span className={synchronized ? "text-emerald-300" : "text-amber-200"}>
-          {synchronized ? "Desired = observed" : "Desired / observed drift"}
-        </span>
-        {target.last_error && (
-          <span className="max-w-[10rem] truncate text-red-300" title={target.last_error}>
-            {target.last_error}
+          <div>
+            <p className={`text-xs font-semibold ${syncTextClass}`}>
+              {synchronized ? "Desired = observed" : "Desired / observed drift"}
+            </p>
+            <p className="mt-1 text-[11px] text-slate-400">
+              {synchronized ? "Desired profile matches observed state." : "Desired profile differs from observed state."}
+            </p>
+          </div>
+          <span aria-hidden="true" className={`text-lg leading-none ${syncTextClass}`}>
+            {synchronized ? "✓" : "!"}
           </span>
-        )}
+        </div>
+        <div className="mt-3 grid grid-cols-2 gap-3 border-t border-current/10 pt-3 text-xs">
+          <div>
+            <p className="text-slate-500">Desired</p>
+            <div className="mt-1 flex items-center gap-2 text-slate-300">
+              <ProfileGlyph profile={target.desired} label={`Desired ${profileText(target.desired)}`} />
+              <span>{profileText(target.desired)}</span>
+            </div>
+          </div>
+          <div>
+            <p className="text-slate-500">Observed</p>
+            <div className="mt-1 flex items-center gap-2 text-slate-300">
+              <ProfileGlyph profile={target.observed} label={`Observed ${profileText(target.observed)}`} />
+              <span>{profileText(target.observed)}</span>
+            </div>
+          </div>
+        </div>
       </div>
+
+      {target.last_error && (
+        <p className="mt-3 truncate text-xs text-red-300" title={target.last_error}>
+          Health detail: {target.last_error}
+        </p>
+      )}
+
+      <details className="mt-3 rounded-lg border border-border/70 bg-slate-950/20 px-3 py-2 text-xs" data-testid="fleet-target-details">
+        <summary className="cursor-pointer font-medium text-slate-400 hover:text-slate-200">
+          Full target details
+        </summary>
+        <dl className="mt-3 space-y-2 border-t border-border/70 pt-3 text-slate-300">
+          <div className="flex items-start justify-between gap-3">
+            <dt className="text-slate-500">Target ID</dt>
+            <dd className="max-w-[14rem] break-all text-right font-mono">{target.target_id}</dd>
+          </div>
+          <div className="flex items-start justify-between gap-3">
+            <dt className="text-slate-500">Desired digest</dt>
+            <dd className="max-w-[14rem] break-all text-right font-mono" title={target.desired_digest}>
+              {formatDigest(target.desired_digest)}
+            </dd>
+          </div>
+          <div className="flex items-start justify-between gap-3">
+            <dt className="text-slate-500">Observed digest</dt>
+            <dd className="max-w-[14rem] break-all text-right font-mono" title={target.observed_digest}>
+              {formatDigest(target.observed_digest)}
+            </dd>
+          </div>
+        </dl>
+      </details>
     </article>
   );
 }
@@ -394,7 +449,7 @@ function FleetLoadingState() {
       data-testid="fleet-loading"
     >
       {[...Array(12)].map((_, index) => (
-        <div key={index} className="h-[19rem] animate-pulse rounded-2xl border border-border bg-card" />
+        <div key={index} className="h-[24rem] animate-pulse rounded-2xl border border-border bg-card" />
       ))}
     </div>
   );
