@@ -225,6 +225,7 @@ class FleetDeploymentResponse(BaseModel):
     verification: VerificationStatus
     verified: bool
     targets: list[FleetTargetResponse]
+    request_summary: dict[str, object] | None = None
     idempotent: bool = False
     manifest_path: str | None = None
     manifest_sha256: str | None = None
@@ -240,6 +241,9 @@ class FleetDeploymentResponse(BaseModel):
     workflow: FleetWorkflowResponse | None = None
     dispatch_status: DispatchStatusResponse = "not_started"
     dispatch_error: str | None = None
+    error_code: str | None = None
+    error_recovery: str | None = None
+    retry_after_seconds: int | None = None
 
 
 def _profile_response(color: str, shape: str) -> FleetProfileResponse:
@@ -324,6 +328,73 @@ def _workflow_failure_message(run: WorkflowRunReceipt) -> str:
     return f"GitHub Actions completed with conclusion: {run.conclusion or 'failed'}"
 
 
+_DISPATCH_ERROR_METADATA = {
+    "manifest_commit_failed": (
+        "manifest_commit_failed",
+        "The deployment manifest could not be recorded.",
+        "Retry this same attempt; any already-recorded manifest will be reused.",
+    ),
+    "workflow_dispatch_failed": (
+        "workflow_dispatch_failed",
+        "The deployment manifest was recorded, but the trusted workflow was not dispatched.",
+        "Retry this same attempt; the committed manifest will be reused without "
+        "creating a duplicate.",
+    ),
+}
+
+
+def _deployment_error_metadata(
+    deployment: DeploymentState,
+    *,
+    workflow_run: WorkflowRunReceipt | None,
+    workflow_error: str | None,
+) -> tuple[str | None, str | None, str | None, str | None]:
+    """Return a public-safe error code, message, recovery, and retry hint."""
+    if workflow_error:
+        return (
+            "workflow_unavailable",
+            workflow_error,
+            "Keep this attempt open and refresh; do not start a duplicate while "
+            "workflow state is unavailable.",
+            None,
+        )
+
+    if deployment.dispatch_error:
+        metadata = _DISPATCH_ERROR_METADATA.get(
+            deployment.dispatch_error,
+            (
+                deployment.dispatch_error,
+                "The deployment could not be dispatched.",
+                "Retry this same attempt; the server will preserve the request identity.",
+            ),
+        )
+        return (*metadata, None)
+
+    workflow_failed = (
+        workflow_run is not None
+        and workflow_run.status == "completed"
+        and workflow_run.conclusion not in {None, "success", "neutral", "skipped"}
+    ) or (deployment.error or "").startswith("GitHub Actions failed:")
+    if workflow_failed:
+        return (
+            "workflow_failed",
+            deployment.error or "GitHub Actions reported a failed deployment.",
+            "Review the workflow run and observed target state before deciding "
+            "whether to start a new attempt.",
+            None,
+        )
+
+    if deployment.error and deployment.error.startswith("GitHub Actions reported success"):
+        return (
+            "verification_failed",
+            deployment.error,
+            "Compare desired and observed target state before retrying this request.",
+            None,
+        )
+
+    return (None, deployment.error, None, None)
+
+
 def _deployment_observed_matches(store: FleetStateStore, deployment: DeploymentState) -> bool:
     """Verify every requested target has the requested observed profile."""
     return all(
@@ -354,18 +425,24 @@ def _deployment_response(
     else:
         verification = "pending"
 
+    error_code, error_message, error_recovery, retry_after_seconds = _deployment_error_metadata(
+        deployment,
+        workflow_run=workflow_run,
+        workflow_error=workflow_error,
+    )
     return FleetDeploymentResponse(
         deployment_id=deployment.deployment_id,
         target_ids=list(deployment.target_ids),
         desired=_profile_response(deployment.profile.color, deployment.profile.shape),
         desired_digest=deployment.profile_digest,
         status=deployment.status,
-        error=deployment.error,
+        error=error_message,
         created_at=deployment.created_at,
         updated_at=deployment.updated_at,
         verification=verification,
         verified=verification == "verified",
         targets=targets,
+        request_summary=deployment.request_summary,
         idempotent=idempotent,
         manifest_path=deployment.manifest_path,
         manifest_sha256=deployment.manifest_sha256,
@@ -385,6 +462,9 @@ def _deployment_response(
         workflow=_workflow_response(workflow_run),
         dispatch_status=deployment.dispatch_status,
         dispatch_error=deployment.dispatch_error,
+        error_code=error_code,
+        error_recovery=error_recovery,
+        retry_after_seconds=retry_after_seconds,
     )
 
 
@@ -544,7 +624,31 @@ def require_fleet_management_credential(
 def _invalid_spec(exc: DeploymentSpecError) -> HTTPException:
     return HTTPException(
         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-        detail={"code": "invalid_deployment_spec", "message": str(exc)},
+        detail={
+            "code": "invalid_deployment_spec",
+            "message": str(exc),
+            "recovery": "Correct the rejected request fields and submit the revised attempt.",
+        },
+    )
+
+
+def _submission_limit_error(
+    *,
+    code: str,
+    message: str,
+    recovery: str,
+    retry_after_seconds: int,
+) -> HTTPException:
+    """Return a bounded, credential-free admission error for the browser."""
+    return HTTPException(
+        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+        detail={
+            "code": code,
+            "message": message,
+            "recovery": recovery,
+            "retry_after_seconds": retry_after_seconds,
+        },
+        headers={"Retry-After": str(retry_after_seconds)},
     )
 
 
@@ -641,7 +745,7 @@ def submit_public_deployment(
     store: FleetStoreDependency,
     github: FleetGitHubDependency,
 ) -> FleetDeploymentResponse:
-    """Admit one browser request, commit its manifest, and dispatch PR09.
+    """Admit one browser request, commit its manifest, and dispatch the trusted workflow.
 
     The durable row is created before the external calls.  A dispatch failure
     therefore leaves the exact manifest commit and deployment ID available for
@@ -675,16 +779,18 @@ def submit_public_deployment(
             max_active=_positive_fleet_int(FLEET_MAX_ACTIVE_ENV, DEFAULT_FLEET_MAX_ACTIVE),
         )
     except DeploymentCooldownError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="Fleet deployment submission cooldown is active",
-            headers={"Retry-After": str(exc.retry_after_seconds)},
+        raise _submission_limit_error(
+            code="submission_cooldown",
+            message="Fleet deployment submission cooldown is active.",
+            recovery=f"Wait {exc.retry_after_seconds} seconds, then retry the same attempt.",
+            retry_after_seconds=exc.retry_after_seconds,
         ) from None
     except DeploymentAdmissionLimitError:
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="Fleet deployment capacity is temporarily full",
-            headers={"Retry-After": "30"},
+        raise _submission_limit_error(
+            code="capacity_full",
+            message="Fleet deployment capacity is temporarily full.",
+            recovery="Wait for the active run to finish, then retry the same attempt.",
+            retry_after_seconds=30,
         ) from None
     except DeploymentConflictError as exc:
         raise _deployment_conflict(exc) from None

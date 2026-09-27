@@ -27,6 +27,8 @@ const STATUS_LABELS = {
   queued: "Queued",
   ready: "Ready",
   succeeded: "Succeeded",
+  waiting: "Waiting for workflow",
+  workflow_unavailable: "Workflow state unavailable",
 };
 
 const WORKFLOW_STATUS_LABELS = {
@@ -37,6 +39,50 @@ const WORKFLOW_STATUS_LABELS = {
   requested: "Requested",
   waiting: "Waiting",
 };
+
+const ERROR_CLASS_LABELS = {
+  capacity_full: "Fleet busy",
+  invalid_deployment_spec: "Request rejected",
+  manifest_commit_failed: "Manifest commit failed",
+  service_unavailable: "Service unavailable",
+  submission_cooldown: "Cooldown active",
+  submission_failed: "Submission failed",
+  verification_failed: "Verification failed",
+  workflow_dispatch_failed: "Workflow dispatch failed",
+  workflow_failed: "Workflow failed",
+  workflow_unavailable: "Workflow state unavailable",
+};
+
+const TERMINAL_JOB_STATUSES = new Set(["completed"]);
+
+function errorClassLabel(code) {
+  return ERROR_CLASS_LABELS[code] ?? "Deployment error";
+}
+
+function workflowIsSettled(deployment) {
+  if (deployment?.dispatch_status !== "dispatched") return deployment?.dispatch_status === "failed";
+  const workflow = deployment?.workflow;
+  return Boolean(
+    workflow
+    && workflow.status === "completed"
+    && Array.isArray(workflow.jobs)
+    && workflow.jobs.every((job) => TERMINAL_JOB_STATUSES.has(job.status)),
+  );
+}
+
+function deploymentNeedsPolling(deployment) {
+  if (!deployment) return false;
+  if (deployment.dispatch_status === "failed") return false;
+  if (deployment.status !== "succeeded" && deployment.status !== "failed") return true;
+  return !workflowIsSettled(deployment);
+}
+
+function deploymentDisplayStatus(deployment) {
+  if (deployment?.error_code === "workflow_unavailable") return "workflow_unavailable";
+  if (deployment?.dispatch_status === "dispatched" && !workflowIsSettled(deployment)) return "waiting";
+  if (deployment?.dispatch_status === "failed") return "failed";
+  return deployment?.status;
+}
 
 function fleetApiUrl(apiUrl) {
   return `${apiUrl.replace(/\/$/, "")}/deploy/api/fleet`;
@@ -189,8 +235,7 @@ export function useDeployment(apiUrl) {
       const payload = await refresh();
       if (disposed) return;
       if (!payload) return;
-      const terminal = payload?.status === "succeeded" || payload?.status === "failed";
-      if (!terminal) {
+      if (deploymentNeedsPolling(payload)) {
         timer = window.setTimeout(poll, DEPLOYMENT_REFRESH_INTERVAL_MS);
       }
     };
@@ -202,10 +247,16 @@ export function useDeployment(apiUrl) {
     };
   }, [deploymentId, refresh]);
 
-  const trackDeployment = useCallback((nextDeploymentId) => {
+  const trackDeployment = useCallback((nextDeploymentId, initialData = null) => {
     storeDeploymentId(nextDeploymentId);
     setDeploymentId(nextDeploymentId || null);
-    setData(null);
+    setData(
+      initialData?.deployment_id === nextDeploymentId
+        && Array.isArray(initialData?.targets)
+        && Array.isArray(initialData?.target_ids)
+        ? initialData
+        : null,
+    );
     setError(null);
   }, []);
 
@@ -236,6 +287,7 @@ function StatusPill({ status }) {
   const statusClass = status === "failed"
     ? "border-red-400/30 bg-red-400/10 text-red-300"
     : status === "queued" || status === "applying" || status === "pending"
+      || status === "waiting" || status === "workflow_unavailable"
       ? "border-amber-400/30 bg-amber-400/10 text-amber-200"
       : "border-emerald-400/30 bg-emerald-400/10 text-emerald-300";
 
@@ -354,10 +406,27 @@ function formatTimestamp(value) {
   return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString();
 }
 
+function targetSummaryLabel(targetIds) {
+  return targetIds.map((targetId) => {
+    const match = /^(test|stage|prod)-vehicle-(\d{2})$/.exec(targetId);
+    return match ? `${match[1].toUpperCase()}-${match[2]}` : targetId;
+  }).join(", ");
+}
+
+function requestSummaryText(deployment) {
+  const summary = deployment.request_summary;
+  if (!summary) return "Request details were not persisted by this older run.";
+  const targets = summary.environment
+    ? `${summary.environment.toUpperCase()} environment (four vehicles)`
+    : targetSummaryLabel(summary.target_ids ?? deployment.target_ids);
+  return `${targets} · ${summary.implementation} / ${summary.strategy} / ${summary.failure_mode}`;
+}
+
 function deploymentStatusLabel(deployment) {
   if (deployment.workflow?.status) {
     return WORKFLOW_STATUS_LABELS[deployment.workflow.status] ?? displayStatus(deployment.status);
   }
+  if (deployment.error_code === "workflow_unavailable") return "Workflow state unavailable";
   return displayStatus(deployment.status);
 }
 
@@ -387,7 +456,7 @@ function DeploymentRunPanel({ deployment, error, onRefresh }) {
           </p>
         </div>
         <div className="flex items-center gap-3">
-          <StatusPill status={deployment.status} />
+          <StatusPill status={deploymentDisplayStatus(deployment)} />
           <button
             type="button"
             onClick={onRefresh}
@@ -397,6 +466,27 @@ function DeploymentRunPanel({ deployment, error, onRefresh }) {
           </button>
         </div>
       </div>
+
+      <div
+        className="mt-5 rounded-lg border border-blue-400/20 bg-blue-400/5 p-3 text-sm text-slate-200"
+        data-testid="deployment-request-summary"
+      >
+        <p className="text-xs font-semibold uppercase tracking-wider text-blue-200">Frozen request</p>
+        <p className="mt-1">{requestSummaryText(deployment)}</p>
+        <p className="mt-1 text-xs text-slate-500">
+          Attempt ID and request details stay fixed while this run is reconciled.
+        </p>
+      </div>
+
+      {deployment.dispatch_status === "dispatched" && !workflowIsSettled(deployment) && (
+        <div
+          className="mt-5 rounded-lg border border-amber-400/30 bg-amber-400/10 p-3 text-sm text-amber-100"
+          data-testid="workflow-convergence"
+          role="status"
+        >
+          Deployment state is recorded. Waiting for the final workflow conclusion and current job rows before closing this attempt.
+        </div>
+      )}
 
       <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <div className="rounded-lg border border-border bg-slate-950/30 p-3">
@@ -447,7 +537,20 @@ function DeploymentRunPanel({ deployment, error, onRefresh }) {
 
       {(deployment.error || deployment.workflow_error || error) && (
         <div role="alert" className="mt-5 rounded-lg border border-red-400/30 bg-red-400/10 p-3 text-sm text-red-200">
-          {deployment.error || deployment.workflow_error || error}
+          {deployment.error_code && (
+            <p className="font-semibold">{errorClassLabel(deployment.error_code)}</p>
+          )}
+          <p className={deployment.error_code ? "mt-1" : undefined}>
+            {deployment.error || deployment.workflow_error || error}
+          </p>
+          {deployment.error_recovery && (
+            <p className="mt-1 text-red-200/80">{deployment.error_recovery}</p>
+          )}
+          {error && !deployment.error_recovery && (
+            <p className="mt-1 text-red-200/80">
+              Refresh this attempt; its request identity remains fixed while the status is reconciled.
+            </p>
+          )}
         </div>
       )}
 
@@ -482,7 +585,7 @@ export function FleetDeployView({ apiUrl }) {
   }, []);
 
   const handleSubmitted = useCallback((submission) => {
-    deployment.trackDeployment(submission?.deployment_id);
+    deployment.trackDeployment(submission?.deployment_id, submission);
     refresh();
   }, [deployment, refresh]);
 
@@ -560,6 +663,7 @@ export function FleetDeployView({ apiUrl }) {
             <DeploymentSpecForm
               apiUrl={apiUrl}
               capabilities={data?.capabilities}
+              activeDeployment={deployment.data}
               onNewAttempt={handleNewAttempt}
               onSubmitted={handleSubmitted}
               onTargetSelectionChange={handleTargetSelectionChange}

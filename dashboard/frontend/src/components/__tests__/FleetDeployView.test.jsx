@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "../../App.jsx";
 import { FleetDeployView } from "../FleetDeployView.jsx";
@@ -51,6 +51,7 @@ describe("FleetDeployView", () => {
     vi.unstubAllGlobals();
     window.sessionStorage.removeItem("homeops.activeFleetDeploymentId");
     window.sessionStorage.removeItem("homeops.fleetDeployAttemptId");
+    window.sessionStorage.removeItem("homeops.previousFleetDeployment");
     window.history.replaceState({}, "", "/");
   });
 
@@ -385,5 +386,147 @@ describe("FleetDeployView", () => {
       "https://api.homeops.now/deploy/api/deployments/demo-reload-001",
       expect.objectContaining({ cache: "no-store" }),
     );
+  });
+
+  it("keeps a frozen request summary visible and polls until workflow jobs converge", async () => {
+    const inProgress = {
+      simulated: true,
+      target_kind: "simulated",
+      deployment_id: "demo-converge-001",
+      target_ids: ["test-vehicle-01", "test-vehicle-02"],
+      desired: { color: "green", shape: "square" },
+      desired_digest: "green-square-digest",
+      status: "succeeded",
+      error: null,
+      request_summary: {
+        deployment_id: "demo-converge-001",
+        environment: "test",
+        failure_mode: "abort",
+        implementation: "python",
+        profile: { color: "green", shape: "square" },
+        schema_version: 1,
+        strategy: "all_at_once",
+      },
+      created_at: "2026-09-26T12:00:00Z",
+      updated_at: "2026-09-26T12:00:30Z",
+      verification: "verified",
+      verified: true,
+      targets: fleetSnapshot().targets.slice(0, 2).map((target) => ({
+        ...target,
+        desired: { color: "green", shape: "square" },
+        desired_digest: "green-square-digest",
+        observed: { color: "green", shape: "square" },
+        observed_digest: "green-square-digest",
+        status: "succeeded",
+      })),
+      manifest_commit_url: "https://github.com/dhleach/homeops/commit/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      workflow_run_id: 790,
+      workflow_url: "https://github.com/dhleach/homeops/actions/runs/790",
+      workflow_status: "in_progress",
+      workflow_conclusion: null,
+      workflow_created_at: "2026-09-26T12:00:01Z",
+      workflow_updated_at: "2026-09-26T12:00:30Z",
+      workflow: {
+        id: 790,
+        url: "https://github.com/dhleach/homeops/actions/runs/790",
+        status: "in_progress",
+        conclusion: null,
+        created_at: "2026-09-26T12:00:01Z",
+        updated_at: "2026-09-26T12:00:30Z",
+        jobs: [{
+          id: 2,
+          name: "Deploy immutable artifact to simulator",
+          status: "in_progress",
+          conclusion: null,
+          started_at: "2026-09-26T12:00:10Z",
+          completed_at: null,
+          url: "https://github.com/dhleach/homeops/actions/runs/790/job/2",
+          failed_step: null,
+        }],
+      },
+      dispatch_status: "dispatched",
+      dispatch_error: null,
+      error_code: null,
+      error_recovery: null,
+    };
+    const completed = {
+      ...inProgress,
+      workflow_status: "completed",
+      workflow_conclusion: "success",
+      workflow_updated_at: "2026-09-26T12:00:45Z",
+      workflow: {
+        ...inProgress.workflow,
+        status: "completed",
+        conclusion: "success",
+        updated_at: "2026-09-26T12:00:45Z",
+        jobs: [{
+          ...inProgress.workflow.jobs[0],
+          status: "completed",
+          conclusion: "success",
+          completed_at: "2026-09-26T12:00:44Z",
+        }],
+      },
+    };
+    window.sessionStorage.setItem("homeops.activeFleetDeploymentId", "demo-converge-001");
+    let deploymentReads = 0;
+    const fetchMock = vi.fn((url) => {
+      if (url.includes("/deploy/api/deployments/")) {
+        deploymentReads += 1;
+        return Promise.resolve({
+          ok: true,
+          json: async () => (deploymentReads === 1 ? inProgress : completed),
+        });
+      }
+      return Promise.resolve({ ok: true, json: async () => fleetSnapshot() });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<FleetDeployView apiUrl="https://api.homeops.now" />);
+
+    expect(await screen.findByTestId("workflow-convergence")).toHaveTextContent("Waiting for the final workflow conclusion");
+    expect(screen.getByTestId("deployment-request-summary")).toHaveTextContent(
+      "TEST environment (four vehicles) · python / all_at_once / abort",
+    );
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 2_100));
+    });
+    await waitFor(() => expect(screen.queryByTestId("workflow-convergence")).not.toBeInTheDocument());
+    expect(screen.getByText("Completed")).toBeInTheDocument();
+    expect(deploymentReads).toBeGreaterThanOrEqual(2);
+  });
+
+  it("classifies busy submissions and keeps their result under Previous attempt when edited", async () => {
+    const fetchMock = vi.fn((url) => {
+      if (url.endsWith("/deployments/submit")) {
+        return Promise.resolve({
+          ok: false,
+          status: 429,
+          headers: new Headers({ "Retry-After": "12" }),
+          json: async () => ({
+            detail: {
+              code: "capacity_full",
+              message: "Fleet deployment capacity is temporarily full.",
+              recovery: "Wait for the active run to finish, then retry the same attempt.",
+              retry_after_seconds: 12,
+            },
+          }),
+        });
+      }
+      return Promise.resolve({ ok: true, json: async () => fleetSnapshot() });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<FleetDeployView apiUrl="https://api.homeops.now" />);
+    await screen.findAllByTestId("fleet-target-card");
+    const attemptId = screen.getByTestId("deployment-attempt-id").textContent;
+    fireEvent.click(screen.getByTestId("deploy-submit"));
+
+    expect(await screen.findByTestId("submission-error-class")).toHaveTextContent("Fleet busy");
+    expect(screen.getByTestId("retry-guidance")).toHaveTextContent("12 seconds");
+    fireEvent.change(screen.getByLabelText("Profile color"), { target: { value: "green" } });
+
+    expect(await screen.findByTestId("previous-attempt")).toBeInTheDocument();
+    expect(screen.getByTestId("previous-attempt")).toHaveTextContent(attemptId);
+    expect(screen.getByTestId("previous-attempt-error")).toHaveTextContent("Fleet busy");
   });
 });
