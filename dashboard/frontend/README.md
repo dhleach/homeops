@@ -43,7 +43,10 @@ React + Vite + Tailwind single-page dashboard for `homeops.now`.
   service/busy/validation/commit/dispatch failures with credential-safe next
   steps, and keep older results in an explicit Previous attempt area when the
   form is edited. Run polling continues until the workflow conclusion and job
-  rows are current together, including after a reload.
+  rows are current together, including after a reload. The route remains
+  bounded at phone widths, exposes visible keyboard focus, explains disabled
+  controls, announces live target/run changes, and uses contrast-checked text
+  labels instead of color alone.
 
 The production build is created by
 `.github/workflows/frontend-deploy.yml`, synced to the private S3 frontend
