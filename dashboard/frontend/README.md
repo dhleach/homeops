@@ -37,9 +37,10 @@ React + Vite + Tailwind single-page dashboard for `homeops.now`.
   therefore safe at the backend's idempotent boundary. It never sends a GitHub
   or protected fleet-management credential to the browser. The form consumes
   the backend-published capability matrix and exposes the verified
-  Python + all-at-once/abort, Python + canary/abort, and Ansible +
+  Python + all-at-once/abort, Python + canary/abort, Python + canary/rollback, and Ansible +
   all-at-once/abort paths. Canary remains hidden when Ansible is selected until
-  equivalent serial behavior is implemented and proven. The form can also
+  equivalent serial behavior is implemented and proven. Python rollback keeps
+  the run failed while showing verified restoration or partial state. The form can also
   select one resolved simulated target for the deterministic verification
   failure demonstration; the target switch cannot reach Home Assistant or
   normal HomeOps infrastructure. Submitted runs retain a frozen request summary, classify known

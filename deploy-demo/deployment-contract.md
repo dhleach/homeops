@@ -48,6 +48,7 @@ Ansible remains on its verified all-at-once path:
 | --- | --- | --- |
 | `python` | `all_at_once` | `abort` |
 | `python` | `canary` | `abort` |
+| `python` | `canary` | `rollback` |
 | `ansible` | `all_at_once` | `abort` |
 
 The backend publishes this matrix with the anonymous fleet snapshot, and the
@@ -66,12 +67,15 @@ The complete reserved enum vocabulary is:
 | `failure_mode` | `abort`, `rollback` |
 | `failure_target_id` | optional known target selected by `environment` or `target_ids` |
 
-`all_at_once` currently accepts only `abort`; Python `canary` also accepts
-`abort`, while rolling and rollback remain reserved. `failure_target_id` is
+`all_at_once` currently accepts only `abort`; Python `canary` accepts `abort`
+and `rollback`, while rolling remains reserved. `failure_target_id` is
 orthogonal to that capability matrix: when present, the simulator deliberately
 leaves that finite target's observed profile divergent, so the deployer must
-fail its ordinary fresh-readback verification. It cannot identify a real host,
-carry a command, or reach Home Assistant or the normal HomeOps release path.
+fail its ordinary fresh-readback verification. With `rollback`, the deployer
+restores only targets that reached the new observed profile and verifies their
+pre-deployment snapshots through a protected restore API. It cannot identify a
+real host, carry a command, or reach Home Assistant or the normal HomeOps
+release path.
 
 ## Deterministic serialization
 
@@ -95,6 +99,18 @@ target-level error, and leaves later canary targets pending. Python and Ansible
 then perform their normal fresh public readback and exit nonzero when the
 requested observed state cannot be proven. The failed run remains linked to
 its manifest and Actions URL for the `/deploy` UI to display.
+
+## Partial rollout rollback
+
+The Python canary `rollback` mode captures every selected target's observed
+profile from the queue response before the first apply. If a later target
+fails, the deployer stops the rollout and sends only the targets that reached
+the new observed digest to the protected restore endpoint. A fresh anonymous
+read must report `rollback_status: "succeeded"`, the exact restored target IDs,
+their pre-deployment desired and observed profiles, `ready` status, and no
+active deployment reservation. The deployment itself remains `failed`. If the
+restore call or readback cannot be verified, the run stays failed and the
+changed target state remains visible as partial drift.
 
 The future workflow must retain the manifest event commit SHA independently
 from the built artifact's content digest. One must never be substituted for

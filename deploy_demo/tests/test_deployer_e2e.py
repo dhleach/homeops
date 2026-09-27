@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 
 from deploy_demo import (
     DeploymentArtifact,
+    DeploymentRollbackError,
     DeploymentSpec,
     DeploymentVerificationError,
     FleetApiClient,
@@ -143,6 +144,41 @@ class TamperedReadbackApi:
         payload["targets"] = targets
         return payload
 
+    def restore_deployment(
+        self,
+        deployment_id: str,
+        profiles: Mapping[str, FleetProfile],
+    ) -> Mapping[str, object]:
+        return self.delegate.restore_deployment(deployment_id, profiles)
+
+
+@dataclass
+class FailingRestoreApi:
+    """Delegate normal execution but fail the protected restore call."""
+
+    delegate: FleetApiClient
+
+    def queue_deployment(self, spec: DeploymentSpec) -> Mapping[str, object]:
+        return self.delegate.queue_deployment(spec)
+
+    def apply_deployment(
+        self,
+        deployment_id: str,
+        target_ids: tuple[str, ...] | None = None,
+    ) -> Mapping[str, object]:
+        return self.delegate.apply_deployment(deployment_id, target_ids)
+
+    def read_deployment(self, deployment_id: str) -> Mapping[str, object]:
+        return self.delegate.read_deployment(deployment_id)
+
+    def restore_deployment(
+        self,
+        deployment_id: str,
+        profiles: Mapping[str, FleetProfile],
+    ) -> Mapping[str, object]:
+        del deployment_id, profiles
+        raise FleetApiError("Fleet API request failed for POST deployments/restore")
+
 
 def test_real_deployer_applies_one_target_and_verifies_fresh_readback(harness) -> None:
     """The real client must queue, apply, and then read the simulator."""
@@ -249,6 +285,74 @@ def test_real_python_injected_verification_failure_stops_canary_before_rollout(h
     ] == ["pending", "pending", "pending"]
     assert events[-1].event_type == "deployment_failed"
     assert all(event.event_type != "deployment_rollout_started" for event in events)
+
+
+def test_real_python_canary_rollback_restores_changed_targets_and_stays_failed(harness) -> None:
+    spec = valid_spec(
+        deployment_id="demo-e2e-canary-rollback",
+        strategy="canary",
+        failure_mode="rollback",
+        profile={"color": "orange", "shape": "triangle"},
+        failure_target_id="test-vehicle-02",
+    )
+    artifact = artifact_for(spec)
+    events = []
+
+    with pytest.raises(DeploymentVerificationError, match=r"rollout\.readback"):
+        FleetDeployer(harness.api, event_sink=events.append).deploy(spec, artifact)
+
+    assert harness.opener.requests == [
+        ("POST", "/deploy/api/deployments"),
+        ("POST", "/deploy/api/deployments/demo-e2e-canary-rollback/apply"),
+        ("GET", "/deploy/api/deployments/demo-e2e-canary-rollback"),
+        ("POST", "/deploy/api/deployments/demo-e2e-canary-rollback/apply"),
+        ("GET", "/deploy/api/deployments/demo-e2e-canary-rollback"),
+        ("POST", "/deploy/api/deployments/demo-e2e-canary-rollback/restore"),
+        ("GET", "/deploy/api/deployments/demo-e2e-canary-rollback"),
+    ]
+    deployment = harness.store.get_deployment(spec.deployment_id)
+    assert deployment.status == "failed"
+    assert deployment.rollback_status == "succeeded"
+    assert deployment.rollback_target_ids == ("test-vehicle-01",)
+    restored = harness.store.get_vehicle("test-vehicle-01")
+    assert restored.status == "ready"
+    assert restored.active_deployment_id is None
+    assert restored.desired_profile == FleetProfile(color="blue", shape="circle")
+    assert restored.observed_profile == restored.desired_profile
+    failed = harness.store.get_vehicle("test-vehicle-02")
+    assert failed.status == "failed"
+    assert failed.desired_profile == artifact.profile
+    assert failed.observed_profile == FleetProfile(color="green", shape="square")
+    assert harness.store.get_vehicle("test-vehicle-03").status == "pending"
+    assert [event.event_type for event in events][-3:] == [
+        "deployment_rollback_started",
+        "deployment_rollback_verified",
+        "deployment_failed",
+    ]
+
+
+def test_rollback_failure_is_non_success_and_leaves_partial_state(harness) -> None:
+    spec = valid_spec(
+        deployment_id="demo-e2e-canary-rollback-failure",
+        strategy="canary",
+        failure_mode="rollback",
+        profile={"color": "orange", "shape": "triangle"},
+        failure_target_id="test-vehicle-02",
+    )
+    events = []
+
+    with pytest.raises(DeploymentRollbackError, match="rollback could not be verified"):
+        FleetDeployer(FailingRestoreApi(harness.api), event_sink=events.append).deploy(
+            spec, artifact_for(spec)
+        )
+
+    assert harness.store.get_vehicle("test-vehicle-01").status == "succeeded"
+    assert harness.store.get_vehicle("test-vehicle-02").status == "failed"
+    assert harness.store.get_vehicle("test-vehicle-03").status == "pending"
+    assert [event.event_type for event in events][-2:] == [
+        "deployment_rollback_failed",
+        "deployment_failed",
+    ]
 
 
 def test_canary_api_rejects_skipping_the_next_stable_target(harness) -> None:

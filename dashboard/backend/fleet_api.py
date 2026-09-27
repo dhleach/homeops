@@ -58,6 +58,7 @@ from deploy_demo import (  # noqa: E402
     DeploymentCooldownError,
     DeploymentSpecError,
     DeploymentState,
+    FleetProfile,
     FleetStateError,
     FleetStateStore,
     GitHubFleetClient,
@@ -99,6 +100,7 @@ DispatchStatusResponse = Literal[
     "dispatched",
     "failed",
 ]
+RollbackStatusResponse = Literal["not_started", "in_progress", "succeeded", "failed"]
 
 router = APIRouter(prefix=FLEET_API_PREFIX, tags=["Fleet Deploy Lab"])
 _fleet_bearer_scheme = HTTPBearer(auto_error=False)
@@ -188,6 +190,23 @@ class DeploymentApplyRequest(BaseModel):
     target_ids: list[str] | None = Field(default=None, min_length=1, max_length=12)
 
 
+class DeploymentRestoreTargetRequest(BaseModel):
+    """One trusted pre-deployment profile used for protected rollback."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    target_id: str
+    profile: FleetProfileResponse
+
+
+class DeploymentRestoreRequest(BaseModel):
+    """Bounded target snapshots accepted only by the management credential."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    targets: list[DeploymentRestoreTargetRequest] = Field(..., min_length=1, max_length=12)
+
+
 class FleetWorkflowJobResponse(BaseModel):
     """Public-safe state for one GitHub Actions job."""
 
@@ -251,6 +270,9 @@ class FleetDeploymentResponse(BaseModel):
     workflow: FleetWorkflowResponse | None = None
     dispatch_status: DispatchStatusResponse = "not_started"
     dispatch_error: str | None = None
+    rollback_status: RollbackStatusResponse = "not_started"
+    rollback_target_ids: list[str] = Field(default_factory=list)
+    rollback_error: str | None = None
     error_code: str | None = None
     error_recovery: str | None = None
     retry_after_seconds: int | None = None
@@ -403,10 +425,26 @@ def _deployment_error_metadata(
         )
 
     if deployment.error and deployment.error.startswith(SIMULATED_VERIFICATION_FAILURE_PREFIX):
+        recovery = "Compare desired and observed target state before retrying this request."
+        if deployment.rollback_status == "succeeded":
+            recovery = (
+                "Deployment remains failed; rollback verified the changed simulated targets "
+                "against their pre-deployment profiles."
+            )
+        elif deployment.rollback_status == "failed":
+            recovery = (
+                "Rollback was not verified. Inspect the desired/observed target state; "
+                "the fleet may be partially changed."
+            )
+        elif (deployment.request_summary or {}).get("failure_mode") == "rollback":
+            recovery = (
+                "Rollback was requested but is not verified. Inspect the desired/observed "
+                "target state before retrying."
+            )
         return (
             "verification_failed",
             deployment.error,
-            "Compare desired and observed target state before retrying this request.",
+            recovery,
             None,
         )
 
@@ -480,6 +518,9 @@ def _deployment_response(
         workflow=_workflow_response(workflow_run),
         dispatch_status=deployment.dispatch_status,
         dispatch_error=deployment.dispatch_error,
+        rollback_status=deployment.rollback_status,
+        rollback_target_ids=list(deployment.rollback_target_ids),
+        rollback_error=deployment.rollback_error,
         error_code=error_code,
         error_recovery=error_recovery,
         retry_after_seconds=retry_after_seconds,
@@ -940,6 +981,49 @@ def apply_deployment(
             raise _deployment_not_found(exc) from None
         if current.status == "succeeded":
             return _deployment_response(store, current, idempotent=True)
+        raise _deployment_conflict(exc) from None
+    except (OSError, sqlite3.Error, FleetStateError) as exc:
+        _state_unavailable(exc)
+
+
+@router.post(
+    "/deployments/{deployment_id}/restore",
+    response_model=FleetDeploymentResponse,
+)
+def restore_deployment(
+    deployment_id: str,
+    payload: DeploymentRestoreRequest,
+    store: FleetStoreDependency,
+    _: None = Depends(require_fleet_management_credential),
+) -> FleetDeploymentResponse:
+    """Restore trusted pre-deployment profiles and keep the run failed."""
+    try:
+        profiles: dict[str, FleetProfile] = {}
+        for target in payload.targets:
+            if target.target_id in profiles:
+                raise DeploymentConflictError(
+                    f"rollback contains duplicate target: {target.target_id}"
+                )
+            try:
+                profiles[target.target_id] = FleetProfile(
+                    color=target.profile.color,
+                    shape=target.profile.shape,
+                )
+            except ValueError as exc:
+                raise DeploymentSpecError(f"rollback profile: {exc}") from None
+        deployment = store.restore_deployment_targets(deployment_id, profiles)
+        return _deployment_response(store, deployment)
+    except DeploymentSpecError as exc:
+        raise _invalid_spec(exc) from None
+    except UnknownDeploymentError as exc:
+        raise _deployment_not_found(exc) from None
+    except UnknownTargetError as exc:
+        raise _target_not_found(exc) from None
+    except (DeploymentConflictError, InvalidStateTransitionError) as exc:
+        try:
+            store.record_rollback_failure(deployment_id, error=str(exc))
+        except (OSError, sqlite3.Error, FleetStateError):
+            logger.warning("Fleet rollback failure could not be persisted")
         raise _deployment_conflict(exc) from None
     except (OSError, sqlite3.Error, FleetStateError) as exc:
         _state_unavailable(exc)

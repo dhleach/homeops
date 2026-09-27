@@ -37,6 +37,7 @@ FAILURE_MODES = ("abort", "rollback")
 CAPABILITY_MATRIX = (
     ("python", "all_at_once", "abort"),
     ("python", "canary", "abort"),
+    ("python", "canary", "rollback"),
     ("ansible", "all_at_once", "abort"),
 )
 DEFAULT_IMPLEMENTATION, DEFAULT_STRATEGY, DEFAULT_FAILURE_MODE = CAPABILITY_MATRIX[0]
