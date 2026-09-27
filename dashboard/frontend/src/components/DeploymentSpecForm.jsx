@@ -25,6 +25,41 @@ const KNOWN_TARGET_IDS = new Set(TARGET_ORDER);
 const DEPLOYMENT_ID_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/;
 const DEPLOYMENT_ATTEMPT_STORAGE_KEY = "homeops.fleetDeployAttemptId";
 const PREVIOUS_ATTEMPT_STORAGE_KEY = "homeops.previousFleetDeployment";
+const PREVIOUS_ATTEMPT_FIELDS = [
+  "deployment_id",
+  "target_ids",
+  "desired",
+  "desired_digest",
+  "status",
+  "error",
+  "created_at",
+  "updated_at",
+  "verification",
+  "verified",
+  "targets",
+  "request_summary",
+  "idempotent",
+  "manifest_path",
+  "manifest_sha256",
+  "manifest_commit_sha",
+  "manifest_commit_url",
+  "workflow_run_id",
+  "workflow_url",
+  "workflow_status",
+  "workflow_conclusion",
+  "workflow_created_at",
+  "workflow_updated_at",
+  "workflow_error",
+  "workflow",
+  "dispatch_status",
+  "dispatch_error",
+  "rollback_status",
+  "rollback_target_ids",
+  "rollback_error",
+  "error_code",
+  "error_recovery",
+  "retry_after_seconds",
+];
 
 const ERROR_CLASS_LABELS = {
   capacity_full: "Fleet busy",
@@ -156,17 +191,16 @@ function normalizeSubmissionError(response, body) {
 
 function compactAttempt(attempt) {
   if (!attempt) return null;
-  return {
-    deployment_id: attempt.deployment_id ?? null,
-    request_summary: attempt.request_summary ?? null,
-    status: attempt.status ?? null,
-    dispatch_status: attempt.dispatch_status ?? null,
-    dispatch_error: attempt.dispatch_error ?? null,
+  const normalizedAttempt = {
+    ...attempt,
     error: attempt.error ?? attempt.message ?? null,
     error_code: attempt.error_code ?? attempt.code ?? null,
     error_recovery: attempt.error_recovery ?? attempt.recovery ?? null,
-    workflow_url: attempt.workflow_url ?? null,
   };
+  return Object.fromEntries(PREVIOUS_ATTEMPT_FIELDS.map((field) => [
+    field,
+    normalizedAttempt[field] ?? null,
+  ]));
 }
 
 function requestSummaryLabel(summary) {
@@ -178,6 +212,38 @@ function requestSummaryLabel(summary) {
     ? ` · injected verification failure at ${targetDisplayLabel(summary.failure_target_id)}`
     : "";
   return `${targets} · ${summary.implementation ?? "unknown"} / ${summary.strategy ?? "unknown"} / ${summary.failure_mode ?? "unknown"}${failure}`;
+}
+
+function previousAttemptTargetLabel(attempt) {
+  const targetIds = Array.isArray(attempt?.target_ids) ? attempt.target_ids : [];
+  if (targetIds.length === 0) return "Target set unavailable";
+  return targetIds.map(targetDisplayLabel).join(", ");
+}
+
+function previousAttemptWorkflowLabel(attempt) {
+  const status = attempt?.workflow_status ?? attempt?.workflow?.status;
+  const conclusion = attempt?.workflow_conclusion ?? attempt?.workflow?.conclusion;
+  if (!status && !conclusion) return null;
+  return [status, conclusion].filter(Boolean).join(" · ");
+}
+
+function previousAttemptVerificationLabel(attempt) {
+  if (!attempt) return null;
+  const targetIds = Array.isArray(attempt.target_ids) ? attempt.target_ids : [];
+  const targets = Array.isArray(attempt.targets) ? attempt.targets : [];
+  const verifiedCount = targets.filter((target) => (
+    targetIds.includes(target.target_id)
+    && target.desired_digest === target.observed_digest
+  )).length;
+  if (targetIds.length === 0 && !attempt.verification) return null;
+  const count = targets.length > 0 ? ` (${verifiedCount} / ${targetIds.length} targets)` : "";
+  return `${attempt.verification ?? "pending"}${count}`;
+}
+
+function formatAttemptTimestamp(value) {
+  if (!value) return null;
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString();
 }
 
 function createDeploymentId() {
@@ -398,8 +464,8 @@ export function DeploymentSpecForm({
   }
 
   function currentAttemptSnapshot() {
-    if (submission) return submission;
     if (activeDeployment?.deployment_id === form.deployment_id) return activeDeployment;
+    if (submission?.deployment_id === form.deployment_id) return submission;
     if (submitError) {
       return {
         deployment_id: form.deployment_id,
@@ -428,7 +494,6 @@ export function DeploymentSpecForm({
     writeStoredAttemptId(deploymentId);
     setSubmission(null);
     setSubmitError(null);
-    onNewAttempt?.();
     return deploymentId;
   }
 
@@ -759,6 +824,20 @@ export function DeploymentSpecForm({
           )}
         </div>
 
+        {activeDeployment && activeDeployment.deployment_id !== form.deployment_id && (
+          <div
+            className="rounded-lg border border-amber-400/30 bg-amber-400/10 p-3 text-xs text-amber-100"
+            data-testid="active-run-preserved"
+            role="status"
+          >
+            <p className="font-semibold">Previous run remains visible</p>
+            <p className="mt-1">
+              Run <code>{activeDeployment.deployment_id}</code> is still being reconciled while you
+              configure this new attempt. Editing has not submitted another deployment.
+            </p>
+          </div>
+        )}
+
         <aside className="space-y-4">
           <details
             className="rounded-xl border border-border bg-slate-950/50 p-4"
@@ -876,21 +955,81 @@ export function DeploymentSpecForm({
                   <span className="text-slate-400">Frozen request: </span>
                   {requestSummaryLabel(previousAttempt.request_summary)}
                 </p>
-                {(previousAttempt.error_code || previousAttempt.error) && (
-                  <p data-testid="previous-attempt-error">
-                    <span className="text-slate-400">Result: </span>
-                    {errorClassLabel(previousAttempt.error_code)}
-                    {previousAttempt.error ? ` — ${previousAttempt.error}` : ""}
+                {(previousAttempt.request_summary?.implementation || previousAttempt.request_summary?.strategy) && (
+                  <p data-testid="previous-attempt-execution">
+                    <span className="text-slate-400">Execution: </span>
+                    {previousAttempt.request_summary.implementation ?? "unknown"}
+                    {" / "}
+                    {previousAttempt.request_summary.strategy ?? "unknown"}
                   </p>
                 )}
-                {previousAttempt.dispatch_status && !previousAttempt.error_code && (
-                  <p>
+                <p data-testid="previous-attempt-targets">
+                  <span className="text-slate-400">Target set: </span>
+                  {previousAttemptTargetLabel(previousAttempt)}
+                </p>
+                {(previousAttempt.status || previousAttempt.dispatch_status) && (
+                  <p data-testid="previous-attempt-status">
+                    <span className="text-slate-400">Status: </span>
+                    {previousAttempt.status ?? "unknown"}
+                    {previousAttempt.dispatch_status && ` · Dispatch: ${previousAttempt.dispatch_status}`}
+                  </p>
+                )}
+                {previousAttemptWorkflowLabel(previousAttempt) && (
+                  <p data-testid="previous-attempt-workflow">
+                    <span className="text-slate-400">Workflow: </span>
+                    {previousAttemptWorkflowLabel(previousAttempt)}
+                  </p>
+                )}
+                {previousAttemptVerificationLabel(previousAttempt) && (
+                  <p data-testid="previous-attempt-verification">
+                    <span className="text-slate-400">Target verification: </span>
+                    {previousAttemptVerificationLabel(previousAttempt)}
+                  </p>
+                )}
+                {(previousAttempt.error_code
+                  || previousAttempt.error
+                  || previousAttempt.workflow_error
+                  || previousAttempt.dispatch_error) && (
+                  <p data-testid="previous-attempt-error">
                     <span className="text-slate-400">Result: </span>
-                    {previousAttempt.dispatch_status}
+                    {previousAttempt.error_code ? errorClassLabel(previousAttempt.error_code) : "Recorded error"}
+                    {(previousAttempt.error
+                      ?? previousAttempt.workflow_error
+                      ?? previousAttempt.dispatch_error)
+                      ? ` — ${previousAttempt.error ?? previousAttempt.workflow_error ?? previousAttempt.dispatch_error}`
+                      : ""}
                   </p>
                 )}
                 {previousAttempt.error_recovery && (
                   <p className="text-slate-400">{previousAttempt.error_recovery}</p>
+                )}
+                {previousAttempt.rollback_status && previousAttempt.rollback_status !== "not_started" && (
+                  <p>
+                    <span className="text-slate-400">Rollback: </span>
+                    {previousAttempt.rollback_status}
+                  </p>
+                )}
+                {previousAttempt.created_at && (
+                  <p>
+                    <span className="text-slate-400">Created: </span>
+                    {formatAttemptTimestamp(previousAttempt.created_at)}
+                  </p>
+                )}
+                {previousAttempt.updated_at && (
+                  <p>
+                    <span className="text-slate-400">Updated: </span>
+                    {formatAttemptTimestamp(previousAttempt.updated_at)}
+                  </p>
+                )}
+                {previousAttempt.manifest_commit_url && (
+                  <a
+                    href={previousAttempt.manifest_commit_url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-block text-blue-300 underline"
+                  >
+                    View previous manifest commit
+                  </a>
                 )}
                 {previousAttempt.workflow_url && (
                   <a
