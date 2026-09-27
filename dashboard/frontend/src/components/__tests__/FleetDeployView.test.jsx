@@ -68,6 +68,29 @@ describe("FleetDeployView", () => {
     expect(screen.getAllByText("Desired = observed")).toHaveLength(12);
   });
 
+  it("keeps the narrow layout bounded and explains accessible control states", async () => {
+    render(<FleetDeployView apiUrl="https://api.homeops.now" />);
+
+    await screen.findAllByTestId("fleet-target-card");
+    expect(screen.getByTestId("fleet-deploy-page")).toHaveClass("min-w-0", "overflow-x-clip");
+    expect(screen.getByTestId("fleet-deploy-main")).toHaveClass("min-w-0", "px-4", "sm:px-6");
+    expect(screen.getByTestId("deployment-config-panel")).toHaveClass("min-w-0");
+    expect(screen.getByTestId("deployment-resolved-targets")).toHaveAttribute("aria-live", "polite");
+
+    const specSummary = screen.getByText("DeploymentSpec JSON").closest("summary");
+    expect(specSummary).toHaveClass("focus-visible:ring-2");
+
+    fireEvent.click(screen.getByRole("radio", { name: /individual targets/i }));
+    const environment = screen.getByLabelText("Environment");
+    expect(environment).toBeDisabled();
+    expect(environment).toHaveAttribute("aria-describedby", "deployment-environment-disabled-help");
+    expect(screen.getByText("Switch to Environment target selection to choose a complete environment.")).toBeInTheDocument();
+
+    const targetCheckboxes = screen.getAllByRole("checkbox");
+    expect(targetCheckboxes).toHaveLength(12);
+    expect(targetCheckboxes[0]).toHaveClass("focus-visible:ring-2");
+  });
+
   it("keeps the main card content compact and reveals full identifiers on demand", async () => {
     render(<FleetDeployView apiUrl="https://api.homeops.now" />);
 
@@ -403,6 +426,7 @@ describe("FleetDeployView", () => {
     );
     expect(screen.getByTestId("fleet-state-column")).toContainElement(screen.getByTestId("deployment-run-state"));
     expect(screen.getByTestId("fleet-state-column")).toContainElement(screen.getByTestId("fleet-environment-test"));
+    expect(screen.getByTestId("deployment-workflow-status")).toHaveAttribute("aria-live", "polite");
     expect(fetchMock).toHaveBeenCalledWith(
       "https://api.homeops.now/deploy/api/deployments/demo-reload-001",
       expect.objectContaining({ cache: "no-store" }),

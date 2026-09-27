@@ -299,8 +299,21 @@ function FieldError({ id, message }) {
   return <p id={id} className="mt-1 text-xs text-red-300">{message}</p>;
 }
 
-function OptionSelect({ id, label, value, options, onChange, error, disabled = false }) {
+function OptionSelect({
+  id,
+  label,
+  value,
+  options,
+  onChange,
+  error,
+  disabled = false,
+  disabledReason,
+}) {
   const errorId = `${id}-error`;
+  const disabledReasonId = `${id}-disabled-help`;
+  const describedBy = [error ? errorId : null, disabled && disabledReason ? disabledReasonId : null]
+    .filter(Boolean)
+    .join(" ") || undefined;
   return (
     <div>
       <label htmlFor={id} className="block text-xs font-semibold uppercase tracking-wider text-slate-400">
@@ -312,14 +325,17 @@ function OptionSelect({ id, label, value, options, onChange, error, disabled = f
         onChange={onChange}
         disabled={disabled}
         aria-invalid={Boolean(error)}
-        aria-describedby={error ? errorId : undefined}
-        className="mt-2 w-full rounded-lg border border-border bg-slate-950/70 px-3 py-2.5 text-sm text-slate-100 outline-none transition-colors focus:border-blue-400 disabled:cursor-not-allowed disabled:opacity-50"
+        aria-describedby={describedBy}
+        className="mt-2 w-full rounded-lg border border-border bg-slate-950/70 px-3 py-2.5 text-sm text-slate-100 transition-colors focus:border-blue-400 disabled:cursor-not-allowed disabled:opacity-50"
       >
         {options.map((option) => (
           <option key={option} value={option}>{labelize(option)}</option>
         ))}
       </select>
       <FieldError id={errorId} message={error} />
+      {disabled && disabledReason && (
+        <p id={disabledReasonId} className="mt-1 text-xs text-slate-400">{disabledReason}</p>
+      )}
     </div>
   );
 }
@@ -492,7 +508,7 @@ export function DeploymentSpecForm({
   return (
     <section
       aria-labelledby="deployment-spec-heading"
-      className="rounded-2xl border border-blue-400/30 bg-blue-400/5 p-5 shadow-lg shadow-slate-950/10 sm:p-6"
+      className="min-w-0 rounded-2xl border border-blue-400/30 bg-blue-400/5 p-4 shadow-lg shadow-slate-950/10 sm:p-6"
       data-testid="deployment-config-panel"
     >
       <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
@@ -514,7 +530,7 @@ export function DeploymentSpecForm({
       </div>
 
       <form
-        className="mt-6 space-y-6"
+        className="mt-6 min-w-0 space-y-6"
         onSubmit={submitDeployment}
       >
         <div className="space-y-6">
@@ -531,7 +547,7 @@ export function DeploymentSpecForm({
                 {form.deployment_id}
               </code>
             </div>
-            <p className="mt-1 text-xs text-slate-500">
+            <p className="mt-1 text-xs text-slate-400">
               Generated automatically and retained in this browser tab so retries address the same operation.
             </p>
           </div>
@@ -555,11 +571,11 @@ export function DeploymentSpecForm({
                     value={value}
                     checked={form.target_selection === value}
                     onChange={selectTargetMode}
-                    className="mt-0.5 accent-blue-400"
+                    className="mt-0.5 accent-blue-400 focus-visible:ring-2 focus-visible:ring-blue-300 focus-visible:ring-offset-2 focus-visible:ring-offset-surface"
                   />
                   <span>
                     <span className="block font-medium">{label}</span>
-                    <span className="mt-1 block text-xs text-slate-500">{description}</span>
+                    <span className="mt-1 block text-xs text-slate-400">{description}</span>
                   </span>
                 </label>
               ))}
@@ -584,7 +600,7 @@ export function DeploymentSpecForm({
                 ? selectedTargetIds.map(targetDisplayLabel).join(", ")
                 : "No targets selected"}
             </p>
-            <p className="mt-1 text-xs text-slate-500">
+            <p className="mt-1 text-xs text-slate-400">
               {form.target_selection === "environment"
                 ? `${form.environment.toUpperCase()} environment deploys its four vehicles.`
                 : "Only the vehicles listed above will be included in the request."}
@@ -600,6 +616,7 @@ export function DeploymentSpecForm({
               onChange={updateField("environment")}
               error={errors.environment}
               disabled={form.target_selection !== "environment"}
+              disabledReason="Switch to Environment target selection to choose a complete environment."
             />
             <OptionSelect
               id="deployment-implementation"
@@ -652,7 +669,7 @@ export function DeploymentSpecForm({
               <legend className="block text-xs font-semibold uppercase tracking-wider text-slate-400">
                 Individual target IDs
               </legend>
-              <p className="mt-1 text-xs text-slate-500">
+              <p className="mt-1 text-xs text-slate-400">
                 Choose the short vehicle labels below; stable machine IDs remain in the JSON details.
               </p>
               <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
@@ -667,7 +684,7 @@ export function DeploymentSpecForm({
                       checked={form.target_ids.includes(targetId)}
                       onChange={() => toggleTarget(targetId)}
                       aria-label={targetDisplayLabel(targetId)}
-                      className="accent-blue-400"
+                      className="accent-blue-400 focus-visible:ring-2 focus-visible:ring-blue-300 focus-visible:ring-offset-2 focus-visible:ring-offset-surface"
                     />
                     <span className="font-mono">{targetDisplayLabel(targetId)}</span>
                   </label>
@@ -683,19 +700,19 @@ export function DeploymentSpecForm({
             className="rounded-xl border border-border bg-slate-950/50 p-4"
             data-testid="deployment-spec-disclosure"
           >
-            <summary className="cursor-pointer list-none text-xs font-semibold uppercase tracking-wider text-slate-400 marker:hidden">
+            <summary className="cursor-pointer list-none rounded text-xs font-semibold uppercase tracking-wider text-slate-400 marker:hidden focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-300 focus-visible:ring-offset-2 focus-visible:ring-offset-surface">
               <span className="inline-flex items-center gap-2">
-                <span aria-hidden="true" className="text-slate-500">▸</span>
+                <span aria-hidden="true" className="text-slate-400">▸</span>
                 DeploymentSpec JSON
               </span>
-              <span className="mt-1 block normal-case tracking-normal text-slate-500">
+              <span className="mt-1 block normal-case tracking-normal text-slate-400">
                 Expand to inspect the exact validated payload submitted when you deploy.
               </span>
             </summary>
             <pre
               aria-label="DeploymentSpec preview"
               data-testid="deployment-spec-preview"
-              className="mt-4 max-h-80 overflow-auto rounded-lg border border-border bg-slate-950 p-4 text-xs leading-6 text-emerald-200"
+              className="mt-4 max-h-80 max-w-full overflow-auto rounded-lg border border-border bg-slate-950 p-4 text-xs leading-6 text-emerald-200"
             >
               {JSON.stringify(preview, null, 2)}
             </pre>
@@ -718,7 +735,7 @@ export function DeploymentSpecForm({
             type="submit"
             disabled={submitting || Object.keys(errors).length > 0}
             data-testid="deploy-submit"
-            className="mt-5 w-full rounded-lg border border-blue-400/40 bg-blue-400/10 px-4 py-2.5 text-sm font-semibold text-blue-200 transition-colors hover:bg-blue-400/20 disabled:cursor-not-allowed disabled:border-slate-600 disabled:bg-slate-800 disabled:text-slate-500"
+            className="mt-5 w-full rounded-lg border border-blue-400/40 bg-blue-400/10 px-4 py-2.5 text-sm font-semibold text-blue-200 transition-colors hover:bg-blue-400/20 disabled:cursor-not-allowed disabled:border-slate-600 disabled:bg-slate-800 disabled:text-slate-400"
           >
             {deploymentActionLabel(form, submitting, Boolean(submitError) || submission?.dispatch_status === "failed")}
           </button>
@@ -737,6 +754,7 @@ export function DeploymentSpecForm({
           {submission && (
             <div
               role={submission.dispatch_status === "failed" ? "alert" : "status"}
+              aria-atomic="true"
               className={`mt-3 rounded-lg border p-3 text-xs ${submission.dispatch_status === "failed"
                 ? "border-red-400/30 bg-red-400/10 text-red-100"
                 : "border-emerald-400/30 bg-emerald-400/10 text-emerald-100"}`}
@@ -784,26 +802,26 @@ export function DeploymentSpecForm({
               className="mt-3 rounded-lg border border-slate-600/70 bg-slate-950/30 p-3 text-xs text-slate-300"
               data-testid="previous-attempt"
             >
-              <summary className="cursor-pointer font-semibold text-slate-200">Previous attempt</summary>
+              <summary className="cursor-pointer rounded font-semibold text-slate-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-300 focus-visible:ring-offset-2 focus-visible:ring-offset-surface">Previous attempt</summary>
               <div className="mt-3 space-y-2">
                 <p>
-                  <span className="text-slate-500">Attempt ID: </span>
+                  <span className="text-slate-400">Attempt ID: </span>
                   <code>{previousAttempt.deployment_id ?? "Unavailable"}</code>
                 </p>
                 <p>
-                  <span className="text-slate-500">Frozen request: </span>
+                  <span className="text-slate-400">Frozen request: </span>
                   {requestSummaryLabel(previousAttempt.request_summary)}
                 </p>
                 {(previousAttempt.error_code || previousAttempt.error) && (
                   <p data-testid="previous-attempt-error">
-                    <span className="text-slate-500">Result: </span>
+                    <span className="text-slate-400">Result: </span>
                     {errorClassLabel(previousAttempt.error_code)}
                     {previousAttempt.error ? ` — ${previousAttempt.error}` : ""}
                   </p>
                 )}
                 {previousAttempt.dispatch_status && !previousAttempt.error_code && (
                   <p>
-                    <span className="text-slate-500">Result: </span>
+                    <span className="text-slate-400">Result: </span>
                     {previousAttempt.dispatch_status}
                   </p>
                 )}

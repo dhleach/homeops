@@ -7,6 +7,22 @@
     @apply bg-surface text-slate-100 antialiased;
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
   }
+
+  :is(a, button, input, select, summary):focus-visible {
+    outline: 3px solid #bfdbfe;
+    outline-offset: 3px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      scroll-behavior: auto !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
 }
 
 @layer components {

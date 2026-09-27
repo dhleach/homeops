@@ -325,7 +325,7 @@ function FleetTargetCard({ target, selected }) {
   return (
     <article
       aria-labelledby={cardTitleId}
-      className={`flex flex-col rounded-2xl border p-4 shadow-lg shadow-slate-950/10 transition-colors ${selected
+      className={`flex min-w-0 flex-col rounded-2xl border p-4 shadow-lg shadow-slate-950/10 transition-colors ${selected
         ? "border-blue-400/80 bg-blue-400/10 ring-1 ring-blue-400/40"
         : "border-border bg-card"}`}
       data-selected={selected ? "true" : "false"}
@@ -342,7 +342,7 @@ function FleetTargetCard({ target, selected }) {
             <h3 id={cardTitleId} className="mt-1 font-mono text-lg font-semibold text-white">
               {displayLabel}
             </h3>
-            <p className="mt-0.5 text-xs text-slate-500">
+            <p className="mt-0.5 text-xs text-slate-400">
               {target.environment.toUpperCase()} · simulated vehicle
             </p>
           </div>
@@ -362,11 +362,11 @@ function FleetTargetCard({ target, selected }) {
           label={`Observed ${profileText(target.observed)}`}
         />
         <div className="min-w-0">
-          <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Observed profile</p>
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">Observed profile</p>
           <p className="mt-1 truncate text-sm font-medium text-slate-200">{profileText(target.observed)}</p>
         </div>
         <div className="ml-auto flex shrink-0 flex-col items-end gap-1">
-          <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Health</span>
+          <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">Health</span>
           <StatusPill status={target.status} />
         </div>
       </div>
@@ -392,14 +392,14 @@ function FleetTargetCard({ target, selected }) {
         </div>
         <div className="mt-3 grid grid-cols-2 gap-3 border-t border-current/10 pt-3 text-xs">
           <div>
-            <p className="text-slate-500">Desired</p>
+            <p className="text-slate-400">Desired</p>
             <div className="mt-1 flex items-center gap-2 text-slate-300">
               <ProfileGlyph profile={target.desired} label={`Desired ${profileText(target.desired)}`} />
               <span>{profileText(target.desired)}</span>
             </div>
           </div>
           <div>
-            <p className="text-slate-500">Observed</p>
+            <p className="text-slate-400">Observed</p>
             <div className="mt-1 flex items-center gap-2 text-slate-300">
               <ProfileGlyph profile={target.observed} label={`Observed ${profileText(target.observed)}`} />
               <span>{profileText(target.observed)}</span>
@@ -415,22 +415,22 @@ function FleetTargetCard({ target, selected }) {
       )}
 
       <details className="mt-3 rounded-lg border border-border/70 bg-slate-950/20 px-3 py-2 text-xs" data-testid="fleet-target-details">
-        <summary className="cursor-pointer font-medium text-slate-400 hover:text-slate-200">
+        <summary className="cursor-pointer rounded font-medium text-slate-400 hover:text-slate-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-300 focus-visible:ring-offset-2 focus-visible:ring-offset-surface">
           Full target details
         </summary>
         <dl className="mt-3 space-y-2 border-t border-border/70 pt-3 text-slate-300">
           <div className="flex items-start justify-between gap-3">
-            <dt className="text-slate-500">Target ID</dt>
+            <dt className="text-slate-400">Target ID</dt>
             <dd className="max-w-[14rem] break-all text-right font-mono">{target.target_id}</dd>
           </div>
           <div className="flex items-start justify-between gap-3">
-            <dt className="text-slate-500">Desired digest</dt>
+            <dt className="text-slate-400">Desired digest</dt>
             <dd className="max-w-[14rem] break-all text-right font-mono" title={target.desired_digest}>
               {formatDigest(target.desired_digest)}
             </dd>
           </div>
           <div className="flex items-start justify-between gap-3">
-            <dt className="text-slate-500">Observed digest</dt>
+            <dt className="text-slate-400">Observed digest</dt>
             <dd className="max-w-[14rem] break-all text-right font-mono" title={target.observed_digest}>
               {formatDigest(target.observed_digest)}
             </dd>
@@ -445,7 +445,7 @@ function FleetLoadingState() {
   return (
     <div
       aria-label="Loading simulated fleet"
-      className="grid grid-cols-1 gap-4 sm:grid-cols-2"
+      className="grid min-w-0 grid-cols-1 gap-4 sm:grid-cols-2"
       data-testid="fleet-loading"
     >
       {[...Array(12)].map((_, index) => (
@@ -495,7 +495,7 @@ function DeploymentRunPanel({ deployment, error, onRefresh }) {
   return (
     <section
       aria-labelledby="deployment-run-heading"
-      className="mb-10 rounded-2xl border border-border bg-card/70 p-5 shadow-lg shadow-slate-950/10 sm:p-6"
+      className="mb-10 min-w-0 rounded-2xl border border-border bg-card/70 p-4 shadow-lg shadow-slate-950/10 sm:p-6"
       data-testid="deployment-run-state"
     >
       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
@@ -528,7 +528,7 @@ function DeploymentRunPanel({ deployment, error, onRefresh }) {
       >
         <p className="text-xs font-semibold uppercase tracking-wider text-blue-200">Frozen request</p>
         <p className="mt-1">{requestSummaryText(deployment)}</p>
-        <p className="mt-1 text-xs text-slate-500">
+        <p className="mt-1 text-xs text-slate-400">
           Attempt ID and request details stay fixed while this run is reconciled.
         </p>
       </div>
@@ -545,24 +545,31 @@ function DeploymentRunPanel({ deployment, error, onRefresh }) {
 
       <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <div className="rounded-lg border border-border bg-slate-950/30 p-3">
-          <p className="text-xs uppercase tracking-wider text-slate-500">Workflow state</p>
-          <p className="mt-1 text-sm font-semibold text-slate-200">{deploymentStatusLabel(deployment)}</p>
+          <p className="text-xs uppercase tracking-wider text-slate-400">Workflow state</p>
+          <p
+            className="mt-1 text-sm font-semibold text-slate-200"
+            aria-live="polite"
+            aria-atomic="true"
+            data-testid="deployment-workflow-status"
+          >
+            {deploymentStatusLabel(deployment)}
+          </p>
           {deployment.workflow?.conclusion && (
-            <p className="mt-1 text-xs text-slate-500">Conclusion: {deployment.workflow.conclusion}</p>
+            <p className="mt-1 text-xs text-slate-400">Conclusion: {deployment.workflow.conclusion}</p>
           )}
         </div>
         <div className="rounded-lg border border-border bg-slate-950/30 p-3">
-          <p className="text-xs uppercase tracking-wider text-slate-500">Verified targets</p>
+          <p className="text-xs uppercase tracking-wider text-slate-400">Verified targets</p>
           <p className="mt-1 text-sm font-semibold text-slate-200">
             {verifiedTargets.length} / {deployment.target_ids.length}
           </p>
         </div>
         <div className="rounded-lg border border-border bg-slate-950/30 p-3">
-          <p className="text-xs uppercase tracking-wider text-slate-500">Created</p>
+          <p className="text-xs uppercase tracking-wider text-slate-400">Created</p>
           <p className="mt-1 text-sm text-slate-300">{formatTimestamp(deployment.workflow_created_at ?? deployment.created_at)}</p>
         </div>
         <div className="rounded-lg border border-border bg-slate-950/30 p-3">
-          <p className="text-xs uppercase tracking-wider text-slate-500">Last updated</p>
+          <p className="text-xs uppercase tracking-wider text-slate-400">Last updated</p>
           <p className="mt-1 text-sm text-slate-300">{formatTimestamp(deployment.workflow_updated_at ?? deployment.updated_at)}</p>
         </div>
       </div>
@@ -656,12 +663,12 @@ export function FleetDeployView({ apiUrl }) {
   }, [deployment.data?.status, refresh]);
 
   return (
-    <div className="min-h-screen bg-surface text-slate-100">
-      <header className="border-b border-border px-6 py-5">
-        <div className="mx-auto flex max-w-6xl flex-col gap-5 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex items-start gap-3">
+    <div className="min-h-screen w-full min-w-0 overflow-x-clip bg-surface text-slate-100" data-testid="fleet-deploy-page">
+      <header className="border-b border-border px-4 py-5 sm:px-6">
+        <div className="mx-auto flex min-w-0 max-w-6xl flex-col gap-5 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex min-w-0 items-start gap-3">
             <span aria-hidden="true" className="mt-1 text-2xl">🚚</span>
-            <div>
+            <div className="min-w-0">
               <p className="text-xs font-semibold uppercase tracking-[0.22em] text-blue-300">
                 HomeOps / Deploy
               </p>
@@ -674,17 +681,17 @@ export function FleetDeployView({ apiUrl }) {
               </p>
             </div>
           </div>
-          <div className="flex flex-wrap items-center gap-3">
+          <div className="flex w-full flex-wrap items-center gap-3 sm:w-auto">
             <a
               href="/"
-              className="rounded-xl border border-border px-4 py-2 text-sm font-medium text-slate-300 transition-colors hover:border-blue-500/50 hover:text-blue-300"
+              className="flex-1 rounded-xl border border-border px-4 py-2 text-center text-sm font-medium text-slate-300 transition-colors hover:border-blue-500/50 hover:text-blue-300 sm:flex-none"
             >
               ← HomeOps dashboard
             </a>
             <button
               type="button"
               onClick={refresh}
-              className="rounded-xl border border-blue-500/40 bg-blue-500/10 px-4 py-2 text-sm font-medium text-blue-300 transition-colors hover:bg-blue-500/20"
+              className="flex-1 rounded-xl border border-blue-500/40 bg-blue-500/10 px-4 py-2 text-sm font-medium text-blue-300 transition-colors hover:bg-blue-500/20 sm:flex-none"
             >
               Refresh fleet
             </button>
@@ -692,18 +699,18 @@ export function FleetDeployView({ apiUrl }) {
         </div>
       </header>
 
-      <main className="mx-auto w-full max-w-7xl px-6 py-10">
-        <div className="mb-10 grid grid-cols-1 gap-3 sm:grid-cols-3">
+      <main className="mx-auto min-w-0 w-full max-w-7xl px-4 py-6 sm:px-6 sm:py-10" data-testid="fleet-deploy-main">
+        <div className="mb-8 grid min-w-0 grid-cols-1 gap-3 sm:mb-10 sm:grid-cols-3">
           <div className="rounded-xl border border-border bg-card/70 p-4">
-            <p className="text-xs uppercase tracking-wider text-slate-500">Targets</p>
+            <p className="text-xs uppercase tracking-wider text-slate-400">Targets</p>
             <p className="mt-1 text-xl font-semibold text-white">12 simulated vehicles</p>
           </div>
           <div className="rounded-xl border border-border bg-card/70 p-4">
-            <p className="text-xs uppercase tracking-wider text-slate-500">Control boundary</p>
+            <p className="text-xs uppercase tracking-wider text-slate-400">Control boundary</p>
             <p className="mt-1 text-xl font-semibold text-white">Public simulated control plane</p>
           </div>
           <div className="rounded-xl border border-border bg-card/70 p-4">
-            <p className="text-xs uppercase tracking-wider text-slate-500">Last refresh</p>
+            <p className="text-xs uppercase tracking-wider text-slate-400">Last refresh</p>
             <p className="mt-1 text-xl font-semibold text-white">
               {lastUpdated ? lastUpdated.toLocaleTimeString() : "Waiting…"}
             </p>
@@ -711,10 +718,10 @@ export function FleetDeployView({ apiUrl }) {
         </div>
 
         <div
-          className="grid items-start gap-8 lg:grid-cols-[minmax(22rem,0.82fr)_minmax(0,1.18fr)]"
+          className="grid min-w-0 items-start gap-8 lg:grid-cols-[minmax(22rem,0.82fr)_minmax(0,1.18fr)]"
           data-testid="fleet-deploy-layout"
         >
-          <div data-testid="deployment-config-column">
+          <div className="min-w-0" data-testid="deployment-config-column">
             <DeploymentSpecForm
               apiUrl={apiUrl}
               capabilities={data?.capabilities}
@@ -751,6 +758,7 @@ export function FleetDeployView({ apiUrl }) {
                   <section
                     key={environment}
                     aria-labelledby={`fleet-environment-${environment}`}
+                    className="min-w-0"
                     data-testid={`fleet-environment-${environment}`}
                   >
                     <div className="mb-4 flex items-end justify-between gap-4">
@@ -762,7 +770,7 @@ export function FleetDeployView({ apiUrl }) {
                           {environment}
                         </h2>
                       </div>
-                      <p className="text-sm text-slate-500">{targets.length} simulated targets</p>
+                      <p className="text-sm text-slate-400">{targets.length} simulated targets</p>
                     </div>
                     <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                       {targets.map((target) => (
