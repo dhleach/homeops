@@ -27,13 +27,16 @@ React + Vite + Tailwind single-page dashboard for `homeops.now`.
   `VITE_API_URL/deploy/api/deployments/submit`. The form generates the
   deployment attempt ID automatically, keeps it in tab-scoped session storage
   for reloads and safe retries, and rotates it when a visitor starts a new
-  deployment or edits an already-submitted attempt. Repeating an unchanged
-  attempt is therefore safe at the backend's idempotent boundary. It never
-  sends a GitHub or protected fleet-management credential to the browser. The
-  form consumes the backend-published capability matrix and exposes only the
-  verified Python/Ansible + all-at-once/abort paths; rolling, canary, and
-  rollback remain visibly unavailable until their execution semantics are
-  implemented and proven.
+  deployment or edits an already-submitted attempt. Target selection shows the
+  resolved short labels (`TEST-01` through `PROD-04`) and highlights the
+  matching fleet cards; switching modes clears inactive targeting so the visible
+  summary always matches the payload. Repeating an unchanged attempt is
+  therefore safe at the backend's idempotent boundary. It never sends a GitHub
+  or protected fleet-management credential to the browser. The form consumes
+  the backend-published capability matrix and exposes only the verified
+  Python/Ansible + all-at-once/abort paths; rolling, canary, and rollback remain
+  visibly unavailable until their execution semantics are implemented and
+  proven.
 
 The production build is created by
 `.github/workflows/frontend-deploy.yml`, synced to the private S3 frontend

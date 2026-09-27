@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 // These finite choices mirror deploy_demo/deployment_spec.py. The browser may
 // submit only this closed data structure; the backend validator remains the
@@ -118,6 +118,18 @@ function labelize(value) {
   return value.replaceAll("_", " ");
 }
 
+function targetDisplayLabel(targetId) {
+  const match = /^(test|stage|prod)-vehicle-(\d{2})$/.exec(targetId);
+  return match ? `${match[1].toUpperCase()}-${match[2]}` : targetId;
+}
+
+function resolvedTargetIds(form) {
+  if (form.target_selection === "environment") {
+    return TARGETS_BY_ENVIRONMENT[form.environment] ?? [];
+  }
+  return sortedTargetIds(form.target_ids);
+}
+
 function deploymentTargetCount(form) {
   if (form.target_selection === "environment") {
     return TARGETS_BY_ENVIRONMENT[form.environment]?.length ?? 0;
@@ -224,7 +236,13 @@ function OptionSelect({ id, label, value, options, onChange, error, disabled = f
   );
 }
 
-export function DeploymentSpecForm({ apiUrl, capabilities, onSubmitted, onNewAttempt }) {
+export function DeploymentSpecForm({
+  apiUrl,
+  capabilities,
+  onSubmitted,
+  onNewAttempt,
+  onTargetSelectionChange,
+}) {
   const availableCapabilities = useMemo(() => normalizeCapabilities(capabilities), [capabilities]);
   const [form, setForm] = useState(createDefaultForm);
   const [submitting, setSubmitting] = useState(false);
@@ -235,12 +253,17 @@ export function DeploymentSpecForm({ apiUrl, capabilities, onSubmitted, onNewAtt
     [form, availableCapabilities],
   );
   const preview = useMemo(() => buildDeploymentSpec(form), [form]);
+  const selectedTargetIds = useMemo(() => resolvedTargetIds(form), [form]);
   const implementationOptions = uniqueCapabilityValues(availableCapabilities, "implementation");
   const strategyOptions = uniqueCapabilityValues(
     availableCapabilities.filter((capability) => capability.implementation === form.implementation),
     "strategy",
   );
   const failureModeOptions = uniqueCapabilityValues(capabilitiesFor(availableCapabilities, form), "failure_mode");
+
+  useEffect(() => {
+    onTargetSelectionChange?.(selectedTargetIds);
+  }, [onTargetSelectionChange, selectedTargetIds]);
 
   function beginNewAttempt() {
     const deploymentId = createDeploymentId();
@@ -295,6 +318,7 @@ export function DeploymentSpecForm({ apiUrl, capabilities, onSubmitted, onNewAtt
     setForm((current) => ({
       ...current,
       target_selection: event.target.value,
+      target_ids: [],
       ...(deploymentId ? { deployment_id: deploymentId } : {}),
     }));
   }
@@ -422,6 +446,31 @@ export function DeploymentSpecForm({ apiUrl, capabilities, onSubmitted, onNewAtt
             </div>
           </fieldset>
 
+          <div
+            className="rounded-lg border border-blue-400/20 bg-blue-400/5 p-3"
+            data-testid="deployment-resolved-targets"
+            aria-live="polite"
+          >
+            <div className="flex items-baseline justify-between gap-3">
+              <p className="text-xs font-semibold uppercase tracking-wider text-blue-200">
+                Resolved targets
+              </p>
+              <p className="text-xs font-medium text-blue-100" data-testid="deployment-resolved-target-count">
+                {selectedTargetIds.length} {selectedTargetIds.length === 1 ? "vehicle" : "vehicles"}
+              </p>
+            </div>
+            <p className="mt-1 text-sm font-medium text-slate-200">
+              {selectedTargetIds.length > 0
+                ? selectedTargetIds.map(targetDisplayLabel).join(", ")
+                : "No targets selected"}
+            </p>
+            <p className="mt-1 text-xs text-slate-500">
+              {form.target_selection === "environment"
+                ? `${form.environment.toUpperCase()} environment deploys its four vehicles.`
+                : "Only the vehicles listed above will be included in the request."}
+            </p>
+          </div>
+
           <div className="grid gap-4 sm:grid-cols-2">
             <OptionSelect
               id="deployment-environment"
@@ -478,32 +527,35 @@ export function DeploymentSpecForm({ apiUrl, capabilities, onSubmitted, onNewAtt
             unavailable until their implementation paths are exercised and proven.
           </p>
 
-          <fieldset disabled={form.target_selection !== "target_ids"}>
-            <legend className="block text-xs font-semibold uppercase tracking-wider text-slate-400">
-              Individual target IDs
-            </legend>
-            <p className="mt-1 text-xs text-slate-500">
-              Enabled when Individual targets is selected; the contract allows at most twelve.
-            </p>
-            <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-              {TARGET_ORDER.map((targetId) => (
-                <label
-                  key={targetId}
-                  className="flex items-center gap-2 rounded-lg border border-border bg-slate-950/40 px-3 py-2 text-xs text-slate-300"
-                >
-                  <input
-                    type="checkbox"
-                    checked={form.target_ids.includes(targetId)}
-                    onChange={() => toggleTarget(targetId)}
-                    aria-label={targetId}
-                    className="accent-blue-400"
-                  />
-                  <span className="font-mono">{targetId}</span>
-                </label>
-              ))}
-            </div>
-            <FieldError id="target-ids-error" message={errors.target_ids} />
-          </fieldset>
+          {form.target_selection === "target_ids" && (
+            <fieldset>
+              <legend className="block text-xs font-semibold uppercase tracking-wider text-slate-400">
+                Individual target IDs
+              </legend>
+              <p className="mt-1 text-xs text-slate-500">
+                Choose the short vehicle labels below; stable machine IDs remain in the JSON details.
+              </p>
+              <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                {TARGET_ORDER.map((targetId) => (
+                  <label
+                    key={targetId}
+                    className="flex items-center gap-2 rounded-lg border border-border bg-slate-950/40 px-3 py-2 text-xs text-slate-300 transition-colors has-[:checked]:border-blue-400/60 has-[:checked]:bg-blue-400/10"
+                    title={targetId}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={form.target_ids.includes(targetId)}
+                      onChange={() => toggleTarget(targetId)}
+                      aria-label={targetDisplayLabel(targetId)}
+                      className="accent-blue-400"
+                    />
+                    <span className="font-mono">{targetDisplayLabel(targetId)}</span>
+                  </label>
+                ))}
+              </div>
+              <FieldError id="target-ids-error" message={errors.target_ids} />
+            </fieldset>
+          )}
         </div>
 
         <aside className="space-y-4">
