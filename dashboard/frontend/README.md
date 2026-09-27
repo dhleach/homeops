@@ -59,6 +59,15 @@ bucket, invalidated through CloudFront, and verified with the public release
 smoke checks. The deployment and route map is in
 [`docs/deployment.md`](../../docs/deployment.md).
 
+The `/deploy` route imports the checked-in `deploy_demo/deployer.py` and
+`ansible/deploy.yml` files as build-time raw source, so its implementation tabs
+cannot drift from the code shipped with that frontend build. A full
+`VITE_BUILD_SHA` pins the GitHub source links to the same revision; local builds
+fall back to `master`. The trusted Fleet workflow publishes the selected
+implementation and its checked-in source path in the completed Actions run
+summary, and the run panel links that proof separately from the frozen request
+parameters.
+
 The recruiter-facing Bob evaluation dashboard is published at
 [`/bob/evals/`](https://homeops.now/bob/evals/). It is a reviewed static
 snapshot under `public/bob/evals/`, copied from the canonical

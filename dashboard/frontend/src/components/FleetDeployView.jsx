@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { DeploymentSpecForm } from "./DeploymentSpecForm.jsx";
+import { IMPLEMENTATION_SOURCES, sourceUrl } from "../fleetDeploymentSources.js";
 
 const REFRESH_INTERVAL_MS = 30_000;
 const DEPLOYMENT_REFRESH_INTERVAL_MS = 2_000;
@@ -557,6 +558,8 @@ function DeploymentRunPanel({ deployment, error, onRefresh }) {
       && target.desired_digest === target.observed_digest,
   );
   const jobs = deployment.workflow?.jobs ?? [];
+  const selectedImplementation = deployment.request_summary?.implementation;
+  const implementationSource = IMPLEMENTATION_SOURCES[selectedImplementation] ?? null;
 
   return (
     <section
@@ -599,6 +602,29 @@ function DeploymentRunPanel({ deployment, error, onRefresh }) {
           Attempt ID and request details stay fixed while this run is reconciled.
         </p>
       </div>
+
+      {implementationSource && (
+        <div
+          className="mt-5 rounded-lg border border-slate-600/70 bg-slate-950/30 p-3 text-sm text-slate-200"
+          data-testid="deployment-implementation-proof"
+        >
+          <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">
+            Implementation proof
+          </p>
+          <p className="mt-1 font-semibold text-white">{implementationSource.label}</p>
+          <p className="mt-1 text-xs text-slate-400">
+            The trusted workflow selected this path from the validated DeploymentSpec:
+          </p>
+          <a
+            href={sourceUrl(implementationSource.path)}
+            target="_blank"
+            rel="noreferrer"
+            className="mt-1 inline-block break-all font-mono text-xs text-blue-300 underline"
+          >
+            {implementationSource.path}
+          </a>
+        </div>
+      )}
 
       {deployment.dispatch_status === "dispatched" && !workflowIsSettled(deployment) && (
         <div
@@ -658,8 +684,11 @@ function DeploymentRunPanel({ deployment, error, onRefresh }) {
             target="_blank"
             rel="noreferrer"
             className="text-blue-300 underline"
+            aria-label={implementationSource
+              ? `Run proof: ${implementationSource.label}`
+              : "GitHub Actions run"}
           >
-            GitHub Actions run
+            {implementationSource ? `Run proof: ${implementationSource.label}` : "GitHub Actions run"}
           </a>
         )}
       </div>

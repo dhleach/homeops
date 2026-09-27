@@ -166,6 +166,30 @@ describe("FleetDeployView", () => {
     expect(screen.queryByTestId("fleet-build-revision")).not.toBeInTheDocument();
   });
 
+  it("keeps the implementation tabs tied to checked-in read-only source", async () => {
+    render(<FleetDeployView apiUrl="https://api.homeops.now" />);
+
+    await screen.findAllByTestId("fleet-target-card");
+    expect(screen.getByRole("tab", { name: "Python deployer" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByTestId("implementation-source-code")).toHaveTextContent("class FleetDeployer");
+    expect(screen.getByRole("link", { name: "Open Python deployer on GitHub" })).toHaveAttribute(
+      "href",
+      "https://github.com/dhleach/homeops/blob/master/deploy_demo/deployer.py",
+    );
+    expect(screen.getByTestId("implementation-source-code")).not.toHaveAttribute("contenteditable");
+
+    fireEvent.click(screen.getByRole("tab", { name: "Ansible playbook" }));
+
+    await waitFor(() => expect(screen.getByLabelText("Implementation")).toHaveValue("ansible"));
+    expect(screen.getByRole("tab", { name: "Ansible playbook" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByTestId("implementation-source-code")).toHaveTextContent("ansible.builtin.assert");
+    expect(screen.getByRole("link", { name: "Open Ansible playbook on GitHub" })).toHaveAttribute(
+      "href",
+      "https://github.com/dhleach/homeops/blob/master/ansible/deploy.yml",
+    );
+    expect(screen.getByTestId("deployment-spec-preview")).toHaveTextContent('"implementation": "ansible"');
+  });
+
   it("describes the live deployment action and target-aware control", async () => {
     render(<FleetDeployView apiUrl="https://api.homeops.now" />);
 
@@ -388,6 +412,15 @@ describe("FleetDeployView", () => {
       desired_digest: "green-square-digest",
       status: "succeeded",
       error: null,
+      request_summary: {
+        deployment_id: "demo-reload-001",
+        environment: "test",
+        failure_mode: "abort",
+        implementation: "python",
+        profile: { color: "green", shape: "square" },
+        schema_version: 1,
+        strategy: "all_at_once",
+      },
       created_at: "2026-09-26T12:00:00Z",
       updated_at: "2026-09-26T12:00:30Z",
       verification: "verified",
@@ -446,6 +479,11 @@ describe("FleetDeployView", () => {
     expect(screen.getByRole("link", { name: "Manifest commit" })).toHaveAttribute(
       "href",
       deployment.manifest_commit_url,
+    );
+    expect(screen.getByTestId("deployment-implementation-proof")).toHaveTextContent("Python deployer");
+    expect(screen.getByRole("link", { name: "Run proof: Python deployer" })).toHaveAttribute(
+      "href",
+      deployment.workflow_url,
     );
     expect(screen.getByTestId("fleet-state-column")).toContainElement(screen.getByTestId("deployment-run-state"));
     expect(screen.getByTestId("fleet-state-column")).toContainElement(screen.getByTestId("fleet-environment-test"));
