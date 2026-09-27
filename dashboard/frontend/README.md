@@ -77,6 +77,9 @@ The production build is created by
 bucket, invalidated through CloudFront, and verified with the public release
 smoke checks. The deployment and route map is in
 [`docs/deployment.md`](../../docs/deployment.md).
+The recruiter-facing anonymous walkthrough, deterministic failure/rollback
+demo, security boundary, and desktop/mobile rehearsal are in
+[`docs/fleet-deploy-demo-runbook.md`](../../docs/fleet-deploy-demo-runbook.md).
 
 The `/deploy` route imports the checked-in `deploy_demo/deployer.py` and
 `ansible/deploy.yml` files as build-time raw source, so its implementation tabs

@@ -1,10 +1,12 @@
 # Fleet Deploy Lab integration map
 
-Status: PR 19 deployment history and auditable reset in progress; PR 18 merged
+Status: PR 20 demo hardening and Latitude interview runbook in progress; PR 19 merged
 Repository: `dhleach/homeops`
 Default branch: `master`
-Latest merged integration snapshot: `master` after PR #399
-Active GitHub issue: https://github.com/dhleach/homeops/issues/400
+Latest merged integration snapshot: `master` after PR #401
+Active GitHub issue: https://github.com/dhleach/homeops/issues/402
+
+The concise recruiter/demo walkthrough is [`docs/fleet-deploy-demo-runbook.md`](../docs/fleet-deploy-demo-runbook.md).
 
 This document records the real HomeOps integration points for the Fleet Deploy
 Lab as the implementation advances. It is deliberately specific about what
@@ -41,21 +43,24 @@ configuration. Nginx already proxies the default API location and allows
 
 ### Route smoke contract
 
-The following checks are the intended public smoke contract. All three are
-valid after the merged PR 04 backend deployment and PR 05 frontend deployment;
-the Fleet Deploy route also exposes the bounded configuration and submission
+The following checks are the intended public smoke contract. They are valid
+after the merged PR 04 backend deployment and PR 05 frontend deployment; the
+Fleet Deploy route also exposes the bounded configuration and submission
 control plane described below.
 
 ```bash
 curl -fsS https://homeops.now/deploy >/dev/null
 curl -fsS https://api.homeops.now/health
 curl -fsS https://api.homeops.now/deploy/api/health
+curl -fsS https://api.homeops.now/deploy/api/fleet >/dev/null
+curl -fsS https://api.homeops.now/deploy/api/deployments/history >/dev/null
 ```
 
-For a discovery-only run against the current production deployment, the third
-check should be recorded as unavailable only when the backend deployment has
-not yet completed. Once PR 04 is deployed, it is a required 200/readiness check,
-followed by the anonymous `/deploy/api/fleet` read.
+For a discovery-only run against the current production deployment, the Fleet
+checks should be recorded as unavailable only when the backend deployment has
+not yet completed. Once PR 04 is deployed, readiness, the twelve-target
+anonymous read, and durable history are required 200 checks. The canonical
+release command is `python3 scripts/deploy_smoke_check.py --skip-observability`.
 
 ## Frontend and hosting boundary
 
@@ -537,6 +542,28 @@ browser.
 - Terraform resources changed: **None**
 - Sequence and owner: Derek reviews and merges PR19; no production deployment or simulator mutation is part of the code change itself.
 - Safety gate: reset accepts only the closed full-fleet operation, uses the existing trusted manifest/workflow boundary, and changes only the simulated Fleet API; Home Assistant, the normal HomeOps release path, Pi, and EC2 remain outside this boundary.
+
+## PR 20 — harden the demo and prepare the Latitude interview runbook
+
+PR 20 packages the merged Fleet Deploy Lab into a reproducible anonymous
+interview demo. The canonical walkthrough in
+[`docs/fleet-deploy-demo-runbook.md`](../docs/fleet-deploy-demo-runbook.md)
+covers the architecture and code paths, setup, normal success, deterministic
+verification failure, canary rollback, baseline reset, public credential
+boundary, known limitations, and desktop/phone browser rehearsal. It keeps the
+simulated-vehicle boundary explicit: the lab is not HIL, ECU control, or a real
+vehicle deployment.
+
+The release smoke check now exercises the `/deploy` SPA shell,
+`/deploy/api/health`, all twelve simulated target labels, and durable deployment
+history. This prevents a green HVAC/API release check from silently publishing
+a broken recruiter route or an incorrectly labeled Fleet response.
+
+- Terraform apply required: **No**
+- Manual console/setup: **None**
+- Terraform resources changed: **None**
+- Sequence and owner: Derek reviews and merges PR20; the anonymous browser rehearsal and any simulated reset are performed against the public demo only.
+- Safety gate: no Fleet credential reaches the browser; no Home Assistant, thermostat, telemetry, Pi/EC2, or normal HomeOps release state is changed.
 
 ## DEFECT 01 — clear stale Fleet busy capacity after a failed canary
 
