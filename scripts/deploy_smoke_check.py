@@ -21,6 +21,8 @@ Revision history:
   2026-08-27  Added an opt-in Bob evaluation route check that validates the short
               CloudFront path and the published artifacts' offline, redacted,
               non-production boundary after the separate Terraform rollout.
+  2026-09-27  Added the anonymous Fleet Deploy SPA, simulator readiness,
+              twelve-target boundary, and durable-history checks.
 """
 
 from __future__ import annotations
@@ -74,6 +76,11 @@ PROVISIONED_DASHBOARD_EXPECTATIONS = {
 }
 DEFAULT_DASHBOARD_REFRESH_ATTEMPTS = 20
 DEFAULT_DASHBOARD_REFRESH_DELAY_SECONDS = 2.0
+EXPECTED_FLEET_TARGET_LABELS = {
+    f"{environment.upper()}-{number:02d}"
+    for environment in ("test", "stage", "prod")
+    for number in range(1, 5)
+}
 _MAX_BODY_BYTES = 1_000_000
 
 
@@ -163,14 +170,65 @@ def _json(response: SmokeResponse) -> object:
 
 
 def _check_frontend(base_url: str, fetcher: Fetcher, timeout: float) -> str:
-    response = fetcher(_join(base_url, "/"), timeout)
-    _require_status(response)
-    body = response.body.decode("utf-8", errors="replace").lower()
-    required_markers = ('id="root"', "homeops")
-    missing = [marker for marker in required_markers if marker not in body]
-    if missing:
-        raise SmokeCheckError(f"{response.url}: frontend missing markers: {', '.join(missing)}")
-    return "frontend: HTTP 200 and SPA shell present"
+    for path in ("/", "/deploy"):
+        response = fetcher(_join(base_url, path), timeout)
+        _require_status(response)
+        body = response.body.decode("utf-8", errors="replace").lower()
+        required_markers = ('id="root"', "homeops")
+        missing = [marker for marker in required_markers if marker not in body]
+        if missing:
+            raise SmokeCheckError(f"{response.url}: frontend missing markers: {', '.join(missing)}")
+    return "frontend: HTTP 200 and HomeOps plus /deploy SPA shells present"
+
+
+def _check_fleet_demo(base_url: str, fetcher: Fetcher, timeout: float) -> str:
+    """Verify the anonymous Fleet Deploy Lab read boundary and history route."""
+    health_response = fetcher(_join(base_url, "/deploy/api/health"), timeout)
+    _require_status(health_response)
+    health = _json(health_response)
+    if not isinstance(health, dict) or health.get("status") != "ok":
+        raise SmokeCheckError(f"{health_response.url}: Fleet simulator is not healthy")
+    if health.get("simulated") is not True or health.get("target_count") != 12:
+        raise SmokeCheckError(
+            f"{health_response.url}: Fleet readiness is missing the simulated 12-target boundary"
+        )
+
+    fleet_response = fetcher(_join(base_url, "/deploy/api/fleet"), timeout)
+    _require_status(fleet_response)
+    fleet = _json(fleet_response)
+    if not isinstance(fleet, dict):
+        raise SmokeCheckError(f"{fleet_response.url}: Fleet response is not an object")
+    if fleet.get("simulated") is not True or fleet.get("target_kind") != "simulated":
+        raise SmokeCheckError(
+            f"{fleet_response.url}: Fleet response does not prove the simulated target boundary"
+        )
+    targets = fleet.get("targets")
+    if not isinstance(targets, list) or len(targets) != 12:
+        raise SmokeCheckError(f"{fleet_response.url}: Fleet response does not contain 12 targets")
+    labels = set()
+    for target in targets:
+        if not isinstance(target, dict) or target.get("simulated") is not True:
+            raise SmokeCheckError(f"{fleet_response.url}: target is not marked simulated")
+        label = target.get("label")
+        if not isinstance(label, str) or label in labels:
+            raise SmokeCheckError(f"{fleet_response.url}: target labels are missing or duplicated")
+        labels.add(label)
+    if labels != EXPECTED_FLEET_TARGET_LABELS:
+        raise SmokeCheckError(
+            f"{fleet_response.url}: unexpected simulated target labels: {', '.join(sorted(labels))}"
+        )
+
+    history_response = fetcher(_join(base_url, "/deploy/api/deployments/history"), timeout)
+    _require_status(history_response)
+    history = _json(history_response)
+    if not isinstance(history, dict) or history.get("simulated") is not True:
+        raise SmokeCheckError(
+            f"{history_response.url}: deployment history does not prove the simulated boundary"
+        )
+    if not isinstance(history.get("deployments"), list):
+        raise SmokeCheckError(f"{history_response.url}: deployment history is not a list")
+
+    return "fleet: public route, simulator readiness, target boundary, and history are healthy"
 
 
 def _check_bob_evaluation(base_url: str, fetcher: Fetcher, timeout: float) -> str:
@@ -457,6 +515,7 @@ def run_smoke_checks(
 ) -> list[str]:
     """Run all release checks in sequence and return human-readable results."""
     results = [_check_frontend(frontend_url, fetcher, timeout)]
+    results.append(_check_fleet_demo(api_url, fetcher, timeout))
     if include_bob_evaluation:
         results.append(_check_bob_evaluation(frontend_url, fetcher, timeout))
     results.extend(_check_api(api_url, fetcher, timeout))

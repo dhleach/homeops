@@ -24,6 +24,10 @@ interface at `https://api.homeops.now`.
 | `GET /metrics` | Internal diagnostic abuse/cost metrics for EC2-local Prometheus; not a public route |
 | `GET /openapi.json` | Generated API contract |
 
+The anonymous Fleet Deploy Lab walkthrough, failure/rollback script, credential
+boundary, and release evidence checklist are in
+[`docs/fleet-deploy-demo-runbook.md`](../../docs/fleet-deploy-demo-runbook.md).
+
 `/api/diagnostic` accepts a standard `Authorization: Bearer <token>` header.
 The configured Cognito OIDC verifier validates the RSA signature, issuer,
 expiry, subject, and app-client `client_id` against the user-pool JWKS. A

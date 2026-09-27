@@ -85,9 +85,22 @@ def _responses() -> dict[str, SmokeResponse]:
     def zone_metric(metric: str) -> str:
         return f'{metric}{{floor=~"floor_[123]", job="homeops-consumer"}}'
 
+    fleet_targets = [
+        {
+            "target_id": f"{environment}-vehicle-{number:02d}",
+            "label": f"{environment.upper()}-{number:02d}",
+            "simulated": True,
+        }
+        for environment in ("test", "stage", "prod")
+        for number in range(1, 5)
+    ]
+
     return {
         "https://frontend/": SmokeResponse(
             200, b'<title>HomeOps</title><div id="root"></div>', "https://frontend/"
+        ),
+        "https://frontend/deploy": SmokeResponse(
+            200, b'<title>HomeOps</title><div id="root"></div>', "https://frontend/deploy"
         ),
         "https://frontend/bob/evals/": SmokeResponse(
             200,
@@ -106,6 +119,23 @@ def _responses() -> dict[str, SmokeResponse]:
             "https://frontend/bob/evals/evaluation-live-trials.v1.json",
         ),
         "https://api/health": SmokeResponse(200, b'{"status":"ok"}', "https://api/health"),
+        "https://api/deploy/api/health": SmokeResponse(
+            200,
+            json.dumps({"status": "ok", "simulated": True, "target_count": 12}).encode(),
+            "https://api/deploy/api/health",
+        ),
+        "https://api/deploy/api/fleet": SmokeResponse(
+            200,
+            json.dumps(
+                {"simulated": True, "target_kind": "simulated", "targets": fleet_targets}
+            ).encode(),
+            "https://api/deploy/api/fleet",
+        ),
+        "https://api/deploy/api/deployments/history": SmokeResponse(
+            200,
+            json.dumps({"simulated": True, "target_kind": "simulated", "deployments": []}).encode(),
+            "https://api/deploy/api/deployments/history",
+        ),
         "https://api/openapi.json": SmokeResponse(
             200,
             json.dumps(
@@ -200,8 +230,9 @@ def test_run_smoke_checks_passes_for_healthy_stack():
         fetcher=_fake_fetcher(_responses()),
     )
 
-    assert len(results) == 6
+    assert len(results) == 7
     assert results[0].startswith("frontend:")
+    assert results[1].startswith("fleet:")
     assert results[-1].startswith("prometheus:")
 
 
@@ -213,8 +244,8 @@ def test_run_smoke_checks_can_verify_bob_evaluation_route_and_artifacts():
         fetcher=_fake_fetcher(_responses()),
     )
 
-    assert len(results) == 7
-    assert results[1].startswith("bob/evals:")
+    assert len(results) == 8
+    assert results[2].startswith("bob/evals:")
 
 
 def test_run_smoke_checks_can_skip_observability_checks():
@@ -225,7 +256,7 @@ def test_run_smoke_checks_can_skip_observability_checks():
         fetcher=_fake_fetcher(_responses()),
     )
 
-    assert len(results) == 4
+    assert len(results) == 5
     assert all("grafana" not in result and "prometheus" not in result for result in results)
 
 
@@ -264,8 +295,8 @@ def test_run_smoke_checks_can_probe_authenticated_diagnostic():
         fetcher=_fake_fetcher(_responses()),
     )
 
-    assert len(results) == 7
-    assert results[4] == "api: authenticated diagnostic returned a complete answer"
+    assert len(results) == 8
+    assert results[5] == "api: authenticated diagnostic returned a complete answer"
     assert calls == [
         (
             "https://api/api/diagnostic",
@@ -348,6 +379,36 @@ def test_run_smoke_checks_fails_when_frontend_is_not_the_homeops_spa():
     responses = _responses()
     responses["https://frontend/"] = SmokeResponse(
         200, b"<html><body>unexpected application</body></html>", "https://frontend/"
+    )
+
+    with pytest.raises(SmokeCheckError, match="frontend missing markers"):
+        run_smoke_checks(
+            frontend_url="https://frontend",
+            api_url="https://api",
+            fetcher=_fake_fetcher(responses),
+        )
+
+
+def test_run_smoke_checks_fails_when_fleet_boundary_is_not_simulated():
+    responses = _responses()
+    payload = json.loads(responses["https://api/deploy/api/fleet"].body)
+    payload["simulated"] = False
+    responses["https://api/deploy/api/fleet"] = SmokeResponse(
+        200, json.dumps(payload).encode(), "https://api/deploy/api/fleet"
+    )
+
+    with pytest.raises(SmokeCheckError, match="does not prove the simulated target boundary"):
+        run_smoke_checks(
+            frontend_url="https://frontend",
+            api_url="https://api",
+            fetcher=_fake_fetcher(responses),
+        )
+
+
+def test_run_smoke_checks_fails_when_deploy_spa_route_is_missing():
+    responses = _responses()
+    responses["https://frontend/deploy"] = SmokeResponse(
+        200, b"<html><body>unexpected application</body></html>", "https://frontend/deploy"
     )
 
     with pytest.raises(SmokeCheckError, match="frontend missing markers"):
