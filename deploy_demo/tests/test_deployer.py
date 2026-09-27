@@ -134,6 +134,10 @@ class FakeClient:
             return self.read_responses.pop(0)
         return self.read_response
 
+    def record_deployment_event(self, event) -> Mapping[str, object]:
+        self.calls.append(("event", event))
+        return {"deployment_id": event.deployment_id}
+
 
 def test_artifact_requires_exact_canonical_bytes_and_expected_digest() -> None:
     spec = valid_spec()
@@ -505,4 +509,5 @@ def test_cli_emits_verified_result_without_putting_key_in_output(
     assert exit_code == 0
     output = capsys.readouterr().out
     assert json.loads(output)["verified"] is True
+    assert [name for name, _ in client.calls].count("event") >= 2
     assert "cli-secret" not in output

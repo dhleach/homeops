@@ -35,6 +35,7 @@ _DEPLOYMENT_ID_PATTERN = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?[.]js
 _SHA1_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 _WORKFLOW_VALUE_PATTERN = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
 MAX_WORKFLOW_JOBS = 100
+MAX_WORKFLOW_STEPS = 100
 
 
 class GitHubFleetError(RuntimeError):
@@ -69,6 +70,18 @@ class WorkflowDispatchReceipt:
 
 
 @dataclass(frozen=True, slots=True)
+class WorkflowStepReceipt:
+    """Bounded state for one GitHub Actions job step."""
+
+    number: int
+    name: str
+    status: str
+    conclusion: str | None
+    started_at: str | None
+    completed_at: str | None
+
+
+@dataclass(frozen=True, slots=True)
 class WorkflowJobReceipt:
     """Bounded state for one GitHub Actions job."""
 
@@ -80,6 +93,7 @@ class WorkflowJobReceipt:
     completed_at: str | None
     workflow_url: str | None
     failed_step: str | None = None
+    steps: tuple[WorkflowStepReceipt, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -156,20 +170,37 @@ def _workflow_job_from_payload(payload: object) -> WorkflowJobReceipt:
     job_id = payload.get("id")
     if not isinstance(job_id, int) or isinstance(job_id, bool) or job_id < 1:
         raise GitHubFleetError("GitHub workflow job ID was invalid")
-    steps = payload.get("steps", [])
-    failed_step: str | None = None
-    if isinstance(steps, list):
-        for step in steps:
-            if not isinstance(step, Mapping) or step.get("conclusion") not in {
-                "failure",
-                "timed_out",
-                "cancelled",
-            }:
-                continue
-            raw_name = step.get("name")
-            if isinstance(raw_name, str) and raw_name and len(raw_name) <= 256:
-                failed_step = raw_name
-                break
+    raw_steps = payload.get("steps", [])
+    if not isinstance(raw_steps, list) or len(raw_steps) > MAX_WORKFLOW_STEPS:
+        raise GitHubFleetError("GitHub workflow steps response was invalid")
+    steps: list[WorkflowStepReceipt] = []
+    for raw_step in raw_steps:
+        if not isinstance(raw_step, Mapping):
+            raise GitHubFleetError("GitHub workflow step was not an object")
+        number = raw_step.get("number")
+        if not isinstance(number, int) or isinstance(number, bool) or number < 1:
+            raise GitHubFleetError("GitHub workflow step number was invalid")
+        steps.append(
+            WorkflowStepReceipt(
+                number=number,
+                name=_safe_workflow_text(raw_step.get("name"), name="step name"),
+                status=_safe_workflow_value(raw_step.get("status"), name="step status")
+                or "unknown",
+                conclusion=_safe_workflow_value(
+                    raw_step.get("conclusion"), name="step conclusion", allow_none=True
+                ),
+                started_at=_safe_optional_workflow_timestamp(
+                    raw_step.get("started_at"), name="step start timestamp"
+                ),
+                completed_at=_safe_optional_workflow_timestamp(
+                    raw_step.get("completed_at"), name="step completion timestamp"
+                ),
+            )
+        )
+    failed_step = next(
+        (step.name for step in steps if step.conclusion in {"failure", "timed_out", "cancelled"}),
+        None,
+    )
     return WorkflowJobReceipt(
         job_id=job_id,
         name=_safe_workflow_text(payload.get("name"), name="job name"),
@@ -185,6 +216,7 @@ def _workflow_job_from_payload(payload: object) -> WorkflowJobReceipt:
         ),
         workflow_url=_safe_workflow_url(payload.get("html_url")),
         failed_step=failed_step,
+        steps=tuple(steps),
     )
 
 
@@ -521,4 +553,5 @@ __all__ = [
     "WorkflowDispatchReceipt",
     "WorkflowJobReceipt",
     "WorkflowRunReceipt",
+    "WorkflowStepReceipt",
 ]

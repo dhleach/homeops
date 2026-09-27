@@ -33,8 +33,9 @@ from .deployment_spec import (
 
 STATE_PATH_ENV = "FLEET_DEPLOY_STATE_PATH"
 DEFAULT_STATE_PATH = "/var/lib/homeops/deploy-demo/fleet-state.sqlite3"
-STATE_SCHEMA_VERSION = 4
+STATE_SCHEMA_VERSION = 5
 SIMULATED_VERIFICATION_FAILURE_PREFIX = "deterministic verification failure injected for target "
+MAX_DEPLOYMENT_EVENTS = 128
 
 VehicleStatus = Literal["ready", "pending", "applying", "succeeded", "failed"]
 DeploymentStatus = Literal["queued", "applying", "succeeded", "failed"]
@@ -51,6 +52,20 @@ DISPATCH_STATUSES = (
     "failed",
 )
 ROLLBACK_STATUSES = ("not_started", "in_progress", "succeeded", "failed")
+DEPLOYMENT_EVENT_TYPES = (
+    "deployment_started",
+    "deployment_queued",
+    "deployment_applying",
+    "deployment_canary_started",
+    "deployment_canary_verified",
+    "deployment_rollout_started",
+    "deployment_rollout_verified",
+    "deployment_rollback_started",
+    "deployment_rollback_verified",
+    "deployment_rollback_failed",
+    "deployment_verified",
+    "deployment_failed",
+)
 _BASELINE_PROFILES = (
     ("blue", "circle"),
     ("green", "square"),
@@ -201,6 +216,7 @@ class DeploymentState:
     rollback_status: RollbackStatus = "not_started"
     rollback_target_ids: tuple[str, ...] = ()
     rollback_error: str | None = None
+    events: tuple[DeploymentEventRecord, ...] = ()
 
     def to_dict(self) -> dict[str, object]:
         """Return the JSON-safe deployment status representation."""
@@ -224,6 +240,7 @@ class DeploymentState:
             "rollback_status": self.rollback_status,
             "rollback_target_ids": list(self.rollback_target_ids),
             "rollback_error": self.rollback_error,
+            "events": [event.to_dict() for event in self.events],
         }
 
 
@@ -278,6 +295,133 @@ def _validate_error(error: str | None) -> str | None:
     if not isinstance(error, str) or not error:
         raise ValueError("deployment error must be a non-empty string or None")
     return error[:2_000]
+
+
+@dataclass(frozen=True, slots=True)
+class DeploymentEventRecord:
+    """Durable, server-recorded evidence for one deployment lifecycle event."""
+
+    sequence: int
+    event_type: str
+    schema_version: int
+    artifact_sha256: str
+    target_ids: tuple[str, ...]
+    status: str
+    detail: str | None
+    recorded_at: str
+    event_key: str
+
+    def to_dict(self) -> dict[str, object]:
+        """Return the public-safe event representation used by the API."""
+        payload: dict[str, object] = {
+            "sequence": self.sequence,
+            "event_type": self.event_type,
+            "schema_version": self.schema_version,
+            "artifact_sha256": self.artifact_sha256,
+            "target_ids": list(self.target_ids),
+            "status": self.status,
+            "recorded_at": self.recorded_at,
+        }
+        if self.detail is not None:
+            payload["detail"] = self.detail
+        return payload
+
+    def _storage_dict(self) -> dict[str, object]:
+        """Return the internal representation, including the deduplication key."""
+        payload = self.to_dict()
+        payload["event_key"] = self.event_key
+        return payload
+
+
+def _deployment_event_key(
+    *,
+    event_type: str,
+    schema_version: int,
+    artifact_sha256: str,
+    target_ids: tuple[str, ...],
+    status: str,
+    detail: str | None,
+) -> str:
+    """Return a stable key so workflow retries cannot duplicate evidence."""
+    canonical = json.dumps(
+        {
+            "artifact_sha256": artifact_sha256,
+            "detail": detail,
+            "event_type": event_type,
+            "schema_version": schema_version,
+            "status": status,
+            "target_ids": list(target_ids),
+        },
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _deployment_event_from_mapping(value: object) -> DeploymentEventRecord:
+    """Validate one persisted event while reopening an existing state DB."""
+    if not isinstance(value, Mapping):
+        raise FleetStateError("persisted deployment event must be an object")
+    sequence = value.get("sequence")
+    schema_version = value.get("schema_version")
+    event_type = value.get("event_type")
+    artifact_sha256 = value.get("artifact_sha256")
+    status = value.get("status")
+    recorded_at = value.get("recorded_at")
+    target_ids = value.get("target_ids")
+    detail = value.get("detail")
+    if not isinstance(sequence, int) or isinstance(sequence, bool) or sequence < 1:
+        raise FleetStateError("persisted deployment event sequence is invalid")
+    if (
+        not isinstance(schema_version, int)
+        or isinstance(schema_version, bool)
+        or schema_version < 1
+    ):
+        raise FleetStateError("persisted deployment event schema version is invalid")
+    if event_type not in DEPLOYMENT_EVENT_TYPES:
+        raise FleetStateError("persisted deployment event type is invalid")
+    if (
+        not isinstance(artifact_sha256, str)
+        or len(artifact_sha256) != 64
+        or any(character not in "0123456789abcdef" for character in artifact_sha256)
+    ):
+        raise FleetStateError("persisted deployment event artifact digest is invalid")
+    if not isinstance(status, str) or not status or len(status) > 64:
+        raise FleetStateError("persisted deployment event status is invalid")
+    if not isinstance(recorded_at, str) or not recorded_at or len(recorded_at) > 64:
+        raise FleetStateError("persisted deployment event timestamp is invalid")
+    if not isinstance(target_ids, list) or not all(
+        isinstance(target_id, str) for target_id in target_ids
+    ):
+        raise FleetStateError("persisted deployment event targets are invalid")
+    try:
+        normalized_targets = _validate_target_ids(target_ids)
+    except (DeploymentConflictError, UnknownTargetError) as exc:
+        raise FleetStateError("persisted deployment event targets are invalid") from exc
+    if detail is not None and (not isinstance(detail, str) or len(detail) > 2_000):
+        raise FleetStateError("persisted deployment event detail is invalid")
+    event_key = _deployment_event_key(
+        event_type=event_type,
+        schema_version=schema_version,
+        artifact_sha256=artifact_sha256,
+        target_ids=normalized_targets,
+        status=status,
+        detail=detail,
+    )
+    stored_key = value.get("event_key")
+    if stored_key is not None and stored_key != event_key:
+        raise FleetStateError("persisted deployment event key is invalid")
+    return DeploymentEventRecord(
+        sequence=sequence,
+        event_type=event_type,
+        schema_version=schema_version,
+        artifact_sha256=artifact_sha256,
+        target_ids=normalized_targets,
+        status=status,
+        detail=detail,
+        recorded_at=recorded_at,
+        event_key=event_key,
+    )
 
 
 def _failure_target_id(deployment: DeploymentState) -> str | None:
@@ -400,6 +544,7 @@ class FleetStateStore:
                     rollback_status TEXT NOT NULL DEFAULT 'not_started',
                     rollback_target_ids_json TEXT,
                     rollback_error TEXT,
+                    deployment_events_json TEXT NOT NULL DEFAULT '[]',
                     UNIQUE(deployment_id, profile_digest)
                 )
                 """
@@ -421,6 +566,7 @@ class FleetStateStore:
                 ("rollback_status", "TEXT NOT NULL DEFAULT 'not_started'"),
                 ("rollback_target_ids_json", "TEXT"),
                 ("rollback_error", "TEXT"),
+                ("deployment_events_json", "TEXT NOT NULL DEFAULT '[]'"),
             )
             for column, definition in migration_columns:
                 if column not in deployment_columns:
@@ -543,6 +689,20 @@ class FleetStateStore:
             if not isinstance(parsed_summary, dict):
                 raise FleetStateError("persisted deployment request summary is not an object")
             request_summary = parsed_summary
+        events: tuple[DeploymentEventRecord, ...] = ()
+        if row["deployment_events_json"]:
+            try:
+                parsed_events = json.loads(row["deployment_events_json"])
+            except (TypeError, json.JSONDecodeError) as exc:
+                raise FleetStateError("invalid persisted deployment events") from exc
+            if not isinstance(parsed_events, list):
+                raise FleetStateError("persisted deployment events must be an array")
+            parsed_records = tuple(_deployment_event_from_mapping(item) for item in parsed_events)
+            if any(
+                record.sequence != index for index, record in enumerate(parsed_records, start=1)
+            ):
+                raise FleetStateError("persisted deployment event sequence is not contiguous")
+            events = parsed_records
         return DeploymentState(
             deployment_id=row["deployment_id"],
             target_ids=target_ids,
@@ -563,6 +723,7 @@ class FleetStateStore:
             rollback_status=rollback_status,
             rollback_target_ids=rollback_target_ids,
             rollback_error=row["rollback_error"],
+            events=events,
         )
 
     def list_vehicles(self) -> tuple[VehicleState, ...]:
@@ -604,6 +765,97 @@ class FleetStateStore:
             return self._deployment_from_row(row)
         finally:
             connection.close()
+
+    def append_deployment_event(
+        self,
+        deployment_id: str,
+        *,
+        event_type: str,
+        schema_version: int,
+        artifact_sha256: str,
+        target_ids: Iterable[str],
+        status: str,
+        detail: str | None = None,
+    ) -> DeploymentState:
+        """Append idempotent lifecycle evidence to a durable deployment row."""
+        if event_type not in DEPLOYMENT_EVENT_TYPES:
+            raise ValueError("unsupported deployment event type")
+        if (
+            not isinstance(schema_version, int)
+            or isinstance(schema_version, bool)
+            or schema_version < 1
+        ):
+            raise ValueError("deployment event schema version must be a positive integer")
+        if (
+            not isinstance(artifact_sha256, str)
+            or len(artifact_sha256) != 64
+            or any(character not in "0123456789abcdef" for character in artifact_sha256)
+        ):
+            raise ValueError("deployment event artifact digest must be lowercase SHA-256")
+        if not isinstance(status, str) or not status or len(status) > 64:
+            raise ValueError("deployment event status must be bounded text")
+        if detail is not None and (not isinstance(detail, str) or len(detail) > 2_000):
+            raise ValueError("deployment event detail must be bounded text")
+        normalized_targets = _validate_target_ids(target_ids)
+        event_key = _deployment_event_key(
+            event_type=event_type,
+            schema_version=schema_version,
+            artifact_sha256=artifact_sha256,
+            target_ids=normalized_targets,
+            status=status,
+            detail=detail,
+        )
+        timestamp = _now_iso(self._clock)
+        with self._transaction() as connection:
+            row = connection.execute(
+                "SELECT * FROM fleet_deployments WHERE deployment_id = ?",
+                (deployment_id,),
+            ).fetchone()
+            if row is None:
+                raise UnknownDeploymentError(f"unknown deployment: {deployment_id}")
+            existing = self._deployment_from_row(row)
+            if artifact_sha256 != existing.profile_digest:
+                raise DeploymentConflictError(
+                    "deployment event artifact does not match the requested profile"
+                )
+            if not set(normalized_targets).issubset(existing.target_ids):
+                raise DeploymentConflictError(
+                    "deployment event targets must stay within the deployment target set"
+                )
+            if any(event.event_key == event_key for event in existing.events):
+                return existing
+            if len(existing.events) >= MAX_DEPLOYMENT_EVENTS:
+                raise FleetStateError("deployment event history is full")
+            event = DeploymentEventRecord(
+                sequence=len(existing.events) + 1,
+                event_type=event_type,
+                schema_version=schema_version,
+                artifact_sha256=artifact_sha256,
+                target_ids=normalized_targets,
+                status=status,
+                detail=detail,
+                recorded_at=timestamp,
+                event_key=event_key,
+            )
+            serialized = json.dumps(
+                [*(_event._storage_dict() for _event in existing.events), event._storage_dict()],
+                separators=(",", ":"),
+                sort_keys=True,
+            )
+            connection.execute(
+                """
+                UPDATE fleet_deployments
+                SET deployment_events_json = ?, updated_at = ?
+                WHERE deployment_id = ?
+                """,
+                (serialized, timestamp, deployment_id),
+            )
+            updated = connection.execute(
+                "SELECT * FROM fleet_deployments WHERE deployment_id = ?",
+                (deployment_id,),
+            ).fetchone()
+            assert updated is not None
+            return self._deployment_from_row(updated)
 
     def list_active_deployments(self) -> tuple[DeploymentState, ...]:
         """Return queued/applying deployments that may still hold capacity."""
@@ -1590,6 +1842,7 @@ class FleetStateStore:
 __all__ = [
     "DEFAULT_STATE_PATH",
     "DEPLOYMENT_STATUSES",
+    "DEPLOYMENT_EVENT_TYPES",
     "DISPATCH_STATUSES",
     "STATE_PATH_ENV",
     "STATE_SCHEMA_VERSION",
@@ -1599,6 +1852,7 @@ __all__ = [
     "DeploymentCooldownError",
     "DeploymentAdmissionLimitError",
     "DeploymentState",
+    "DeploymentEventRecord",
     "DispatchClaimError",
     "FleetProfile",
     "FleetStateError",

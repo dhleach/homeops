@@ -316,6 +316,13 @@ class FleetApiClient:
         """Queue a normalized DeploymentSpec using the dedicated bearer key."""
         return self._request_json("POST", "deployments", spec.to_dict())
 
+    def record_deployment_event(self, event: DeploymentEvent) -> Mapping[str, Any]:
+        """Persist one trusted lifecycle event for public timeline reads."""
+        deployment_id = _require_deployment_id(event.deployment_id)
+        payload = event.to_dict()
+        payload.pop("deployment_id", None)
+        return self._request_json("POST", f"deployments/{deployment_id}/events", payload)
+
     def apply_deployment(
         self,
         deployment_id: str,
@@ -1064,6 +1071,28 @@ def deploy(
     return FleetDeployer(client, event_sink=event_sink).deploy(spec, artifact)
 
 
+class _RemoteEventRecorder:
+    """Persist deployer events after the protected queue record exists."""
+
+    def __init__(self, client: FleetApiClient) -> None:
+        self.client = client
+        self.pending: list[DeploymentEvent] = []
+        self.active = False
+
+    def __call__(self, event: DeploymentEvent) -> None:
+        self.pending.append(event)
+        if not self.active:
+            if event.event_type != "deployment_queued":
+                return
+            self.active = True
+            pending = tuple(self.pending)
+            self.pending.clear()
+            for queued_event in pending:
+                self.client.record_deployment_event(queued_event)
+            return
+        self.client.record_deployment_event(event)
+
+
 def _read_spec(path: Path) -> Mapping[str, object]:
     try:
         with path.open(encoding="utf-8") as handle:
@@ -1095,7 +1124,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             raise DeployerError(f"set --api-base-url or {API_BASE_URL_ENV}")
         api_key = os.environ.get(API_KEY_ENV, "")
         client = FleetApiClient(args.api_base_url, api_key, timeout=args.timeout)
-        result = FleetDeployer(client).deploy(
+        event_recorder = _RemoteEventRecorder(client)
+        result = FleetDeployer(client, event_sink=event_recorder).deploy(
             _read_spec(args.spec),
             DeploymentArtifact.from_path(args.artifact, expected_sha256=args.artifact_sha256),
         )

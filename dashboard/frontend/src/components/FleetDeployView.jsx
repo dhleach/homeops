@@ -38,6 +38,7 @@ const STATUS_LABELS = {
   pending: "Pending",
   queued: "Queued",
   ready: "Ready",
+  started: "Started",
   succeeded: "Succeeded",
   waiting: "Waiting for workflow",
   workflow_unavailable: "Workflow state unavailable",
@@ -128,6 +129,40 @@ function profileText(profile) {
 function targetDisplayLabel(target) {
   const match = /^(test|stage|prod)-vehicle-(\d{2})$/.exec(target);
   return match ? `${match[1].toUpperCase()}-${match[2]}` : target;
+}
+
+function evidenceStatusLabel(conclusion, status) {
+  if (conclusion === "success") return "Passed";
+  if (conclusion === "failure" || conclusion === "timed_out" || conclusion === "cancelled") return "Failed";
+  if (conclusion === "skipped") return "Skipped";
+  return WORKFLOW_STATUS_LABELS[status] ?? displayStatus(status);
+}
+
+function evidenceStatusClass(conclusion, status) {
+  if (conclusion === "success" || status === "succeeded") return "text-emerald-300";
+  if (conclusion === "failure" || conclusion === "timed_out" || conclusion === "cancelled" || status === "failed") {
+    return "text-red-300";
+  }
+  if (conclusion === "skipped") return "text-slate-400";
+  return "text-amber-200";
+}
+
+function deploymentEventLabel(eventType) {
+  return eventType
+    .replace(/^deployment_/, "")
+    .split("_")
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(" ");
+}
+
+function deploymentEventStatusLabel(event) {
+  if (event.event_type.endsWith("verified")) return "Verified";
+  return evidenceStatusLabel(null, event.status);
+}
+
+function deploymentEventStatusClass(event) {
+  if (event.event_type.endsWith("verified")) return "text-emerald-300";
+  return evidenceStatusClass(null, event.status);
 }
 
 function groupTargets(targets) {
@@ -568,6 +603,7 @@ function DeploymentRunPanel({ deployment, error, onRefresh }) {
       && target.desired_digest === target.observed_digest,
   );
   const jobs = deployment.workflow?.jobs ?? [];
+  const events = deployment.events ?? [];
   const selectedImplementation = deployment.request_summary?.implementation;
   const implementationSource = IMPLEMENTATION_SOURCES[selectedImplementation] ?? null;
 
@@ -751,21 +787,73 @@ function DeploymentRunPanel({ deployment, error, onRefresh }) {
         </div>
       )}
 
-      {jobs.length > 0 && (
-        <div className="mt-5 border-t border-border/70 pt-4">
-          <h3 className="text-sm font-semibold text-slate-200">Workflow jobs</h3>
-          <ul className="mt-3 space-y-2 text-xs text-slate-300">
-            {jobs.map((job) => (
-              <li key={job.id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border bg-slate-950/30 px-3 py-2">
-                <span>{job.name}</span>
-                <span className={job.conclusion === "success" ? "text-emerald-300" : job.conclusion ? "text-red-300" : "text-amber-200"}>
-                  {job.conclusion ?? job.status}
-                  {job.failed_step ? ` — ${job.failed_step}` : ""}
-                </span>
-              </li>
-            ))}
-          </ul>
-        </div>
+      {(jobs.length > 0 || events.length > 0) && (
+        <section className="mt-5 border-t border-border/70 pt-4" data-testid="deployment-timeline">
+          <h3 className="text-sm font-semibold text-slate-200">Deployment timeline</h3>
+          {jobs.length > 0 && (
+            <div className="mt-3" data-testid="github-actions-timeline">
+              <h4 className="text-xs font-semibold uppercase tracking-wider text-blue-200">
+                GitHub Actions jobs and steps
+              </h4>
+              <ol className="mt-2 space-y-2 text-xs text-slate-300">
+                {jobs.map((job) => (
+                  <li key={job.id} className="rounded-lg border border-border bg-slate-950/30 px-3 py-2" data-testid="workflow-job">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span className="font-medium">{job.name}</span>
+                      <span className={evidenceStatusClass(job.conclusion, job.status)}>
+                        {evidenceStatusLabel(job.conclusion, job.status)}
+                      </span>
+                    </div>
+                    {job.steps?.length > 0 && (
+                      <ol className="mt-2 space-y-1 border-l border-border/70 pl-3">
+                        {job.steps.map((step) => (
+                          <li key={`${job.id}-${step.number}`} className="flex flex-wrap items-center justify-between gap-2">
+                            <span>{step.name}</span>
+                            <span className={evidenceStatusClass(step.conclusion, step.status)}>
+                              {evidenceStatusLabel(step.conclusion, step.status)}
+                            </span>
+                          </li>
+                        ))}
+                      </ol>
+                    )}
+                    {job.conclusion === "skipped" && (
+                      <p className="mt-2 text-slate-400" data-testid="workflow-job-skipped">
+                        Skipped because an earlier GitHub Actions job did not complete successfully.
+                      </p>
+                    )}
+                    {job.steps?.length === 0 && job.failed_step && (
+                      <p className="mt-2 text-red-300">Failed step: {job.failed_step}</p>
+                    )}
+                  </li>
+                ))}
+              </ol>
+            </div>
+          )}
+          {events.length > 0 && (
+            <div className="mt-4" data-testid="deployment-events-timeline">
+              <h4 className="text-xs font-semibold uppercase tracking-wider text-blue-200">
+                Simulator deployment events
+              </h4>
+              <ol className="mt-2 space-y-2 text-xs text-slate-300">
+                {events.map((event) => (
+                  <li key={event.sequence} className="rounded-lg border border-border bg-slate-950/30 px-3 py-2" data-testid="deployment-event">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span className="font-medium">{deploymentEventLabel(event.event_type)}</span>
+                      <span className={deploymentEventStatusClass(event)}>
+                        {deploymentEventStatusLabel(event)}
+                      </span>
+                    </div>
+                    <p className="mt-1 text-slate-400">
+                      Targets: {event.target_ids.map(targetDisplayLabel).join(", ")}
+                    </p>
+                    {event.detail && <p className="mt-1 text-slate-400">{event.detail}</p>}
+                    <p className="mt-1 text-slate-500">Recorded {formatTimestamp(event.recorded_at)}</p>
+                  </li>
+                ))}
+              </ol>
+            </div>
+          )}
+        </section>
       )}
     </section>
   );

@@ -1,10 +1,10 @@
 # Fleet Deploy Lab integration map
 
-Status: REV 09 compact vehicle-themed fleet cards in progress; REV 08 actionable submission/failure status merged
+Status: PR 18 traceable workflow-step and deployer-event timeline in progress; Defect 03 merged
 Repository: `dhleach/homeops`
 Default branch: `master`
-Latest merged integration snapshot: `3681b92`
-Active GitHub issue: https://github.com/dhleach/homeops/issues/378
+Latest merged integration snapshot: `master` after PR #397
+Active GitHub issue: https://github.com/dhleach/homeops/issues/398
 
 This document records the real HomeOps integration points for the Fleet Deploy
 Lab as the implementation advances. It is deliberately specific about what
@@ -496,6 +496,23 @@ desired/observed state instead of becoming a false success.
 - Terraform resources changed: **None**
 - Sequence and owner: Derek reviews and merges PR17; no production deployment or simulator mutation is part of the code change itself.
 - Safety gate: rollback accepts only bounded finite profiles for selected simulated targets and cannot reach Home Assistant, the normal HomeOps release path, Pi, or EC2.
+
+## PR 18 — show actual pipeline steps and deployment events
+
+PR 18 extends the public deployment read with the bounded GitHub Actions step
+receipts returned by the Jobs API and a durable, server-ordered event history
+from the trusted Python deployer. Events are bound to the validated artifact
+digest and selected target IDs, deduplicated by canonical lifecycle fields, and
+stored in the persistent SQLite deployment row. The `/deploy` run panel keeps
+Actions jobs/steps visually distinct from simulator events, labels downstream
+jobs skipped after an upstream failure, and reconstructs both evidence sources
+after a reload.
+
+- Terraform apply required: **No**
+- Manual console/setup required: **None beyond the existing Fleet Deploy simulator/API credentials**
+- Terraform resources changed: **None**
+- Sequence and owner: Derek reviews and merges PR18; no production deployment or simulator mutation is part of the code change itself.
+- Safety gate: the timeline is read-only, simulated-only evidence; it never exposes credentials, accepts arbitrary event types or targets, or changes Home Assistant, the normal HomeOps release path, Pi, or EC2.
 
 ## DEFECT 01 — clear stale Fleet busy capacity after a failed canary
 
