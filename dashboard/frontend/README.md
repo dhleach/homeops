@@ -39,7 +39,10 @@ React + Vite + Tailwind single-page dashboard for `homeops.now`.
   the backend-published capability matrix and exposes the verified
   Python + all-at-once/abort, Python + canary/abort, and Ansible +
   all-at-once/abort paths. Canary remains hidden when Ansible is selected until
-  equivalent serial behavior is implemented and proven. Submitted runs retain a frozen request summary, classify known
+  equivalent serial behavior is implemented and proven. The form can also
+  select one resolved simulated target for the deterministic verification
+  failure demonstration; the target switch cannot reach Home Assistant or
+  normal HomeOps infrastructure. Submitted runs retain a frozen request summary, classify known
   service/busy/validation/commit/dispatch failures with credential-safe next
   steps, and keep older results in an explicit Previous attempt area when the
   form is edited. Run polling continues until the workflow conclusion and job

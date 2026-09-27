@@ -53,6 +53,7 @@ const DEFAULT_FORM = {
   implementation: "python",
   strategy: "all_at_once",
   failure_mode: "abort",
+  failure_target_id: "none",
 };
 
 function normalizeCapabilities(capabilities) {
@@ -172,7 +173,10 @@ function requestSummaryLabel(summary) {
   const targets = summary.environment
     ? `${summary.environment.toUpperCase()} environment`
     : `${summary.target_ids?.length ?? 0} selected vehicles`;
-  return `${targets} · ${summary.implementation ?? "unknown"} / ${summary.strategy ?? "unknown"} / ${summary.failure_mode ?? "unknown"}`;
+  const failure = summary.failure_target_id
+    ? ` · injected verification failure at ${targetDisplayLabel(summary.failure_target_id)}`
+    : "";
+  return `${targets} · ${summary.implementation ?? "unknown"} / ${summary.strategy ?? "unknown"} / ${summary.failure_mode ?? "unknown"}${failure}`;
 }
 
 function createDeploymentId() {
@@ -248,7 +252,7 @@ function buildDeploymentSpec(form) {
     ? { environment: form.environment }
     : { target_ids: sortedTargetIds(form.target_ids) };
 
-  return {
+  const spec = {
     deployment_id: form.deployment_id,
     ...selector,
     failure_mode: form.failure_mode,
@@ -260,6 +264,10 @@ function buildDeploymentSpec(form) {
     schema_version: DEPLOYMENT_SPEC_VERSION,
     strategy: form.strategy,
   };
+  if (form.failure_target_id !== "none") {
+    spec.failure_target_id = form.failure_target_id;
+  }
+  return spec;
 }
 
 function validateForm(form, capabilities) {
@@ -292,6 +300,12 @@ function validateForm(form, capabilities) {
   if (!supportsCapability(form, capabilities)) {
     errors.capability = "This implementation, strategy, and failure mode combination is not supported.";
   }
+  if (
+    form.failure_target_id !== "none"
+    && !resolvedTargetIds(form).includes(form.failure_target_id)
+  ) {
+    errors.failure_target_id = "Choose a failure target from the resolved simulated targets.";
+  }
 
   return errors;
 }
@@ -310,6 +324,7 @@ function OptionSelect({
   error,
   disabled = false,
   disabledReason,
+  optionLabels = {},
 }) {
   const errorId = `${id}-error`;
   const disabledReasonId = `${id}-disabled-help`;
@@ -331,7 +346,7 @@ function OptionSelect({
         className="mt-2 w-full rounded-lg border border-border bg-slate-950/70 px-3 py-2.5 text-sm text-slate-100 transition-colors focus:border-blue-400 disabled:cursor-not-allowed disabled:opacity-50"
       >
         {options.map((option) => (
-          <option key={option} value={option}>{labelize(option)}</option>
+          <option key={option} value={option}>{optionLabels[option] ?? labelize(option)}</option>
         ))}
       </select>
       <FieldError id={errorId} message={error} />
@@ -368,6 +383,7 @@ export function DeploymentSpecForm({
     "strategy",
   );
   const failureModeOptions = uniqueCapabilityValues(capabilitiesFor(availableCapabilities, form), "failure_mode");
+  const failureTargetOptions = ["none", ...selectedTargetIds];
 
   useEffect(() => {
     onTargetSelectionChange?.(selectedTargetIds);
@@ -451,6 +467,13 @@ export function DeploymentSpecForm({
           );
           if (nextCapability) next.failure_mode = nextCapability.failure_mode;
         }
+        if (
+          field === "environment"
+          && next.failure_target_id !== "none"
+          && !TARGETS_BY_ENVIRONMENT[value]?.includes(next.failure_target_id)
+        ) {
+          next.failure_target_id = "none";
+        }
         if (deploymentId) next.deployment_id = deploymentId;
         return next;
       });
@@ -463,19 +486,26 @@ export function DeploymentSpecForm({
       ...current,
       target_selection: event.target.value,
       target_ids: [],
+      failure_target_id: "none",
       ...(deploymentId ? { deployment_id: deploymentId } : {}),
     }));
   }
 
   function toggleTarget(targetId) {
     const deploymentId = prepareForConfigurationEdit();
-    setForm((current) => ({
-      ...current,
-      target_ids: current.target_ids.includes(targetId)
+    setForm((current) => {
+      const target_ids = current.target_ids.includes(targetId)
         ? current.target_ids.filter((selected) => selected !== targetId)
-        : [...current.target_ids, targetId],
-      ...(deploymentId ? { deployment_id: deploymentId } : {}),
-    }));
+        : [...current.target_ids, targetId];
+      return {
+        ...current,
+        target_ids,
+        failure_target_id: target_ids.includes(current.failure_target_id)
+          ? current.failure_target_id
+          : "none",
+        ...(deploymentId ? { deployment_id: deploymentId } : {}),
+      };
+    });
   }
 
   async function submitDeployment(event) {
@@ -658,6 +688,15 @@ export function DeploymentSpecForm({
               error={errors.failure_mode}
             />
             <OptionSelect
+              id="deployment-failure-target"
+              label="Inject verification failure"
+              value={form.failure_target_id}
+              options={failureTargetOptions}
+              optionLabels={{ none: "No injected failure" }}
+              onChange={updateField("failure_target_id")}
+              error={errors.failure_target_id}
+            />
+            <OptionSelect
               id="deployment-color"
               label="Profile color"
               value={form.profile_color}
@@ -677,7 +716,8 @@ export function DeploymentSpecForm({
           <p className="rounded-lg border border-amber-400/20 bg-amber-400/5 p-3 text-xs leading-5 text-amber-100/80" data-testid="deployment-capability-note">
             Only verified execution paths are enabled. Python canary verifies the first target
             before continuing; Ansible exposes only its verified all-at-once path until equivalent
-            serial behavior is proven.
+            serial behavior is proven. An injected verification failure is limited to the selected
+            simulated target and never reaches Home Assistant or normal HomeOps infrastructure.
           </p>
 
           <ImplementationSourcePanel

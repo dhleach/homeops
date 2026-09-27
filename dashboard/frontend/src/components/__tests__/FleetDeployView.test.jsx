@@ -322,6 +322,38 @@ describe("FleetDeployView", () => {
     expect(window.sessionStorage.getItem("homeops.activeFleetDeploymentId")).toBeNull();
   });
 
+  it("serializes a selected deterministic failure target in the constrained spec", async () => {
+    const snapshot = fleetSnapshot();
+    const fetchMock = vi.fn((url, options) => {
+      if (url.endsWith("/deployments/submit")) {
+        const request = JSON.parse(options.body);
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ deployment_id: request.deployment_id, dispatch_status: "dispatched" }),
+        });
+      }
+      return Promise.resolve({ ok: true, json: async () => snapshot });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<FleetDeployView apiUrl="https://api.homeops.now" />);
+
+    await screen.findAllByTestId("fleet-target-card");
+    fireEvent.change(screen.getByLabelText("Inject verification failure"), {
+      target: { value: "test-vehicle-01" },
+    });
+    expect(screen.getByTestId("deployment-spec-preview")).toHaveTextContent(
+      '"failure_target_id": "test-vehicle-01"',
+    );
+    fireEvent.click(screen.getByTestId("deploy-submit"));
+
+    await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => url.endsWith("/deployments/submit"))).toBe(true));
+    const submitCall = fetchMock.mock.calls.find(([url]) => url.endsWith("/deployments/submit"));
+    expect(JSON.parse(submitCall[1].body)).toEqual(expect.objectContaining({
+      failure_target_id: "test-vehicle-01",
+    }));
+  });
+
   it("keeps a generated attempt ID stable across a retry and isolates fresh visitors", async () => {
     const snapshot = fleetSnapshot();
     let submissionAttempts = 0;

@@ -541,7 +541,10 @@ function requestSummaryText(deployment) {
   const targets = summary.environment
     ? `${summary.environment.toUpperCase()} environment (four vehicles)`
     : targetSummaryLabel(summary.target_ids ?? deployment.target_ids);
-  return `${targets} · ${summary.implementation} / ${summary.strategy} / ${summary.failure_mode}`;
+  const failure = summary.failure_target_id
+    ? ` · injected verification failure at ${targetDisplayLabel(summary.failure_target_id)}`
+    : "";
+  return `${targets} · ${summary.implementation} / ${summary.strategy} / ${summary.failure_mode}${failure}`;
 }
 
 function deploymentStatusLabel(deployment) {

@@ -52,6 +52,7 @@ _ensure_deploy_demo_importable(Path(__file__))
 from deploy_demo import (  # noqa: E402
     DEFAULT_REPOSITORY,
     GITHUB_REPOSITORY_ENV,
+    SIMULATED_VERIFICATION_FAILURE_PREFIX,
     DeploymentAdmissionLimitError,
     DeploymentConflictError,
     DeploymentCooldownError,
@@ -176,6 +177,7 @@ class DeploymentSpecRequest(BaseModel):
     implementation: str
     strategy: str
     failure_mode: str
+    failure_target_id: str | None = None
 
 
 class DeploymentApplyRequest(BaseModel):
@@ -393,6 +395,14 @@ def _deployment_error_metadata(
         )
 
     if deployment.error and deployment.error.startswith("GitHub Actions reported success"):
+        return (
+            "verification_failed",
+            deployment.error,
+            "Compare desired and observed target state before retrying this request.",
+            None,
+        )
+
+    if deployment.error and deployment.error.startswith(SIMULATED_VERIFICATION_FAILURE_PREFIX):
         return (
             "verification_failed",
             deployment.error,

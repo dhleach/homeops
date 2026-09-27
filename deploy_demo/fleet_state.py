@@ -34,6 +34,7 @@ from .deployment_spec import (
 STATE_PATH_ENV = "FLEET_DEPLOY_STATE_PATH"
 DEFAULT_STATE_PATH = "/var/lib/homeops/deploy-demo/fleet-state.sqlite3"
 STATE_SCHEMA_VERSION = 3
+SIMULATED_VERIFICATION_FAILURE_PREFIX = "deterministic verification failure injected for target "
 
 VehicleStatus = Literal["ready", "pending", "applying", "succeeded", "failed"]
 DeploymentStatus = Literal["queued", "applying", "succeeded", "failed"]
@@ -269,6 +270,21 @@ def _validate_error(error: str | None) -> str | None:
     if not isinstance(error, str) or not error:
         raise ValueError("deployment error must be a non-empty string or None")
     return error[:2_000]
+
+
+def _failure_target_id(deployment: DeploymentState) -> str | None:
+    """Return the validated target selected for deterministic failure injection."""
+    value = (deployment.request_summary or {}).get("failure_target_id")
+    if value is None:
+        return None
+    if not isinstance(value, str) or value not in deployment.target_ids:
+        raise FleetStateError("persisted failure target is outside the deployment target set")
+    return value
+
+
+def _failure_message(target_id: str) -> str:
+    """Return the stable public-safe error for an injected simulator failure."""
+    return SIMULATED_VERIFICATION_FAILURE_PREFIX + target_id
 
 
 class FleetStateStore:
@@ -720,6 +736,12 @@ class FleetStateStore:
                 raise InvalidStateTransitionError(f"deployment {deployment_id} is already failed")
             if existing.status == "succeeded":
                 return existing
+            failure_target_id = _failure_target_id(existing)
+            failure_message = (
+                _failure_message(failure_target_id) if failure_target_id is not None else None
+            )
+            if failure_message is not None and existing.error == failure_message:
+                return existing
 
             all_placeholders = ", ".join("?" for _ in existing.target_ids)
             all_rows = connection.execute(
@@ -766,22 +788,73 @@ class FleetStateStore:
                     "target-scoped apply cannot advance target(s): " + ", ".join(invalid)
                 )
 
-            selected_placeholders = ", ".join("?" for _ in requested_targets)
-            updated_targets = connection.execute(
-                f"""
-                UPDATE fleet_vehicles
-                SET observed_color = desired_color, observed_shape = desired_shape,
-                    observed_digest = desired_digest, status = 'succeeded',
-                    last_error = NULL, updated_at = ?
-                WHERE target_id IN ({selected_placeholders})
-                  AND active_deployment_id = ?
-                """,
-                (timestamp, *requested_targets, deployment_id),
+            failure_index = (
+                requested_targets.index(failure_target_id)
+                if failure_target_id in requested_targets
+                else None
             )
-            if updated_targets.rowcount != len(requested_targets):
-                raise FleetStateError(
-                    f"deployment {deployment_id} did not update every requested target"
+            successful_targets = (
+                requested_targets if failure_index is None else requested_targets[:failure_index]
+            )
+            if successful_targets:
+                successful_placeholders = ", ".join("?" for _ in successful_targets)
+                updated_targets = connection.execute(
+                    f"""
+                    UPDATE fleet_vehicles
+                    SET observed_color = desired_color, observed_shape = desired_shape,
+                        observed_digest = desired_digest, status = 'succeeded',
+                        last_error = NULL, updated_at = ?
+                    WHERE target_id IN ({successful_placeholders})
+                      AND active_deployment_id = ?
+                    """,
+                    (timestamp, *successful_targets, deployment_id),
                 )
+                if updated_targets.rowcount != len(successful_targets):
+                    raise FleetStateError(
+                        f"deployment {deployment_id} did not update every requested target"
+                    )
+
+            if failure_index is not None:
+                assert failure_target_id is not None
+                assert failure_message is not None
+                failed_target = connection.execute(
+                    """
+                    UPDATE fleet_vehicles
+                    SET status = 'failed', last_error = ?, updated_at = ?
+                    WHERE target_id = ? AND active_deployment_id = ?
+                    """,
+                    (failure_message, timestamp, failure_target_id, deployment_id),
+                )
+                if failed_target.rowcount != 1:
+                    raise FleetStateError(
+                        f"deployment {deployment_id} did not update its failure target"
+                    )
+                untouched_targets = requested_targets[failure_index + 1 :]
+                if untouched_targets:
+                    untouched_placeholders = ", ".join("?" for _ in untouched_targets)
+                    connection.execute(
+                        f"""
+                        UPDATE fleet_vehicles
+                        SET status = 'pending', last_error = NULL, updated_at = ?
+                        WHERE target_id IN ({untouched_placeholders})
+                          AND active_deployment_id = ?
+                        """,
+                        (timestamp, *untouched_targets, deployment_id),
+                    )
+                connection.execute(
+                    """
+                    UPDATE fleet_deployments
+                    SET status = 'applying', error = ?, updated_at = ?
+                    WHERE deployment_id = ?
+                    """,
+                    (failure_message, timestamp, deployment_id),
+                )
+                updated = connection.execute(
+                    "SELECT * FROM fleet_deployments WHERE deployment_id = ?",
+                    (deployment_id,),
+                ).fetchone()
+                assert updated is not None
+                return self._deployment_from_row(updated)
 
             all_targets = ", ".join("?" for _ in existing.target_ids)
             remaining = connection.execute(
@@ -1150,6 +1223,15 @@ class FleetStateStore:
                     f"deployment {deployment_id} cannot return to queued"
                 )
             is_canary = (existing.request_summary or {}).get("strategy") == "canary"
+            failure_target_id = _failure_target_id(existing)
+            failure_message = (
+                _failure_message(failure_target_id) if failure_target_id is not None else None
+            )
+            failure_injection = status == "succeeded" and failure_message is not None
+            if failure_injection and existing.error == failure_message:
+                return existing
+            persisted_status: DeploymentStatus = "applying" if failure_injection else status
+            persisted_error = failure_message if failure_injection else error
 
             connection.execute(
                 """
@@ -1157,11 +1239,59 @@ class FleetStateStore:
                 SET status = ?, error = ?, updated_at = ?
                 WHERE deployment_id = ?
                 """,
-                (status, error, timestamp, deployment_id),
+                (persisted_status, persisted_error, timestamp, deployment_id),
             )
             target_ids = existing.target_ids
             placeholders = ", ".join("?" for _ in target_ids)
-            if status == "succeeded":
+            if failure_injection:
+                assert failure_target_id is not None
+                assert failure_message is not None
+                failure_index = target_ids.index(failure_target_id)
+                successful_targets = target_ids[:failure_index]
+                if successful_targets:
+                    successful_placeholders = ", ".join("?" for _ in successful_targets)
+                    updated_vehicles = connection.execute(
+                        f"""
+                        UPDATE fleet_vehicles
+                        SET observed_color = desired_color, observed_shape = desired_shape,
+                            observed_digest = desired_digest, status = 'succeeded',
+                            last_error = NULL, updated_at = ?
+                        WHERE target_id IN ({successful_placeholders})
+                          AND active_deployment_id = ?
+                        """,
+                        (timestamp, *successful_targets, deployment_id),
+                    )
+                    if updated_vehicles.rowcount != len(successful_targets):
+                        raise FleetStateError(
+                            f"deployment {deployment_id} did not update every successful target"
+                        )
+                else:
+                    updated_vehicles = None
+                failed_target = connection.execute(
+                    """
+                    UPDATE fleet_vehicles
+                    SET status = 'failed', last_error = ?, updated_at = ?
+                    WHERE target_id = ? AND active_deployment_id = ?
+                    """,
+                    (failure_message, timestamp, failure_target_id, deployment_id),
+                )
+                if failed_target.rowcount != 1:
+                    raise FleetStateError(
+                        f"deployment {deployment_id} did not update its failure target"
+                    )
+                untouched_targets = target_ids[failure_index + 1 :]
+                if untouched_targets:
+                    untouched_placeholders = ", ".join("?" for _ in untouched_targets)
+                    connection.execute(
+                        f"""
+                        UPDATE fleet_vehicles
+                        SET status = 'pending', last_error = NULL, updated_at = ?
+                        WHERE target_id IN ({untouched_placeholders})
+                          AND active_deployment_id = ?
+                        """,
+                        (timestamp, *untouched_targets, deployment_id),
+                    )
+            elif status == "succeeded":
                 updated_vehicles = connection.execute(
                     f"""
                     UPDATE fleet_vehicles
@@ -1174,7 +1304,10 @@ class FleetStateStore:
                     (timestamp, *target_ids, deployment_id),
                 )
             elif status == "failed":
-                failure_filter = "AND status = 'applying'" if is_canary else ""
+                preserve_partial = (existing.error or "").startswith(
+                    SIMULATED_VERIFICATION_FAILURE_PREFIX
+                )
+                failure_filter = "AND status = 'applying'" if is_canary or preserve_partial else ""
                 updated_vehicles = connection.execute(
                     f"""
                     UPDATE fleet_vehicles
@@ -1201,7 +1334,14 @@ class FleetStateStore:
                     )
             if (
                 updated_vehicles is not None
-                and not (status == "failed" and is_canary)
+                and not failure_injection
+                and not (
+                    status == "failed"
+                    and (
+                        is_canary
+                        or (existing.error or "").startswith(SIMULATED_VERIFICATION_FAILURE_PREFIX)
+                    )
+                )
                 and updated_vehicles.rowcount != len(target_ids)
             ):
                 raise FleetStateError(

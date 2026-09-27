@@ -596,6 +596,14 @@ class FleetDeployer:
         read_statuses: frozenset[str],
     ) -> Mapping[str, Any]:
         """Apply one phase and verify its fresh simulator snapshot."""
+        apply_observed_target_ids = observed_target_ids
+        if spec.failure_target_id is not None and (
+            apply_target_ids is None or spec.failure_target_id in apply_target_ids
+        ):
+            # The simulator deliberately leaves the selected failure target
+            # divergent so the independent readback below, rather than the
+            # protected apply response, proves the requested failure.
+            apply_observed_target_ids = None
         if apply_target_ids is None:
             applied = self.client.apply_deployment(spec.deployment_id)
         else:
@@ -607,7 +615,7 @@ class FleetDeployer:
             phase=f"{apply_phase}.apply",
             allowed_statuses=apply_statuses,
             require_observed=False,
-            observed_target_ids=observed_target_ids,
+            observed_target_ids=apply_observed_target_ids,
         )
         fresh = self.client.read_deployment(spec.deployment_id)
         self._validate_snapshot(
@@ -710,8 +718,8 @@ class FleetDeployer:
                         observed_target_ids=target_ids,
                         apply_phase="rollout",
                         read_phase="rollout",
-                        apply_statuses=frozenset({"succeeded"}),
-                        read_statuses=frozenset({"succeeded"}),
+                        apply_statuses=frozenset({"applying", "succeeded"}),
+                        read_statuses=frozenset({"applying", "succeeded"}),
                     )
                     self._emit(
                         events,
@@ -739,15 +747,15 @@ class FleetDeployer:
                     observed_target_ids=None,
                     apply_phase="apply",
                     read_phase="readback",
-                    apply_statuses=frozenset({"succeeded"}),
-                    read_statuses=frozenset({"succeeded"}),
+                    apply_statuses=frozenset({"applying", "succeeded"}),
+                    read_statuses=frozenset({"applying", "succeeded"}),
                 )
             self._validate_snapshot(
                 fresh,
                 validated_spec,
                 validated_artifact,
                 phase="readback",
-                allowed_statuses=frozenset({"succeeded"}),
+                allowed_statuses=frozenset({"applying", "succeeded"}),
                 require_observed=True,
             )
             if fresh.get("verification") != "verified" or fresh.get("verified") is not True:

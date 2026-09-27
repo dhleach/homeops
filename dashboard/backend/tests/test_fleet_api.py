@@ -193,6 +193,55 @@ def test_authorized_queue_apply_and_replay_exposes_verifiable_state(fleet_store)
     assert readback.json()["verified"] is True
 
 
+def test_deterministic_failure_is_simulated_and_exposes_target_error(fleet_store) -> None:
+    payload = valid_payload(
+        deployment_id="demo-api-canary-failure",
+        target_ids=[
+            "test-vehicle-01",
+            "test-vehicle-02",
+            "test-vehicle-03",
+            "test-vehicle-04",
+        ],
+        strategy="canary",
+        failure_target_id="test-vehicle-01",
+    )
+
+    queue = client.post(
+        "/deploy/api/deployments",
+        headers=FLEET_HEADERS,
+        json=payload,
+    )
+    assert queue.status_code == 200
+
+    applied = client.post(
+        "/deploy/api/deployments/demo-api-canary-failure/apply",
+        headers=FLEET_HEADERS,
+        json={"target_ids": ["test-vehicle-01"]},
+    )
+
+    assert applied.status_code == 200
+    body = applied.json()
+    assert body["status"] == "applying"
+    assert body["verification"] == "pending"
+    assert body["verified"] is False
+    assert body["targets"][0]["status"] == "failed"
+    assert body["targets"][0]["last_error"] == (
+        "deterministic verification failure injected for target test-vehicle-01"
+    )
+    assert [target["status"] for target in body["targets"][1:]] == [
+        "pending",
+        "pending",
+        "pending",
+    ]
+
+    readback = client.get("/deploy/api/deployments/demo-api-canary-failure")
+    assert readback.status_code == 200
+    assert readback.json()["targets"][0]["observed"] == {
+        "color": "blue",
+        "shape": "circle",
+    }
+
+
 def test_invalid_target_id_fails_before_state_mutation(fleet_store) -> None:
     before = fleet_store.list_vehicles()
 

@@ -19,10 +19,18 @@ An explicit selection uses `target_ids` instead of `environment`:
 {"deployment_id":"demo-20260925-002","failure_mode":"abort","implementation":"ansible","profile":{"color":"green","shape":"hexagon"},"schema_version":1,"strategy":"all_at_once","target_ids":["test-vehicle-01","prod-vehicle-02"]}
 ```
 
+For a bounded interview failure demonstration, the optional
+`failure_target_id` selects one of the already selected logical vehicles:
+
+```json
+{"deployment_id":"demo-20260927-failure","environment":"test","failure_mode":"abort","failure_target_id":"test-vehicle-01","implementation":"python","profile":{"color":"orange","shape":"triangle"},"schema_version":1,"strategy":"canary"}
+```
+
 The validator requires exactly one of `environment` or `target_ids`. It rejects
 unknown keys, missing fields, empty selections, duplicate IDs, unknown target
-IDs, more than twelve targets, invalid enum values, and invalid strategy/failure
-mode combinations. The profile has only finite `color` and `shape` values.
+IDs, more than twelve targets, invalid enum values, unselected failure targets,
+and invalid strategy/failure mode combinations. The profile has only finite
+`color` and `shape` values.
 
 The known targets are four logical vehicles in each environment:
 
@@ -33,12 +41,13 @@ The known targets are four logical vehicles in each environment:
 | `prod` | `prod-vehicle-01` through `prod-vehicle-04` |
 
 The currently verified capability matrix is deliberately narrower than the
-reserved enum vocabulary. Both deployers use the simulator's atomic apply path;
-they do not yet implement rolling, canary, or rollback semantics:
+reserved enum vocabulary. Python has a verified stable-order canary path;
+Ansible remains on its verified all-at-once path:
 
 | Implementation | Strategy | Failure mode |
 | --- | --- | --- |
 | `python` | `all_at_once` | `abort` |
+| `python` | `canary` | `abort` |
 | `ansible` | `all_at_once` | `abort` |
 
 The backend publishes this matrix with the anonymous fleet snapshot, and the
@@ -55,11 +64,14 @@ The complete reserved enum vocabulary is:
 | `implementation` | `python`, `ansible` |
 | `strategy` | `all_at_once`, `rolling`, `canary` |
 | `failure_mode` | `abort`, `rollback` |
+| `failure_target_id` | optional known target selected by `environment` or `target_ids` |
 
-`all_at_once` currently accepts only `abort`; `rolling`, `canary`, and
-`rollback` are not enabled by the current capability matrix. This explicit
-fail-closed boundary prevents the UI or a bypassed API caller from claiming
-behavior the selected implementation does not provide.
+`all_at_once` currently accepts only `abort`; Python `canary` also accepts
+`abort`, while rolling and rollback remain reserved. `failure_target_id` is
+orthogonal to that capability matrix: when present, the simulator deliberately
+leaves that finite target's observed profile divergent, so the deployer must
+fail its ordinary fresh-readback verification. It cannot identify a real host,
+carry a command, or reach Home Assistant or the normal HomeOps release path.
 
 ## Deterministic serialization
 
@@ -73,6 +85,17 @@ python -m deploy_demo < deployment-spec.json
 ```
 
 The canonical manifest content and deployment provenance are separate concerns.
+
+## Deterministic verification failure
+
+The optional `failure_target_id` is a test switch, not a deployment command.
+The queue boundary validates that it names one selected simulated vehicle. The
+simulator preserves desired-versus-observed divergence, records a bounded
+target-level error, and leaves later canary targets pending. Python and Ansible
+then perform their normal fresh public readback and exit nonzero when the
+requested observed state cannot be proven. The failed run remains linked to
+its manifest and Actions URL for the `/deploy` UI to display.
+
 The future workflow must retain the manifest event commit SHA independently
 from the built artifact's content digest. One must never be substituted for
 the other or accepted as proof of the other.
