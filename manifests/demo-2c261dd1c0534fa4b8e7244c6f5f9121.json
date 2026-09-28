@@ -1,0 +1,1 @@
+{"deployment_id":"demo-2c261dd1c0534fa4b8e7244c6f5f9121","environment":"test","failure_mode":"abort","implementation":"python","profile":{"color":"blue","shape":"circle"},"schema_version":1,"strategy":"all_at_once"}
