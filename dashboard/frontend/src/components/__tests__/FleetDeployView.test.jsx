@@ -178,6 +178,80 @@ function failedCanaryDeployment(deploymentId) {
   };
 }
 
+function successfulTimelineDeployment(deploymentId) {
+  const targetIds = [
+    "test-vehicle-01",
+    "test-vehicle-02",
+    "test-vehicle-03",
+    "test-vehicle-04",
+  ];
+  const desired = { color: "green", shape: "square" };
+  const recordedAt = [
+    "2026-09-27T17:00:01Z",
+    "2026-09-27T17:00:02Z",
+    "2026-09-27T17:00:04Z",
+    "2026-09-27T17:00:12Z",
+  ];
+  const events = ["started", "queued", "applying", "verified"].map((eventType, index) => ({
+    sequence: index + 1,
+    event_type: `deployment_${eventType}`,
+    schema_version: 1,
+    artifact_sha256: "a".repeat(64),
+    target_ids: targetIds,
+    status: eventType === "verified" ? "succeeded" : eventType,
+    detail: `${eventType} deployment milestone`,
+    recorded_at: recordedAt[index],
+  }));
+  return {
+    simulated: true,
+    target_kind: "simulated",
+    deployment_id: deploymentId,
+    target_ids: targetIds,
+    desired,
+    desired_digest: "green-square-digest",
+    status: "succeeded",
+    error: null,
+    error_code: null,
+    error_recovery: null,
+    created_at: "2026-09-27T17:00:00Z",
+    updated_at: "2026-09-27T17:00:12Z",
+    verification: "verified",
+    verified: true,
+    targets: fleetSnapshot().targets.slice(0, 4).map((target) => ({
+      ...target,
+      desired,
+      desired_digest: "green-square-digest",
+      observed: desired,
+      observed_digest: "green-square-digest",
+      status: "succeeded",
+    })),
+    events,
+    request_summary: {
+      deployment_id: deploymentId,
+      environment: "test",
+      failure_mode: "abort",
+      implementation: "python",
+      profile: desired,
+      schema_version: 1,
+      strategy: "all_at_once",
+    },
+    workflow_run_id: 902,
+    workflow_url: "https://github.com/dhleach/homeops/actions/runs/902",
+    workflow_status: "completed",
+    workflow_conclusion: "success",
+    workflow_created_at: "2026-09-27T17:00:00Z",
+    workflow_updated_at: "2026-09-27T17:00:12Z",
+    workflow: {
+      id: 902,
+      status: "completed",
+      conclusion: "success",
+      jobs: [],
+    },
+    dispatch_status: "dispatched",
+    dispatch_error: null,
+  };
+}
+
 function resetDeployment(deploymentId, overrides = {}) {
   const snapshot = fleetSnapshot();
   const targetIds = snapshot.targets.map((target) => target.target_id);
@@ -919,6 +993,36 @@ describe("FleetDeployView", () => {
       "https://api.homeops.now/deploy/api/deployments/demo-reload-001",
       expect.objectContaining({ cache: "no-store" }),
     );
+  });
+
+  it("renders simulator events as recorded milestones instead of current-state badges", async () => {
+    const deploymentId = "demo-timeline-labels-001";
+    const deployment = successfulTimelineDeployment(deploymentId);
+    window.sessionStorage.setItem("homeops.activeFleetDeploymentId", deploymentId);
+    vi.stubGlobal("fetch", vi.fn((url) => {
+      if (url.includes("/deploy/api/deployments/") && !url.includes("/deploy/api/deployments/history")) {
+        return Promise.resolve({ ok: true, json: async () => deployment });
+      }
+      return Promise.resolve({ ok: true, json: async () => fleetSnapshot() });
+    }));
+
+    render(<FleetDeployView apiUrl="https://api.homeops.now" />);
+
+    const timeline = await screen.findByTestId("deployment-events-timeline");
+    expect(timeline).toHaveTextContent("Started");
+    expect(timeline).toHaveTextContent("Queued");
+    expect(timeline).toHaveTextContent("Applying");
+    expect(timeline).toHaveTextContent("Verified");
+    const markers = within(timeline).getAllByTestId("deployment-event-status");
+    expect(markers).toHaveLength(4);
+    expect(markers.map((marker) => marker.textContent)).toEqual([
+      "✓ Recorded",
+      "✓ Recorded",
+      "✓ Recorded",
+      "✓ Recorded",
+    ]);
+    expect(markers.every((marker) => marker.className.includes("text-slate-400"))).toBe(true);
+    expect(within(timeline).getAllByTestId("deployment-event")).toHaveLength(4);
   });
 
   it("shows verified rollback while keeping the deployment visibly failed", async () => {
