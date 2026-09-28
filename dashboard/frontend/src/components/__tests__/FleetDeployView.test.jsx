@@ -330,6 +330,39 @@ describe("FleetDeployView", () => {
     expect(fetchMock.mock.calls.some(([url]) => url.includes(`/deployments/${deploymentId}`))).toBe(true);
   });
 
+  it("shows a settled workflow failure as failed when simulator readback is verified", async () => {
+    const deployment = resetDeployment("demo-workflow-failure-001", {
+      error: "GitHub Actions reported a failed deployment.",
+      error_code: "workflow_failed",
+      error_recovery: "Review the workflow run and observed target state before retrying.",
+      workflow_conclusion: "failure",
+      workflow: {
+        id: 903,
+        url: "https://github.com/dhleach/homeops/actions/runs/903",
+        status: "completed",
+        conclusion: "failure",
+        created_at: "2026-09-27T17:30:01Z",
+        updated_at: "2026-09-27T17:30:19Z",
+        jobs: [],
+      },
+    });
+    window.sessionStorage.setItem("homeops.activeFleetDeploymentId", deployment.deployment_id);
+    vi.stubGlobal("fetch", vi.fn((url) => {
+      if (url.includes("/deploy/api/deployments/") && !url.includes("/deploy/api/deployments/history")) {
+        return Promise.resolve({ ok: true, json: async () => deployment });
+      }
+      return Promise.resolve({ ok: true, json: async () => fleetSnapshot() });
+    }));
+
+    render(<FleetDeployView apiUrl="https://api.homeops.now" />);
+
+    await screen.findByTestId("deployment-run-state");
+    expect(screen.getByTestId("deployment-status-pill")).toHaveTextContent("Failed");
+    expect(screen.getByTestId("deployment-status-pill")).toHaveClass("border-red-400/30");
+    expect(screen.getByTestId("deployment-run-state")).toHaveTextContent("Workflow failed");
+    expect(screen.getByTestId("deployment-run-state")).toHaveTextContent("Conclusion: failure");
+  });
+
   it("submits fleet reset through the normal audited deployment path", async () => {
     const resetId = "demo-reset-ui-001";
     const completed = resetDeployment(resetId);

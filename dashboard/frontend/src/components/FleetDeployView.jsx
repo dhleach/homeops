@@ -79,6 +79,7 @@ const ROLLBACK_STATUS_LABELS = {
 };
 
 const TERMINAL_JOB_STATUSES = new Set(["completed"]);
+const SUCCESSFUL_WORKFLOW_CONCLUSIONS = new Set(["success", "neutral", "skipped"]);
 
 function errorClassLabel(code) {
   return ERROR_CLASS_LABELS[code] ?? "Deployment error";
@@ -95,6 +96,17 @@ function workflowIsSettled(deployment) {
   );
 }
 
+function workflowHasFailed(deployment) {
+  if (deployment?.error_code === "workflow_failed") return true;
+  const workflowStatus = deployment?.workflow_status ?? deployment?.workflow?.status;
+  const workflowConclusion = deployment?.workflow_conclusion ?? deployment?.workflow?.conclusion;
+  return Boolean(
+    workflowStatus === "completed"
+      && workflowConclusion
+      && !SUCCESSFUL_WORKFLOW_CONCLUSIONS.has(workflowConclusion),
+  );
+}
+
 function deploymentNeedsPolling(deployment) {
   if (!deployment) return false;
   if (deployment.dispatch_status === "failed") return false;
@@ -105,7 +117,7 @@ function deploymentNeedsPolling(deployment) {
 function deploymentDisplayStatus(deployment) {
   if (deployment?.error_code === "workflow_unavailable") return "workflow_unavailable";
   if (deployment?.dispatch_status === "dispatched" && !workflowIsSettled(deployment)) return "waiting";
-  if (deployment?.dispatch_status === "failed") return "failed";
+  if (deployment?.dispatch_status === "failed" || workflowHasFailed(deployment)) return "failed";
   return deployment?.status;
 }
 
@@ -408,7 +420,7 @@ function VehicleGlyph({ environment }) {
   );
 }
 
-function StatusPill({ status }) {
+function StatusPill({ status, testId }) {
   const statusClass = status === "failed"
     ? "border-red-400/30 bg-red-400/10 text-red-300"
     : status === "queued" || status === "applying" || status === "pending"
@@ -417,7 +429,10 @@ function StatusPill({ status }) {
       : "border-emerald-400/30 bg-emerald-400/10 text-emerald-300";
 
   return (
-    <span className={`rounded-full border px-2.5 py-1 text-xs font-medium ${statusClass}`}>
+    <span
+      className={`rounded-full border px-2.5 py-1 text-xs font-medium ${statusClass}`}
+      data-testid={testId}
+    >
       {displayStatus(status)}
     </span>
   );
@@ -813,7 +828,7 @@ function DeploymentRunPanel({ deployment, error, onRefresh }) {
           </p>
         </div>
         <div className="flex items-center gap-3">
-          <StatusPill status={deploymentDisplayStatus(deployment)} />
+          <StatusPill status={deploymentDisplayStatus(deployment)} testId="deployment-status-pill" />
           <button
             type="button"
             onClick={onRefresh}

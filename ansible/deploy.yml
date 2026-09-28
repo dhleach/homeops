@@ -176,7 +176,14 @@
           - item.observed == validated_profile
           - item.observed_digest == validated_artifact_sha256
           - item.status == 'succeeded'
-          - item.active_deployment_id == validated_inputs.deployment_id
+          # Terminal success releases the transient target reservation; an
+          # in-flight readback must still retain this deployment identity.
+          - >-
+            item.active_deployment_id == validated_inputs.deployment_id
+            or (
+              fresh_readback.json.status == 'succeeded'
+              and item.active_deployment_id is none
+            )
         fail_msg: "Fresh readback target {{ item.target_id | default('unknown') }} did not verify."
       loop: "{{ fresh_readback.json.targets }}"
       loop_control:
