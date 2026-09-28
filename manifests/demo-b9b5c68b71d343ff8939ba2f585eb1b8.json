@@ -1,0 +1,1 @@
+{"deployment_id":"demo-b9b5c68b71d343ff8939ba2f585eb1b8","failure_mode":"abort","implementation":"ansible","profile":{"color":"green","shape":"circle"},"schema_version":1,"strategy":"all_at_once","target_ids":["stage-vehicle-01","stage-vehicle-04"]}
