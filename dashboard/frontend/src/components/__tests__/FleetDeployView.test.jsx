@@ -233,6 +233,12 @@ function resetDeployment(deploymentId, overrides = {}) {
   };
 }
 
+function openAdvancedOptions() {
+  const advanced = screen.getByTestId("deployment-advanced-options");
+  if (!advanced.open) fireEvent.click(advanced.querySelector("summary"));
+  return advanced;
+}
+
 describe("FleetDeployView", () => {
   beforeEach(() => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
@@ -259,8 +265,9 @@ describe("FleetDeployView", () => {
     expect(screen.getByRole("heading", { name: "prod" })).toBeInTheDocument();
     expect(screen.getAllByText("Observed profile")).toHaveLength(12);
     expect(screen.getAllByText("test-vehicle-01").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("blue circle")).toHaveLength(9);
-    expect(screen.getAllByText("Desired = observed")).toHaveLength(12);
+    expect(screen.getAllByText("blue circle")).toHaveLength(3);
+    expect(screen.getAllByText("Healthy · synchronized")).toHaveLength(12);
+    expect(screen.queryByText("Desired = observed")).not.toBeInTheDocument();
   });
 
   it("loads durable history and reopens the selected run", async () => {
@@ -281,11 +288,20 @@ describe("FleetDeployView", () => {
       workflow_run_id: deployment.workflow_run_id,
       workflow_url: deployment.workflow_url,
     };
+    const historyEntries = [
+      historyEntry,
+      ...Array.from({ length: 5 }, (_, index) => ({
+        ...historyEntry,
+        deployment_id: `demo-history-${String(index + 2).padStart(3, "0")}`,
+        outcome: index % 2 === 0 ? "verified" : "failed",
+        status: index % 2 === 0 ? "succeeded" : "failed",
+      })),
+    ];
     const fetchMock = vi.fn((url) => {
       if (url.includes("/deploy/api/deployments/history")) {
         return Promise.resolve({
           ok: true,
-          json: async () => ({ simulated: true, target_kind: "simulated", deployments: [historyEntry] }),
+          json: async () => ({ simulated: true, target_kind: "simulated", deployments: historyEntries }),
         });
       }
       if (url.includes(`/deploy/api/deployments/${deploymentId}`)) {
@@ -297,13 +313,18 @@ describe("FleetDeployView", () => {
 
     render(<FleetDeployView apiUrl="https://api.homeops.now" />);
 
-    expect(await screen.findByTestId("deployment-history-entry")).toHaveTextContent("demo-history-001");
-    expect(screen.getByTestId("deployment-history-entry")).toHaveTextContent("TEST environment");
-    expect(screen.getByRole("link", { name: "Actions run" })).toHaveAttribute(
+    expect(await screen.findAllByTestId("deployment-history-entry")).toHaveLength(4);
+    expect(screen.getAllByTestId("deployment-history-entry")[0]).toHaveTextContent("demo-history-001");
+    expect(screen.getByTestId("deployment-history-view-all")).toHaveTextContent("View all 6 attempts");
+    expect(screen.getAllByTestId("deployment-history-entry")[0]).toHaveTextContent("TEST environment");
+    expect(within(screen.getAllByTestId("deployment-history-entry")[0]).getByRole("link", { name: "Actions run" })).toHaveAttribute(
       "href",
       deployment.workflow_url,
     );
-    fireEvent.click(screen.getByTestId("deployment-history-row"));
+    fireEvent.click(screen.getByTestId("deployment-history-view-all"));
+    expect(screen.getAllByTestId("deployment-history-entry")).toHaveLength(6);
+    expect(screen.getByTestId("deployment-history-view-all")).toHaveTextContent("Show recent only");
+    fireEvent.click(within(screen.getAllByTestId("deployment-history-entry")[0]).getByTestId("deployment-history-row"));
 
     expect(await screen.findByTestId("deployment-run-state")).toHaveTextContent(deploymentId);
     expect(fetchMock.mock.calls.some(([url]) => url.includes(`/deployments/${deploymentId}`))).toBe(true);
@@ -371,6 +392,8 @@ describe("FleetDeployView", () => {
 
     const specSummary = screen.getByText("DeploymentSpec JSON").closest("summary");
     expect(specSummary).toHaveClass("focus-visible:ring-2");
+    const advanced = openAdvancedOptions();
+    expect(advanced).toHaveAttribute("open");
 
     fireEvent.click(screen.getByRole("radio", { name: /individual targets/i }));
     const environment = screen.getByLabelText("Environment");
@@ -397,6 +420,8 @@ describe("FleetDeployView", () => {
     expect(within(firstCard).getByText("Observed profile")).toBeInTheDocument();
 
     const details = within(firstCard).getByTestId("fleet-target-details");
+    expect(within(firstCard).getByText("Healthy · synchronized")).toBeInTheDocument();
+    expect(within(firstCard).queryByText("Desired = observed")).not.toBeInTheDocument();
     expect(details).not.toHaveAttribute("open");
     fireEvent.click(within(details).getByText("Full target details"));
     expect(details).toHaveAttribute("open");
@@ -417,6 +442,8 @@ describe("FleetDeployView", () => {
     render(<FleetDeployView apiUrl="https://api.homeops.now/" />);
 
     await screen.findByText("Desired / observed drift");
+    expect(screen.getAllByText("Healthy · synchronized")).toHaveLength(11);
+    expect(screen.getAllByTestId("fleet-target-drift-details")).toHaveLength(1);
     expect(fetch).toHaveBeenCalledWith(
       "https://api.homeops.now/deploy/api/fleet",
       expect.objectContaining({
@@ -461,6 +488,7 @@ describe("FleetDeployView", () => {
     render(<FleetDeployView apiUrl="https://api.homeops.now" />);
 
     await screen.findAllByTestId("fleet-target-card");
+    openAdvancedOptions();
     const disclosure = screen.getByTestId("implementation-source-disclosure");
     expect(disclosure).not.toHaveAttribute("open");
     fireEvent.click(disclosure.querySelector("summary"));
@@ -489,6 +517,7 @@ describe("FleetDeployView", () => {
     render(<FleetDeployView apiUrl="https://api.homeops.now" />);
 
     await screen.findAllByTestId("fleet-target-card");
+    openAdvancedOptions();
     const disclosure = screen.getByTestId("implementation-source-disclosure");
     const summary = disclosure.querySelector("summary");
     expect(summary).not.toBeNull();
@@ -513,6 +542,9 @@ describe("FleetDeployView", () => {
     render(<FleetDeployView apiUrl="https://api.homeops.now" />);
 
     await screen.findAllByTestId("fleet-target-card");
+    const advanced = screen.getByTestId("deployment-advanced-options");
+    expect(advanced).not.toHaveAttribute("open");
+    openAdvancedOptions();
     const preview = screen.getByTestId("deployment-spec-preview");
     const attemptId = screen.getByTestId("deployment-attempt-id").textContent;
     expect(attemptId).toMatch(/^demo-[a-z0-9-]+$/);
@@ -537,6 +569,7 @@ describe("FleetDeployView", () => {
     render(<FleetDeployView apiUrl="https://api.homeops.now" />);
 
     await screen.findAllByTestId("fleet-target-card");
+    openAdvancedOptions();
     const resolvedTargets = screen.getByTestId("deployment-resolved-targets");
     expect(resolvedTargets).toHaveTextContent("4 vehicles");
     expect(resolvedTargets).toHaveTextContent("TEST-01, TEST-02, TEST-03, TEST-04");
@@ -576,7 +609,11 @@ describe("FleetDeployView", () => {
     render(<FleetDeployView apiUrl="https://api.homeops.now" />);
 
     await screen.findAllByTestId("fleet-target-card");
+    openAdvancedOptions();
     const layout = screen.getByTestId("fleet-deploy-layout");
+    const history = screen.getByTestId("deployment-history");
+    const mainChildren = [...screen.getByTestId("fleet-deploy-main").children];
+    expect(mainChildren.indexOf(layout)).toBeLessThan(mainChildren.indexOf(history));
     expect(layout).toContainElement(screen.getByTestId("deployment-config-column"));
     expect(layout).toContainElement(screen.getByTestId("fleet-state-column"));
 
@@ -610,6 +647,7 @@ describe("FleetDeployView", () => {
     render(<FleetDeployView apiUrl="https://api.homeops.now" />);
 
     await screen.findAllByTestId("fleet-target-card");
+    openAdvancedOptions();
     fireEvent.click(screen.getByTestId("deploy-submit"));
 
     await waitFor(() => expect(fetchMock.mock.calls.length).toBeGreaterThanOrEqual(2));
@@ -659,6 +697,7 @@ describe("FleetDeployView", () => {
     render(<FleetDeployView apiUrl="https://api.homeops.now" />);
 
     await screen.findAllByTestId("fleet-target-card");
+    openAdvancedOptions();
     fireEvent.change(screen.getByLabelText("Inject verification failure"), {
       target: { value: "test-vehicle-01" },
     });
@@ -728,6 +767,7 @@ describe("FleetDeployView", () => {
     render(<FleetDeployView apiUrl="https://api.homeops.now" />);
 
     await screen.findAllByTestId("fleet-target-card");
+    openAdvancedOptions();
     fireEvent.click(screen.getByRole("radio", { name: /individual targets/i }));
     expect(screen.getByTestId("deployment-validation-errors")).toHaveTextContent(
       "Select at least one simulated target",
