@@ -43,7 +43,9 @@ def _response_body(
             "observed": observed,
             "observed_digest": observed_digest,
             "status": "succeeded" if verified else "ready",
-            "active_deployment_id": spec["deployment_id"] if verified else None,
+            # Production releases the transient target reservation on terminal
+            # success, so the synthetic terminal response must do the same.
+            "active_deployment_id": None if verified else spec["deployment_id"],
             "last_error": None,
             "updated_at": "2026-01-01T00:00:00Z",
         }
@@ -211,7 +213,7 @@ def valid_spec() -> dict[str, Any]:
     }
 
 
-def test_playbook_sends_shared_spec_and_verifies_fresh_readback(
+def test_playbook_sends_shared_spec_and_accepts_released_terminal_reservation(
     ansible_playbook: list[str], tmp_path: Path
 ) -> None:
     spec = valid_spec()
