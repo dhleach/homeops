@@ -738,31 +738,6 @@ export function DeploymentSpecForm({
               error={errors.implementation}
             />
             <OptionSelect
-              id="deployment-strategy"
-              label="Strategy"
-              value={form.strategy}
-              options={strategyOptions}
-              onChange={updateField("strategy")}
-              error={errors.strategy}
-            />
-            <OptionSelect
-              id="deployment-failure-mode"
-              label="Failure mode"
-              value={form.failure_mode}
-              options={failureModeOptions}
-              onChange={updateField("failure_mode")}
-              error={errors.failure_mode}
-            />
-            <OptionSelect
-              id="deployment-failure-target"
-              label="Inject verification failure"
-              value={form.failure_target_id}
-              options={failureTargetOptions}
-              optionLabels={{ none: "No injected failure" }}
-              onChange={updateField("failure_target_id")}
-              error={errors.failure_target_id}
-            />
-            <OptionSelect
               id="deployment-color"
               label="Profile color"
               value={form.profile_color}
@@ -779,19 +754,91 @@ export function DeploymentSpecForm({
               error={errors.profile}
             />
           </div>
-          <p className="rounded-lg border border-amber-400/20 bg-amber-400/5 p-3 text-xs leading-5 text-amber-100/80" data-testid="deployment-capability-note">
-            Only verified execution paths are enabled. Python canary verifies the first target
-            before continuing, and Python rollback restores targets changed before a later
-            verification failure; Ansible exposes only its verified all-at-once path until
-            equivalent serial behavior is proven. An injected verification failure is limited to
-            the selected simulated target and never reaches Home Assistant or normal HomeOps infrastructure.
-          </p>
 
-          <ImplementationSourcePanel
-            implementation={form.implementation}
-            availableImplementations={implementationOptions}
-            onImplementationChange={updateImplementation}
-          />
+          <details
+            className="rounded-xl border border-border bg-slate-950/30 p-4"
+            data-testid="deployment-advanced-options"
+          >
+            <summary className="cursor-pointer list-none rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-300 focus-visible:ring-offset-2 focus-visible:ring-offset-surface">
+              <span className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+                <span>
+                  <span className="block text-xs font-semibold uppercase tracking-wider text-blue-200">
+                    Advanced options
+                  </span>
+                  <span className="mt-1 block text-xs leading-5 text-slate-400">
+                    Execution strategy, failure injection, and checked-in implementation proof.
+                  </span>
+                </span>
+                <span className="shrink-0 text-xs font-medium text-slate-500">Optional</span>
+              </span>
+            </summary>
+
+            <div className="mt-5 space-y-5">
+              <div className="grid gap-4 sm:grid-cols-2">
+                <OptionSelect
+                  id="deployment-strategy"
+                  label="Strategy"
+                  value={form.strategy}
+                  options={strategyOptions}
+                  onChange={updateField("strategy")}
+                  error={errors.strategy}
+                />
+                <OptionSelect
+                  id="deployment-failure-mode"
+                  label="Failure mode"
+                  value={form.failure_mode}
+                  options={failureModeOptions}
+                  onChange={updateField("failure_mode")}
+                  error={errors.failure_mode}
+                />
+                <OptionSelect
+                  id="deployment-failure-target"
+                  label="Inject verification failure"
+                  value={form.failure_target_id}
+                  options={failureTargetOptions}
+                  optionLabels={{ none: "No injected failure" }}
+                  onChange={updateField("failure_target_id")}
+                  error={errors.failure_target_id}
+                />
+              </div>
+
+              <p className="rounded-lg border border-amber-400/20 bg-amber-400/5 p-3 text-xs leading-5 text-amber-100/80" data-testid="deployment-capability-note">
+                Only verified execution paths are enabled. Python canary verifies the first target
+                before continuing, and Python rollback restores targets changed before a later
+                verification failure; Ansible exposes only its verified all-at-once path until
+                equivalent serial behavior is proven. An injected verification failure is limited to
+                the selected simulated target and never reaches Home Assistant or normal HomeOps infrastructure.
+              </p>
+
+              <ImplementationSourcePanel
+                implementation={form.implementation}
+                availableImplementations={implementationOptions}
+                onImplementationChange={updateImplementation}
+              />
+
+              <details
+                className="rounded-xl border border-border bg-slate-950/50 p-4"
+                data-testid="deployment-spec-disclosure"
+              >
+                <summary className="cursor-pointer list-none rounded text-xs font-semibold uppercase tracking-wider text-slate-400 marker:hidden focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-300 focus-visible:ring-offset-2 focus-visible:ring-offset-surface">
+                  <span className="inline-flex items-center gap-2">
+                    <span aria-hidden="true" className="text-slate-400">▸</span>
+                    DeploymentSpec JSON
+                  </span>
+                  <span className="mt-1 block normal-case tracking-normal text-slate-400">
+                    Expand to inspect the exact validated payload submitted when you deploy.
+                  </span>
+                </summary>
+                <pre
+                  aria-label="DeploymentSpec preview"
+                  data-testid="deployment-spec-preview"
+                  className="mt-4 max-h-80 max-w-full overflow-auto rounded-lg border border-border bg-slate-950 p-4 text-xs leading-6 text-emerald-200"
+                >
+                  {JSON.stringify(preview, null, 2)}
+                </pre>
+              </details>
+            </div>
+          </details>
 
           {form.target_selection === "target_ids" && (
             <fieldset>
@@ -839,28 +886,6 @@ export function DeploymentSpecForm({
         )}
 
         <aside className="space-y-4">
-          <details
-            className="rounded-xl border border-border bg-slate-950/50 p-4"
-            data-testid="deployment-spec-disclosure"
-          >
-            <summary className="cursor-pointer list-none rounded text-xs font-semibold uppercase tracking-wider text-slate-400 marker:hidden focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-300 focus-visible:ring-offset-2 focus-visible:ring-offset-surface">
-              <span className="inline-flex items-center gap-2">
-                <span aria-hidden="true" className="text-slate-400">▸</span>
-                DeploymentSpec JSON
-              </span>
-              <span className="mt-1 block normal-case tracking-normal text-slate-400">
-                Expand to inspect the exact validated payload submitted when you deploy.
-              </span>
-            </summary>
-            <pre
-              aria-label="DeploymentSpec preview"
-              data-testid="deployment-spec-preview"
-              className="mt-4 max-h-80 max-w-full overflow-auto rounded-lg border border-border bg-slate-950 p-4 text-xs leading-6 text-emerald-200"
-            >
-              {JSON.stringify(preview, null, 2)}
-            </pre>
-          </details>
-
           {Object.keys(errors).length > 0 && (
             <div
               role="alert"
