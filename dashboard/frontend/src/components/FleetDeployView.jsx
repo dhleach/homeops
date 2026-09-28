@@ -176,14 +176,12 @@ function deploymentEventLabel(eventType) {
     .join(" ");
 }
 
-function deploymentEventStatusLabel(event) {
-  if (event.event_type.endsWith("verified")) return "Verified";
-  return evidenceStatusLabel(null, event.status);
+function deploymentEventStatusLabel() {
+  return "Recorded";
 }
 
-function deploymentEventStatusClass(event) {
-  if (event.event_type.endsWith("verified")) return "text-emerald-300";
-  return evidenceStatusClass(null, event.status);
+function deploymentEventStatusClass() {
+  return "text-slate-400";
 }
 
 function groupTargets(targets) {
@@ -1035,13 +1033,21 @@ function DeploymentRunPanel({ deployment, error, onRefresh }) {
               <h4 className="text-xs font-semibold uppercase tracking-wider text-blue-200">
                 Simulator deployment events
               </h4>
+              <p className="mt-1 text-xs text-slate-400">
+                Each row is a recorded milestone in event order. The run status above is the current state.
+              </p>
               <ol className="mt-2 space-y-2 text-xs text-slate-300">
                 {events.map((event) => (
                   <li key={event.sequence} className="rounded-lg border border-border bg-slate-950/30 px-3 py-2" data-testid="deployment-event">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <span className="font-medium">{deploymentEventLabel(event.event_type)}</span>
-                      <span className={deploymentEventStatusClass(event)}>
-                        {deploymentEventStatusLabel(event)}
+                      <span
+                        className={`flex items-center gap-1 ${deploymentEventStatusClass()}`}
+                        data-testid="deployment-event-status"
+                      >
+                        <span aria-hidden="true">✓</span>
+                        {" "}
+                        {deploymentEventStatusLabel()}
                       </span>
                     </div>
                     <p className="mt-1 text-slate-400">
